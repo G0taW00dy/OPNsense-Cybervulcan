@@ -1,0 +1,24 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <!-- Adaptive icon safe zone is the central 66dp circle (21..87). -->
+    <path android:fillColor="#00000000" android:strokeWidth="7"
+        android:pathData="M54,33a21,21 0,1 1,0 42a21,21 0,1 1,0 -42z">
+        <aapt:attr name="android:strokeColor">
+            <gradient android:type="linear" android:startX="33" android:startY="33" android:endX="75" android:endY="75">
+                <item android:offset="0" android:color="#FFFFFFFF"/>
+                <item android:offset="0.35" android:color="#FF5CE1E6"/>
+                <item android:offset="1" android:color="#FF3A7BD5"/>
+            </gradient>
+        </aapt:attr>
+    </path>
+    <path android:fillColor="#00000000" android:strokeColor="#99FFFFFF" android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:pathData="M37.5,46 A18,18 0,0 1,48 36.5"/>
+    <path android:fillColor="#00000000" android:strokeColor="#FFFFFFFF" android:strokeWidth="5.5"
+        android:strokeLineCap="round" android:strokeLineJoin="round"
+        android:pathData="M48,82 L48,42 L55,42 A7,7 0,0 1,55 56 L48,56"/>
+    <path android:fillColor="#00000000" android:strokeColor="#FFFFFFFF" android:strokeWidth="4.5"
+        android:strokeLineCap="round" android:strokeLineJoin="round"
+        android:pathData="M72,74 L72,62 A5,5 0,0 1,82 62 L82,74"/>
+</vector>
