@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Resources referenced only by name from Dart/plugins: keep them when R8 shrinks resources. -->
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@drawable/ic_stat_opn,@drawable/ic_tile_bypass,@layout/exit_widget" />
