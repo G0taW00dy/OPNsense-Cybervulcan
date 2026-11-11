@@ -46,7 +46,7 @@ class AppConfig {
   final String killSwitchTag;
 
   /// Optional: UUID of the kill switch rule, enables the low-privilege
-  /// `rule_stats` check when "Firewall: Rules [new]" is not granted.
+  /// `rule_stats` check when `Firewall: Rules [new]` is not granted.
   final String? killSwitchRuleUuid;
   final Duration pollInterval;
   final String homeCountryCode;
