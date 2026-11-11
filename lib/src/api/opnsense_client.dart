@@ -254,7 +254,7 @@ class OpnsenseClient {
   // ------------------------------------------------------- firewall rules
 
   /// `POST /api/firewall/filter/search_rule` - privilege
-  /// "Firewall: Rules [new]". `show_all=1` merges pf rule statistics.
+  /// `Firewall: Rules [new]`. `show_all=1` merges pf rule statistics.
   Future<List<FirewallRule>> searchRules(String phrase) async {
     const ep = '/api/firewall/filter/search_rule';
     final json = await _send('POST', ep,
