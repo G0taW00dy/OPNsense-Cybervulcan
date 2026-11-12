@@ -93,7 +93,9 @@ jobs:
           KEY_PW="$(strip "${ANDROID_KEY_PASSWORD:-$ANDROID_KEYSTORE_PASSWORD}")"
           ALIAS="$(strip "$ANDROID_KEY_ALIAS")"
           if ! strip "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android/app/upload-keystore.jks; then
-            echo "::error::ANDROID_KEYSTORE_BASE64 is not valid base64 - re-paste the whole line."
+            B64="$(strip "$ANDROID_KEYSTORE_BASE64")"
+            BAD="$(printf '%s' "$B64" | tr -d 'A-Za-z0-9+/=' | wc -c)"
+            echo "::error::ANDROID_KEYSTORE_BASE64 is not valid base64 - re-paste the whole line. (length ${#B64}, length mod 4 = $(( ${#B64} % 4 )), $BAD characters that are not base64)"
             exit 1
           fi
           if ! keytool -list -keystore android/app/upload-keystore.jks -storepass "$STORE_PW" -alias "$ALIAS" >/dev/null 2>&1; then
