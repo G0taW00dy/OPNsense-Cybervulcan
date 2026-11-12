@@ -1,4 +1,4 @@
-# OPNsense Cybervulcan ("OPn")
+# OPNsense Cybervulcan
 
 A companion app for a home OPNsense router running Proton VPN over WireGuard
 with gateway failover. It's one Flutter codebase with two targets:
@@ -175,6 +175,26 @@ iscc /DAppVersion=1.0.0 installer\cybervulcan.iss   # Inno Setup 6
 python3 tool/make_icons.py               # regenerate icons (needs rsvg-convert + Pillow)
 ```
 
+## Updates
+
+The app checks GitHub Releases (`api.github.com/repos/<UPDATE_REPO>/releases/latest`)
+at start-up and every 12 hours, and from **Settings > Updates > Check now**.
+A newer, non-pre-release version shows a banner on the Status page and a
+notification.
+
+* **Windows:** *Install now* downloads `Cybervulcan-Setup-X.Y.Z.exe`, checks its
+  SHA-256 against GitHub's asset digest (when GitHub provides one), closes the
+  app and runs the installer with `/SILENT`. The installer reopens the app.
+* **Android:** *Download APK* opens the APK in the browser; tap it to install
+  (Android asks once to allow installs from the browser). Updates install over
+  the old app only if both APKs are signed with the same key, so set up release
+  signing (below) before the first APK you keep.
+
+The version the app reports comes from `--dart-define=APP_VERSION` (CI sets it
+from the tag). Releases are read without signing in, so `UPDATE_REPO` must be
+public. If this repo goes private, publish releases to a public releases-only
+repo and build with `--dart-define=UPDATE_REPO=owner/repo`.
+
 ### Android signing
 
 By default the release APK is signed with the **debug key**. It installs fine
@@ -219,9 +239,9 @@ Never commit it. `*.jks` and `key.properties` are git-ignored.
 lib/
   main.dart                      platform bootstrap (tray / widget bridge / notifications)
   src/api/                       OPNsense client, models, TLS pinning helpers
-  src/core/                      config, house state, alerts diff, bypass/expiry, PC mode, quick tests, controller
+  src/core/                      config, house state, alerts diff, bypass/expiry, PC mode, quick tests, controller, updater
   src/platform/                  tray (Windows), notifications, Android widget/tile bridge
-  src/ui/                        Material 3 UI (dark/light), OPn logo painter
+  src/ui/                        Material 3 night theme, Vulcan V logo + volcano art painters
 android/app/src/main/kotlin/...  ExitWidgetProvider (home_widget), BypassTileService (TileService)
 windows/runner/                  Flutter runner (hidden start, single instance)
 installer/cybervulcan.iss        Inno Setup script
