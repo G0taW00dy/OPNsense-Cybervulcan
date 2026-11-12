@@ -1,35 +1,37 @@
 import 'package:flutter/material.dart';
 
 import '../core/controller.dart';
+import '../core/updater.dart';
 import 'devices_page.dart';
 import 'settings_page.dart';
 import 'status_page.dart';
 import 'tests_page.dart';
 import 'theme.dart';
-import 'widgets/opn_logo.dart';
+import 'widgets/vulcan_logo.dart';
 
 final navigatorKey = GlobalKey<NavigatorState>();
 
 class CybervulcanApp extends StatelessWidget {
-  const CybervulcanApp({super.key, required this.controller});
+  const CybervulcanApp({super.key, required this.controller, this.updates});
 
   final CybervulcanController controller;
+  final UpdateService? updates;
 
   @override
   Widget build(BuildContext context) => MaterialApp(
         title: 'OPNsense Cybervulcan',
         navigatorKey: navigatorKey,
         debugShowCheckedModeBanner: false,
-        theme: buildTheme(Brightness.light),
-        darkTheme: buildTheme(Brightness.dark),
-        themeMode: ThemeMode.system,
-        home: HomeShell(controller: controller),
+        theme: buildTheme(),
+        themeMode: ThemeMode.dark,
+        home: HomeShell(controller: controller, updates: updates),
       );
 }
 
 class HomeShell extends StatefulWidget {
-  const HomeShell({super.key, required this.controller});
+  const HomeShell({super.key, required this.controller, this.updates});
   final CybervulcanController controller;
+  final UpdateService? updates;
 
   @override
   State<HomeShell> createState() => _HomeShellState();
@@ -58,10 +60,10 @@ class _HomeShellState extends State<HomeShell> {
           );
         }
         final pages = [
-          StatusPage(controller: c),
+          StatusPage(controller: c, updates: widget.updates),
           DevicesPage(key: ValueKey('devices-${c.config.baseUrl}'), controller: c),
           TestsPage(controller: c),
-          SettingsPage(controller: c),
+          SettingsPage(controller: c, updates: widget.updates),
         ];
         final wide = MediaQuery.sizeOf(context).width >= 720;
         final body = IndexedStack(index: _index, children: pages);
@@ -74,7 +76,7 @@ class _HomeShellState extends State<HomeShell> {
                 labelType: NavigationRailLabelType.all,
                 leading: const Padding(
                   padding: EdgeInsets.symmetric(vertical: 16),
-                  child: OpnLogo(size: 36),
+                  child: VulcanLogo(size: 40),
                 ),
                 destinations: [
                   for (final d in _destinations)
@@ -108,7 +110,7 @@ class _Title extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => const Row(children: [
-        OpnLogo(size: 28),
+        VulcanLogo(size: 30),
         SizedBox(width: 12),
         Text('Cybervulcan'),
       ]);

@@ -5,15 +5,18 @@ import 'package:flutter/material.dart';
 import '../api/models.dart';
 import '../core/controller.dart';
 import '../core/house_state.dart';
+import '../core/updater.dart';
 import 'bypass_dialog.dart';
 import 'format.dart';
 import 'theme.dart';
-import 'widgets/opn_logo.dart';
+import 'update_widgets.dart';
+import 'widgets/volcano_art.dart';
 
 class StatusPage extends StatefulWidget {
-  const StatusPage({super.key, required this.controller});
+  const StatusPage({super.key, required this.controller, this.updates});
 
   final CybervulcanController controller;
+  final UpdateService? updates;
 
   @override
   State<StatusPage> createState() => _StatusPageState();
@@ -50,6 +53,7 @@ class _StatusPageState extends State<StatusPage> {
             padding: const EdgeInsets.all(16),
             children: [
               _HeaderCard(snapshot: s, controller: c),
+              if (widget.updates != null) UpdateBanner(updates: widget.updates!),
               if (c.lastActionError != null) ...[
                 const SizedBox(height: 12),
                 _Banner(text: c.lastActionError!, color: OpnColors.red, icon: Icons.error_outline),
@@ -116,47 +120,59 @@ class _HeaderCard extends StatelessWidget {
   final HouseSnapshot snapshot;
   final CybervulcanController controller;
 
+  /// Short uppercase status line above the big exit name.
+  static String _label(HouseSnapshot s) {
+    if (!s.configured) return 'Not set up';
+    if (!s.reachable) return 'Router unreachable';
+    if (s.bypassActive ?? false) return 'VPN bypass on';
+    if (s.killSwitch.tripped) return 'Kill switch tripped';
+    if (s.killSwitchArmed == false) return 'Kill switch not armed';
+    if (s.busy) return 'Changing...';
+    if (s.failoverActive) return 'Failover active';
+    return switch (s.health) {
+      Health.ok => 'Protected',
+      Health.warning => 'Slow tunnel',
+      _ => 'Problem',
+    };
+  }
+
+  /// The big line: where the house's traffic leaves right now.
+  static String _exitName(HouseSnapshot s, CybervulcanController c) {
+    if (!s.reachable) return 'No connection';
+    if (s.bypassActive ?? false) return 'Direct (NBN)';
+    return switch (s.exit) {
+      ProtonExit.main => c.config.mainLabel,
+      ProtonExit.backup => c.config.backupLabel,
+      ProtonExit.none => 'No exit',
+      ProtonExit.unknown => 'Unknown',
+    };
+  }
+
   @override
   Widget build(BuildContext context) {
     final color = OpnColors.forHealth(snapshot.health);
     final t = Theme.of(context).textTheme;
-    return Card(
-      child: Container(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(18),
-          gradient: LinearGradient(
-            colors: [color.withValues(alpha: 0.22), color.withValues(alpha: 0.04)],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-        ),
-        padding: const EdgeInsets.all(20),
-        child: Row(
-          children: [
-            OpnLogo(size: 56, accent: color, showN: false),
-            const SizedBox(width: 16),
+    final info = Padding(
+      padding: const EdgeInsets.fromLTRB(24, 24, 24, 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(children: [
+            Container(
+              width: 12,
+              height: 12,
+              decoration: BoxDecoration(
+                color: color,
+                shape: BoxShape.circle,
+                boxShadow: [BoxShadow(color: color, blurRadius: 12)],
+              ),
+            ),
+            const SizedBox(width: 10),
             Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    (snapshot.bypassActive ?? false)
-                        ? 'Exit: direct (bypass)'
-                        : 'Exit: ${exitLabel(snapshot.exit, controller.config)}',
-                    style: t.titleLarge?.copyWith(fontWeight: FontWeight.w700),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(headline(snapshot, controller.config), style: t.bodyMedium),
-                  if (snapshot.failoverActive && !(snapshot.bypassActive ?? false))
-                    Padding(
-                      padding: const EdgeInsets.only(top: 8),
-                      child: Chip(
-                        avatar: const Icon(Icons.swap_horiz, size: 18),
-                        label: const Text('Failover active'),
-                        backgroundColor: OpnColors.amber.withValues(alpha: 0.2),
-                      ),
-                    ),
-                ],
+              child: Text(
+                _label(snapshot).toUpperCase(),
+                style: t.labelLarge?.copyWith(color: color, letterSpacing: 1.2, fontWeight: FontWeight.w700),
               ),
             ),
             if (snapshot.busy)
@@ -167,8 +183,53 @@ class _HeaderCard extends StatelessWidget {
                 onPressed: controller.refresh,
                 icon: const Icon(Icons.refresh),
               ),
-          ],
+          ]),
+          const SizedBox(height: 4),
+          Text(
+            _exitName(snapshot, controller),
+            style: t.displaySmall?.copyWith(fontWeight: FontWeight.w700, color: OpnColors.text, height: 1.05),
+          ),
+          const SizedBox(height: 8),
+          Text(headline(snapshot, controller.config),
+              style: t.bodyLarge?.copyWith(color: OpnColors.textSoft)),
+          if (snapshot.failoverActive && !(snapshot.bypassActive ?? false))
+            const Padding(
+              padding: EdgeInsets.only(top: 12),
+              child: Chip(
+                avatar: Icon(Icons.swap_horiz, size: 18, color: OpnColors.amber),
+                label: Text('Failover active'),
+              ),
+            ),
+        ],
+      ),
+    );
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: DecoratedBox(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [Color(0xFF121A30), Color(0xFF0D1222)],
+          ),
         ),
+        child: LayoutBuilder(builder: (context, box) {
+          final wide = box.maxWidth >= 640;
+          if (wide) {
+            return SizedBox(
+              height: 260,
+              child: Row(children: [
+                Expanded(flex: 5, child: Align(alignment: Alignment.centerLeft, child: info)),
+                Expanded(flex: 6, child: VolcanoArt(accent: color)),
+              ]),
+            );
+          }
+          // Narrow (phone): art fills the card, text on top.
+          return Stack(children: [
+            Positioned.fill(child: VolcanoArt(accent: color)),
+            Padding(padding: const EdgeInsets.only(bottom: 120), child: info),
+          ]);
+        }),
       ),
     );
   }

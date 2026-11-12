@@ -7,14 +7,17 @@ import '../core/config.dart';
 import '../core/network_map.dart';
 import '../core/controller.dart';
 import '../core/storage.dart';
+import '../core/updater.dart';
 import 'format.dart';
+import 'update_widgets.dart';
 
 /// First-run setup and settings. Secrets go to OS secure storage only.
 class SettingsPage extends StatefulWidget {
-  const SettingsPage({super.key, required this.controller, this.firstRun = false});
+  const SettingsPage({super.key, required this.controller, this.firstRun = false, this.updates});
 
   final CybervulcanController controller;
   final bool firstRun;
+  final UpdateService? updates;
 
   @override
   State<SettingsPage> createState() => _SettingsPageState();
@@ -370,6 +373,11 @@ class _SettingsPageState extends State<SettingsPage> {
               label: const Text('Test connection & privileges'),
             ),
           ]),
+          if (widget.updates != null) ...[
+            const SizedBox(height: 24),
+            _section('Updates'),
+            UpdateSettingsCard(updates: widget.updates!),
+          ],
           const SizedBox(height: 32),
         ],
       ),

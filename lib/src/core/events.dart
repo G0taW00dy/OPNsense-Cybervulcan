@@ -1,7 +1,7 @@
 import 'config.dart';
 import 'house_state.dart';
 
-enum AlertKind { failover, failback, bothDown, vpnRestored, bypassStarted, bypassEnded }
+enum AlertKind { failover, failback, bothDown, vpnRestored, bypassStarted, bypassEnded, updateAvailable }
 
 class AlertEvent {
   const AlertEvent(this.kind, this.title, this.body);

@@ -5,7 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'src/core/controller.dart';
+import 'src/core/events.dart';
 import 'src/core/storage.dart';
+import 'src/core/updater.dart';
 import 'src/platform/android_widget.dart';
 import 'src/platform/notifications.dart';
 import 'src/platform/tray.dart';
@@ -47,12 +49,23 @@ Future<void> main(List<String> args) async {
     if (ctx != null) unawaited(confirmAndStartBypass(ctx, controller));
   }
 
-  runApp(CybervulcanApp(controller: controller));
+  final updates = UpdateService(
+    target: Platform.isWindows ? UpdateTarget.windows : UpdateTarget.android,
+  );
+  updates.found.listen((r) => unawaited(notifier.show(AlertEvent(
+        AlertKind.updateAvailable,
+        'Cybervulcan ${r.version} is available',
+        'Open the app to install it.',
+      ))));
+
+  runApp(CybervulcanApp(controller: controller, updates: updates));
 
   if (Platform.isWindows) {
     final tray = TrayController(controller, onRequestBypassOn: requestBypassConfirm);
     await tray.init();
+    updates.quitApp = tray.quit;
   }
+  updates.start();
   if (Platform.isAndroid) {
     controller.addListener(() => unawaited(pushWidgetState(controller.snapshot, controller.config)));
     // Defer until the first frame so the navigator exists for the dialog.

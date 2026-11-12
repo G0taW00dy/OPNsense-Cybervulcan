@@ -1,8 +1,8 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
-    <path android:fillColor="#00000000" android:strokeColor="#FFFFFFFF" android:strokeWidth="7"
-        android:pathData="M54,33a21,21 0,1 1,0 42a21,21 0,1 1,0 -42z"/>
-    <path android:fillColor="#00000000" android:strokeColor="#FFFFFFFF" android:strokeWidth="5.5"
+    <!-- Vulcan V, single colour (Android 13 themed icons). -->
+    <path android:fillColor="#00000000" android:strokeColor="#FFFFFFFF" android:strokeWidth="3.4"
         android:strokeLineCap="round" android:strokeLineJoin="round"
-        android:pathData="M48,82 L48,42 L55,42 A7,7 0,0 1,55 56 L48,56"/>
+        android:pathData="M38.6,37.7 L44.4,37.7 L44.4,44.4 L54,65.5 L63.6,44.4 L63.6,37.7 L69.4,37.7"/>
+    <path android:fillColor="#FFFFFFFF" android:pathData="M54,67.4a2.9,2.9 0,1 1,0 5.8a2.9,2.9 0,1 1,0 -5.8z"/>
 </vector>
