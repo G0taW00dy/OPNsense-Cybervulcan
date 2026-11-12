@@ -82,13 +82,35 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          # SHA-256 of the release signing certificate (public). The build stops
+          # if the keystore in the secrets is a different key.
+          EXPECTED_CERT_SHA256: "81:BA:30:5B:1B:F2:FB:1A:38:90:CE:B1:44:1F:18:1A:AD:7E:5F:2A:8C:84:5D:EE:5B:95:29:37:95:AA:0F:8B"
         run: |
-          echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android/app/upload-keystore.jks
+          # Secrets pasted through a browser often pick up line breaks or
+          # spaces: strip all whitespace before decoding.
+          strip() { printf '%s' "$1" | tr -d '[:space:]'; }
+          STORE_PW="$(strip "$ANDROID_KEYSTORE_PASSWORD")"
+          KEY_PW="$(strip "${ANDROID_KEY_PASSWORD:-$ANDROID_KEYSTORE_PASSWORD}")"
+          ALIAS="$(strip "$ANDROID_KEY_ALIAS")"
+          if ! strip "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android/app/upload-keystore.jks; then
+            echo "::error::ANDROID_KEYSTORE_BASE64 is not valid base64 - re-paste the whole line."
+            exit 1
+          fi
+          if ! keytool -list -keystore android/app/upload-keystore.jks -storepass "$STORE_PW" -alias "$ALIAS" >/dev/null 2>&1; then
+            echo "::error::Keystore could not be opened - check ANDROID_KEYSTORE_PASSWORD and ANDROID_KEY_ALIAS."
+            exit 1
+          fi
+          GOT="$(keytool -list -v -keystore android/app/upload-keystore.jks -storepass "$STORE_PW" -alias "$ALIAS" | grep -m1 'SHA256:' | sed 's/.*SHA256: //')"
+          echo "Signing certificate SHA-256: $GOT"
+          if [ "$GOT" != "$EXPECTED_CERT_SHA256" ]; then
+            echo "::error::Signing key is not the expected Cybervulcan release key."
+            exit 1
+          fi
           {
             echo "storeFile=upload-keystore.jks"
-            echo "storePassword=$ANDROID_KEYSTORE_PASSWORD"
-            echo "keyAlias=$ANDROID_KEY_ALIAS"
-            echo "keyPassword=${ANDROID_KEY_PASSWORD:-$ANDROID_KEYSTORE_PASSWORD}"
+            echo "storePassword=$STORE_PW"
+            echo "keyAlias=$ALIAS"
+            echo "keyPassword=$KEY_PW"
           } > android/key.properties
       - name: Note debug signing
         if: env.HAS_KEYSTORE != 'true'
