@@ -90,10 +90,17 @@ jobs:
           # spaces: strip all whitespace before decoding.
           strip() { printf '%s' "$1" | tr -d '[:space:]'; }
           STORE_PW="$(strip "$ANDROID_KEYSTORE_PASSWORD")"
-          KEY_PW="$(strip "${ANDROID_KEY_PASSWORD:-$ANDROID_KEYSTORE_PASSWORD}")"
           ALIAS="$(strip "$ANDROID_KEY_ALIAS")"
-          if ! strip "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android/app/upload-keystore.jks; then
-            echo "::error::ANDROID_KEYSTORE_BASE64 is not valid base64 - re-paste the whole line."
+          # Use the secret as-is (minus whitespace); if that isn't clean base64
+          # (extra text pasted around it), fall back to its longest base64 run.
+          # Either way the certificate check below must match exactly.
+          B64="$(strip "$ANDROID_KEYSTORE_BASE64")"
+          if ! printf '%s' "$B64" | base64 --decode > /dev/null 2>&1; then
+            B64="$(printf '%s' "$ANDROID_KEYSTORE_BASE64" | grep -oE '[A-Za-z0-9+/]{200,}={0,2}' | awk 'length > m { m = length; l = $0 } END { print l }')"
+          fi
+          if ! printf '%s' "$B64" | base64 --decode > android/app/upload-keystore.jks; then
+            BAD="$(printf '%s' "$B64" | tr -d 'A-Za-z0-9+/=' | wc -c)"
+            echo "::error::ANDROID_KEYSTORE_BASE64 is not valid base64 - re-paste the whole line. (length ${#B64}, length mod 4 = $(( ${#B64} % 4 )), $BAD characters that are not base64)"
             exit 1
           fi
           if ! keytool -list -keystore android/app/upload-keystore.jks -storepass "$STORE_PW" -alias "$ALIAS" >/dev/null 2>&1; then
@@ -110,7 +117,9 @@ jobs:
             echo "storeFile=upload-keystore.jks"
             echo "storePassword=$STORE_PW"
             echo "keyAlias=$ALIAS"
-            echo "keyPassword=$KEY_PW"
+            # PKCS12 keystores use one password for the store and the key, so
+            # use the store password (a mis-pasted key-password secret can't break it).
+            echo "keyPassword=$STORE_PW"
           } > android/key.properties
       - name: Note debug signing
         if: env.HAS_KEYSTORE != 'true'
