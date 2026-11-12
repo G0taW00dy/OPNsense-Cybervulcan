@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../core/updater.dart';
@@ -112,13 +113,34 @@ class HelpPage extends StatelessWidget {
               'Whole-house bypass: takes everyone on the VPN network off the VPN, for a set time or '
                   'until you turn it off (reminder every 4 hours).',
               'The bypass ends on time while any copy of the app is running. To make the router end '
-                  'it by itself (PC off, phone away), install the router timer: see "Router-side '
-                  'bypass timer" in the full documentation.',
+                  'it by itself (PC off, phone away), install the router timer (section 7).',
               'Tests: checks where this device\'s traffic and DNS actually exit.',
             ],
           ),
-          const _Section(
+          _Section(
             number: 7,
+            title: 'Router timer (recommended)',
+            items: const [
+              'Ends an expired whole-house bypass on the router itself, even when no copy of the app '
+                  'is running. "No time limit" bypasses are left alone. It only touches the bypass '
+                  'table, never the saved router configuration.',
+              'Open a root shell on the router: console menu option 8 "Shell", or SSH '
+                  '(System > Settings > Administration > Secure Shell; turn it off again afterwards).',
+              'Paste the install line below. It should finish with "installed (self-check OK)".',
+              'In the router web page: System > Settings > Cron > "+". Set Minutes, Hours, Day of the '
+                  'month, Months and Days of the week all to *, Command "Cybervulcan - end expired '
+                  'whole-house VPN bypass", Parameters = your bypass alias (BYPASS_ALL). Save, then Apply.',
+              'Check: System > Log Files > General, search "cybervulcan". A line appears each time it '
+                  'ends a bypass. The router\'s clock must be right (System > Settings > General / NTP).',
+              'New router or restored backup: run the install line again and re-add the cron job. '
+                  'To remove it, run the same line with "| sh -s uninstall" at the end.',
+            ],
+            extra: const _CommandBox(
+              'fetch -qo - https://raw.githubusercontent.com/$updateRepo/main/router/install.sh | sh',
+            ),
+          ),
+          const _Section(
+            number: 8,
             title: 'Troubleshooting',
             items: [
               '"API key/secret rejected": re-enter the key and secret, or make a new key.',
@@ -152,7 +174,11 @@ class _Section extends StatelessWidget {
     required this.title,
     required this.items,
     this.initiallyExpanded = false,
+    this.extra,
   });
+
+  /// Optional widget shown after the bullet points (e.g. a command to copy).
+  final Widget? extra;
 
   final int number;
   final String title;
@@ -191,9 +217,45 @@ class _Section extends StatelessWidget {
                   Expanded(child: Text(s, style: t.bodyMedium)),
                 ]),
               ),
+            if (extra != null) ...[const SizedBox(height: 12), extra!],
           ],
         ),
       ),
     );
   }
+}
+
+/// A shell command shown in monospace with a Copy button.
+class _CommandBox extends StatelessWidget {
+  const _CommandBox(this.command);
+
+  final String command;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
+        decoration: BoxDecoration(
+          color: OpnColors.ink,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: OpnColors.border),
+        ),
+        child: Row(children: [
+          Expanded(
+            child: SelectableText(command,
+                style: const TextStyle(fontFamily: 'monospace', fontSize: 13, color: OpnColors.text)),
+          ),
+          IconButton(
+            tooltip: 'Copy',
+            icon: const Icon(Icons.copy, size: 18),
+            onPressed: () async {
+              await Clipboard.setData(ClipboardData(text: command));
+              if (context.mounted) {
+                ScaffoldMessenger.of(context)
+                    .showSnackBar(const SnackBar(content: Text('Install line copied')));
+              }
+            },
+          ),
+        ]),
+      );
 }
