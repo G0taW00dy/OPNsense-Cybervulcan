@@ -8,9 +8,14 @@ class WindowsAutostart {
 
   static bool get supported => Platform.isWindows;
 
+  /// Absolute path, so reg.exe is never picked up from the current or the
+  /// (user-writable) application directory.
+  static String get _reg =>
+      '${Platform.environment['SystemRoot'] ?? r'C:\Windows'}\\System32\\reg.exe';
+
   static Future<bool> isEnabled() async {
     if (!supported) return false;
-    final r = await Process.run('reg', ['query', _runKey, '/v', _valueName]);
+    final r = await Process.run(_reg, ['query', _runKey, '/v', _valueName]);
     return r.exitCode == 0;
   }
 
@@ -23,7 +28,7 @@ class WindowsAutostart {
             '/d', '"${Platform.resolvedExecutable}" --minimized', '/f',
           ]
         : ['delete', _runKey, '/v', _valueName, '/f'];
-    final r = await Process.run('reg', args);
+    final r = await Process.run(_reg, args);
     return r.exitCode == 0;
   }
 }

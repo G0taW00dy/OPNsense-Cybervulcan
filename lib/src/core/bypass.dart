@@ -187,8 +187,13 @@ class BypassManager {
     }
     final expiry = state.expiresAt;
     if (expiry == null) {
-      // Turned on elsewhere (e.g. GUI) with no deadline: give it one.
-      final newExpiry = now.add(config.bypassDuration);
+      // Turned on elsewhere (e.g. GUI) with no deadline: give it one. Never
+      // "no time limit" here - nobody confirmed a whole-house bypass on this
+      // device, so cap it at the normal default.
+      final adopt = isNoLimitDuration(config.bypassDuration)
+          ? const Duration(hours: 2)
+          : config.bypassDuration;
+      final newExpiry = now.add(adopt);
       await store.setString(localExpiryKey, newExpiry.toIso8601String());
       if (config.useExpiryMarker) {
         await client.aliasAdd(config.bypassAlias, encodeExpiryMarker(newExpiry));

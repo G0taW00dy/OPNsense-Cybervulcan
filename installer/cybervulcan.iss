@@ -64,9 +64,9 @@ Root: HKCU; Subkey: "Software\Classes\AppUserModelId\{#AppUserModelId}"; ValueTy
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "Cybervulcan"; ValueData: """{app}\{#AppExe}"" --minimized"; Flags: uninsdeletevalue; Tasks: autostart
 
 [Run]
-Filename: "{app}\{#AppExe}"; Description: "Launch Cybervulcan"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#AppExe}"; Description: "Launch Cybervulcan"; Flags: nowait postinstall skipifsilent runasoriginaluser
 ; In-app updates run the installer with /SILENT: reopen the app afterwards.
-Filename: "{app}\{#AppExe}"; Flags: nowait; Check: WizardSilent
+Filename: "{app}\{#AppExe}"; Flags: nowait runasoriginaluser; Check: WizardSilent
 
 [UninstallRun]
 Filename: "{cmd}"; Parameters: "/C taskkill /IM {#AppExe} /F"; Flags: runhidden; RunOnceId: "KillCybervulcan"

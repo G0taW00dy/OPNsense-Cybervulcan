@@ -76,11 +76,17 @@ Future<PresentedCertificate?> probeCertificate(
 /// Builds a [HttpClient] that trusts normal CA-validated certificates and,
 /// additionally, exactly one self-signed certificate identified by
 /// [pinnedSha256] (when given). Any other invalid certificate is rejected.
+///
+/// When a pin is set, the OS/system trust store is NOT used: every
+/// certificate goes through [HttpClient.badCertificateCallback] and only the
+/// pinned one is accepted. Otherwise a rogue root CA in the Windows
+/// certificate store could still MITM the router API despite the pin.
 HttpClient buildPinnedHttpClient({
   String? pinnedSha256,
   Duration connectionTimeout = const Duration(seconds: 8),
 }) {
-  final client = HttpClient()
+  final pinned = pinnedSha256 != null && pinnedSha256.isNotEmpty;
+  final client = HttpClient(context: pinned ? SecurityContext(withTrustedRoots: false) : null)
     ..connectionTimeout = connectionTimeout
     ..idleTimeout = const Duration(seconds: 15)
     ..userAgent = 'OPNsense-Cybervulcan';

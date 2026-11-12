@@ -120,32 +120,53 @@ class CybervulcanController extends ChangeNotifier {
     final client = _client;
     if (client == null) return HouseSnapshot.unconfigured(now);
 
-    List<GatewayStatus> gws;
+    // Gateway status is read first but a failure must NOT skip the bypass
+    // expiry enforcement below (otherwise a missing "System: Gateways"
+    // privilege, a 404 after an upgrade or a dpinger hiccup would keep the
+    // whole house off the VPN past its deadline).
+    List<GatewayStatus> gws = const [];
+    OpnsenseException? gwError;
     try {
       gws = await client.gatewayStatus();
     } on OpnsenseException catch (e) {
-      return HouseSnapshot(fetchedAt: now, error: e, bypassActive: snapshot.bypassActive);
+      gwError = e;
     }
 
     // Bypass + expiry enforcement.
     bool? bypassActive;
     DateTime? bypassExpiry;
     final bm = _bypass()!;
-    try {
-      var state = await bm.read();
-      final (action, enforced) = await bm.enforce(state);
-      state = enforced;
-      if (action == EnforceAction.expiredTurnedOff) {
-        lastActionInfo = 'Bypass expired and was turned off'
-            '${bm.lastKill != null ? ' (${bm.lastKill!.describe()})' : ''}.';
+    // Skip only when the router itself is unreachable/untrusted/rejecting us.
+    final routerDown = gwError != null &&
+        (gwError.kind == ApiErrorKind.network ||
+            gwError.kind == ApiErrorKind.untrustedCertificate ||
+            gwError.kind == ApiErrorKind.unauthorized);
+    if (!routerDown) {
+      try {
+        var state = await bm.read();
+        final (action, enforced) = await bm.enforce(state);
+        state = enforced;
+        if (action == EnforceAction.expiredTurnedOff) {
+          lastActionInfo = 'Bypass expired and was turned off'
+              '${bm.lastKill != null ? ' (${bm.lastKill!.describe()})' : ''}.';
+        }
+        bypassActive = state.active;
+        bypassExpiry = state.expiresAt;
+        _remindIfNoLimit(state.active, state.expiresAt, now);
+      } on OpnsenseException catch (e) {
+        // Surface every failure: if the bypass table cannot be read, expiry
+        // cannot be enforced either, and the user must know.
+        lastActionError = 'Bypass check failed (expiry not enforced): ${e.message}';
       }
-      bypassActive = state.active;
-      bypassExpiry = state.expiresAt;
-      _remindIfNoLimit(state.active, state.expiresAt, now);
-    } on OpnsenseException catch (e) {
-      if (e.kind != ApiErrorKind.forbidden && e.kind != ApiErrorKind.notFound) {
-        lastActionError = 'Bypass check failed: ${e.message}';
-      }
+    }
+
+    if (gwError != null) {
+      return HouseSnapshot(
+        fetchedAt: now,
+        error: gwError,
+        bypassActive: bypassActive ?? snapshot.bypassActive,
+        bypassExpiresAt: bypassExpiry,
+      );
     }
 
     // PC mode (Windows).
