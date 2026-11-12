@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 
+import '../core/bypass.dart';
 import '../core/controller.dart';
 import '../core/house_state.dart';
 import '../ui/format.dart';
@@ -59,11 +60,14 @@ class TrayController with TrayListener, WindowListener {
 
     final bypassOn = s.bypassActive ?? false;
     final pcClear = s.pcClear;
-    final remaining = s.bypassExpiresAt?.difference(DateTime.now().toUtc());
+    final noLimit = isNoLimitExpiry(s.bypassExpiresAt);
+    final remaining = noLimit ? null : s.bypassExpiresAt?.difference(DateTime.now().toUtc());
     final items = <MenuItem>[
       MenuItem(key: 'status', label: headline(s, controller.config), disabled: true),
       if (bypassOn && remaining != null)
         MenuItem(key: 'bypass_left', label: 'Bypass ends in ${formatDuration(remaining)}', disabled: true),
+      if (bypassOn && noLimit)
+        MenuItem(key: 'bypass_left', label: 'Bypass has no time limit', disabled: true),
       MenuItem.separator(),
       MenuItem(key: 'open', label: 'Open Cybervulcan'),
       if (controller.supportsPcMode && pcClear != null)

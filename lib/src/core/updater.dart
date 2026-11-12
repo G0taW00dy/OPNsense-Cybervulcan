@@ -112,7 +112,11 @@ class UpdateService extends ChangeNotifier {
     this.repo = updateRepo,
     this.currentVersion = appVersion,
     this.checkEvery = const Duration(hours: 12),
-  }) : _http = client ?? http.Client();
+    bool Function()? autoCheck,
+  })  : _http = client ?? http.Client(),
+        _autoCheck = autoCheck ?? (() => true);
+
+  final bool Function() _autoCheck;
 
   final UpdateTarget target;
   final String repo;
@@ -139,9 +143,13 @@ class UpdateService extends ChangeNotifier {
   String? _announced;
   Timer? _timer;
 
+  /// Starts automatic checks. Each one is skipped while [autoCheck] is false
+  /// (Settings > Updates); "Check now" always works.
   void start() {
-    unawaited(check());
-    _timer = Timer.periodic(checkEvery, (_) => unawaited(check()));
+    if (_autoCheck()) unawaited(check());
+    _timer = Timer.periodic(checkEvery, (_) {
+      if (_autoCheck()) unawaited(check());
+    });
   }
 
   Future<void> check() async {

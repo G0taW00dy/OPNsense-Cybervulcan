@@ -1,7 +1,17 @@
+import 'bypass.dart';
 import 'config.dart';
 import 'house_state.dart';
 
-enum AlertKind { failover, failback, bothDown, vpnRestored, bypassStarted, bypassEnded, updateAvailable }
+enum AlertKind {
+  failover,
+  failback,
+  bothDown,
+  vpnRestored,
+  bypassStarted,
+  bypassEnded,
+  bypassReminder,
+  updateAvailable,
+}
 
 class AlertEvent {
   const AlertEvent(this.kind, this.title, this.body);
@@ -54,7 +64,7 @@ List<AlertEvent> diffSnapshots(HouseSnapshot? prev, HouseSnapshot next, AppConfi
           AlertKind.bypassStarted,
           'VPN bypass ON for the whole house',
           'Everyone on the VPN network now goes direct'
-              '${until != null ? ' until ${_fmtTime(until)}' : ''}.'));
+              '${isNoLimitExpiry(until) ? ' until someone turns it off' : until != null ? ' until ${_fmtTime(until)}' : ''}.'));
     } else {
       events.add(const AlertEvent(AlertKind.bypassEnded, 'VPN bypass ended',
           'The VPN network is back on Proton.'));

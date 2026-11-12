@@ -41,7 +41,9 @@ Future<void> pushWidgetState(HouseSnapshot s, AppConfig cfg) async {
   await HomeWidget.saveWidgetData<String>(
       WidgetKeys.bypass, bypass == null ? '?' : (bypass ? '1' : '0'));
   await HomeWidget.saveWidgetData<String>(WidgetKeys.bypassUntil,
-      s.bypassExpiresAt != null && (bypass ?? false) ? formatClock(s.bypassExpiresAt!) : '');
+      s.bypassExpiresAt != null && (bypass ?? false) && !isNoLimitExpiry(s.bypassExpiresAt)
+          ? formatClock(s.bypassExpiresAt!)
+          : '');
   await HomeWidget.saveWidgetData<String>(WidgetKeys.updated, formatClock(s.fetchedAt));
   await HomeWidget.updateWidget(androidName: androidWidgetProvider);
 }

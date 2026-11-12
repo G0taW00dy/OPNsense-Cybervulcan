@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../core/controller.dart';
 import '../core/updater.dart';
 import 'devices_page.dart';
+import 'help_page.dart';
 import 'settings_page.dart';
 import 'status_page.dart';
 import 'tests_page.dart';
@@ -78,6 +79,19 @@ class _HomeShellState extends State<HomeShell> {
                   padding: EdgeInsets.symmetric(vertical: 16),
                   child: VulcanLogo(size: 40),
                 ),
+                trailing: Expanded(
+                  child: Align(
+                    alignment: Alignment.bottomCenter,
+                    child: Padding(
+                      padding: const EdgeInsets.only(bottom: 16),
+                      child: IconButton(
+                        tooltip: 'Setup guide',
+                        onPressed: () => openSetupGuide(context),
+                        icon: const Icon(Icons.help_outline),
+                      ),
+                    ),
+                  ),
+                ),
                 destinations: [
                   for (final d in _destinations)
                     NavigationRailDestination(icon: Icon(d.$1), selectedIcon: Icon(d.$2), label: Text(d.$3)),
@@ -89,7 +103,13 @@ class _HomeShellState extends State<HomeShell> {
           );
         }
         return Scaffold(
-          appBar: AppBar(title: const _Title()),
+          appBar: AppBar(title: const _Title(), actions: [
+            IconButton(
+              tooltip: 'Setup guide',
+              onPressed: () => openSetupGuide(context),
+              icon: const Icon(Icons.help_outline),
+            ),
+          ]),
           body: body,
           bottomNavigationBar: NavigationBar(
             selectedIndex: _index,

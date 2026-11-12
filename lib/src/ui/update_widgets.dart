@@ -103,7 +103,7 @@ class UpdateSettingsCard extends StatelessWidget {
               contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               leading: const Icon(Icons.system_update_alt, color: OpnColors.ember),
               title: Text('Version ${updates.currentVersion}', style: t.titleMedium),
-              subtitle: Text('$status\nChecks GitHub Releases (${updates.repo}) at start-up and every 12 hours.'),
+              subtitle: Text('$status\nSource: GitHub Releases (${updates.repo}).'),
               isThreeLine: true,
               trailing: TextButton(
                 onPressed: updates.checking ? null : updates.check,

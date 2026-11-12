@@ -6,9 +6,19 @@
 
 * DNS resolver test failed with "HTTP 404": the edns.ip-api.com label must be 32 characters.
 
+### Added
+
+* Whole-house bypass "Until I turn it off" option (and 0 = no time limit as the
+  default in Settings), with a reminder notification every 4 hours.
+* Setup guide (help button in the menu and on Settings): router aliases, kill
+  switch, API user and privileges, connecting the app, troubleshooting.
+* Settings: "Start Cybervulcan in the tray when I sign in" (Windows) and
+  "Check for updates automatically".
+
 ### Changed
 
 * Devices page shows a "Nothing connected yet" message when there are no leases.
+* Settings: "VPN gateways" instead of "Proton gateways"; bypass length field explains 0.
 
 ## 1.0.0 (2026-11-12)
 

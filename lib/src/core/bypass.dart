@@ -69,6 +69,17 @@ class BypassState {
 
 const localExpiryKey = 'bypass_expires_at';
 
+/// "No time limit" bypass: the deadline is set ~400 years ahead (still inside
+/// the marker's 28-bit range), so it never expires and only ends when someone
+/// turns it off. Everything else (marker, local copy) works unchanged.
+const bypassNoLimit = Duration(days: 365 * 400);
+
+/// True for a deadline created with [bypassNoLimit].
+bool isNoLimitExpiry(DateTime? expiry) => expiry != null && expiry.toUtc().year >= 2300;
+
+/// True for a configured/selected duration meaning "no time limit".
+bool isNoLimitDuration(Duration d) => d >= const Duration(days: 365 * 100);
+
 /// Derives the bypass state from the raw table entries (+ local fallback).
 BypassState readBypassState(List<String> entries, AppConfig cfg, {String? localExpiryIso}) {
   final active = entries.any((e) => tableEntryMatches(e, cfg.bypassNetwork));

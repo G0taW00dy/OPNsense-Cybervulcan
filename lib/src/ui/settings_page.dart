@@ -6,9 +6,12 @@ import '../core/client_factory.dart';
 import '../core/config.dart';
 import '../core/network_map.dart';
 import '../core/controller.dart';
+import '../core/bypass.dart';
 import '../core/storage.dart';
 import '../core/updater.dart';
+import '../platform/autostart.dart';
 import 'format.dart';
+import 'help_page.dart';
 import 'update_widgets.dart';
 
 /// First-run setup and settings. Secrets go to OS secure storage only.
@@ -33,11 +36,17 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _busy = false;
   String? _message;
   bool _messageIsError = false;
+  bool? _autostart; // null = unknown / not Windows
 
   @override
   void initState() {
     super.initState();
     _cfg = widget.controller.config;
+    if (WindowsAutostart.supported) {
+      WindowsAutostart.isEnabled().then((v) {
+        if (mounted) setState(() => _autostart = v);
+      });
+    }
     _t = {
       'baseUrl': TextEditingController(text: _cfg.baseUrl),
       'mainGateway': TextEditingController(text: _cfg.mainGateway),
@@ -47,7 +56,8 @@ class _SettingsPageState extends State<SettingsPage> {
       'pcModeAlias': TextEditingController(text: _cfg.pcModeAlias),
       'bypassAlias': TextEditingController(text: _cfg.bypassAlias),
       'bypassNetwork': TextEditingController(text: _cfg.bypassNetwork),
-      'bypassMinutes': TextEditingController(text: '${_cfg.bypassDuration.inMinutes}'),
+      'bypassMinutes': TextEditingController(
+          text: isNoLimitDuration(_cfg.bypassDuration) ? '0' : '${_cfg.bypassDuration.inMinutes}'),
       'pcIpOverride': TextEditingController(text: _cfg.pcIpOverride ?? ''),
       'killSwitchTag': TextEditingController(text: _cfg.killSwitchTag),
       'killSwitchRuleUuid': TextEditingController(text: _cfg.killSwitchRuleUuid ?? ''),
@@ -78,7 +88,11 @@ class _SettingsPageState extends State<SettingsPage> {
         pcModeAlias: _v('pcModeAlias'),
         bypassAlias: _v('bypassAlias'),
         bypassNetwork: canonicalCidr(_v('bypassNetwork')),
-        bypassDuration: Duration(minutes: int.tryParse(_v('bypassMinutes')) ?? 120),
+        bypassDuration: switch (int.tryParse(_v('bypassMinutes'))) {
+          0 => bypassNoLimit,
+          final int m when m > 0 => Duration(minutes: m),
+          _ => const Duration(minutes: 120),
+        },
         pcIpOverride: _v('pcIpOverride').isEmpty ? null : _v('pcIpOverride'),
         clearPcIpOverride: _v('pcIpOverride').isEmpty,
         killSwitchTag: _v('killSwitchTag'),
@@ -230,6 +244,14 @@ class _SettingsPageState extends State<SettingsPage> {
       child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          Align(
+            alignment: Alignment.centerRight,
+            child: OutlinedButton.icon(
+              onPressed: () => openSetupGuide(context),
+              icon: const Icon(Icons.help_outline),
+              label: const Text('Setup guide'),
+            ),
+          ),
           if (widget.firstRun) ...[
             Text('Welcome to Cybervulcan', style: t.headlineSmall),
             const SizedBox(height: 8),
@@ -298,7 +320,7 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
             ),
           const SizedBox(height: 8),
-          _section('Proton gateways'),
+          _section('VPN gateways (main / backup)'),
           Row(children: [
             Expanded(child: _field('mainGateway', 'Main gateway', validator: _required)),
             const SizedBox(width: 12),
@@ -313,8 +335,12 @@ class _SettingsPageState extends State<SettingsPage> {
           _field('bypassAlias', 'Whole-house bypass alias', validator: _alias),
           _field('bypassNetwork', 'VPN network to bypass',
               validator: (v) => canonicalCidr(v ?? '') == null ? 'CIDR, e.g. 10.10.40.0/24' : null),
-          _field('bypassMinutes', 'Bypass auto-off after (minutes)', number: true,
-              validator: (v) => (int.tryParse(v ?? '') ?? 0) >= 5 ? null : 'At least 5'),
+          _field('bypassMinutes', 'Default bypass length (minutes)', number: true,
+              help: '0 = no time limit (stays off until someone turns it off). You can still pick a length each time.',
+              validator: (v) {
+                final n = int.tryParse(v ?? '');
+                return n != null && (n == 0 || n >= 5) ? null : '0, or at least 5';
+              }),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
             title: const Text('Store bypass deadline on the router'),
@@ -373,9 +399,33 @@ class _SettingsPageState extends State<SettingsPage> {
               label: const Text('Test connection & privileges'),
             ),
           ]),
+          if (_autostart != null) ...[
+            const SizedBox(height: 24),
+            _section('App'),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Start Cybervulcan in the tray when I sign in'),
+              subtitle: const Text('Applies straight away.'),
+              value: _autostart!,
+              onChanged: (v) async {
+                final ok = await WindowsAutostart.setEnabled(v);
+                final now = await WindowsAutostart.isEnabled();
+                if (!mounted) return;
+                setState(() => _autostart = now);
+                if (!ok) _say('Could not change the startup setting.', error: true);
+              },
+            ),
+          ],
           if (widget.updates != null) ...[
             const SizedBox(height: 24),
             _section('Updates'),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Check for updates automatically'),
+              subtitle: const Text('At start-up and every 12 hours. Save to apply.'),
+              value: _cfg.checkUpdates,
+              onChanged: (v) => setState(() => _cfg = _cfg.copyWith(checkUpdates: v)),
+            ),
             UpdateSettingsCard(updates: widget.updates!),
           ],
           const SizedBox(height: 32),
