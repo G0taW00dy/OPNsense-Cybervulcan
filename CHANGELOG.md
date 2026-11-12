@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.1 (2026-11-12)
+
+### Fixed
+
+* DNS resolver test failed with "HTTP 404": the edns.ip-api.com label must be 32 characters.
+
+### Changed
+
+* Devices page shows a "Nothing connected yet" message when there are no leases.
+
 ## 1.0.0 (2026-11-12)
 
 First release. Replaces the PowerShell "PC Mode" app.

@@ -4,7 +4,7 @@ description: >-
   Proton WireGuard failover status, kill switch, PC mode and whole-house
   VPN bypass. Windows tray app and Android app with widget + Quick Settings tile.
 publish_to: 'none'
-version: 1.0.0+1
+version: 1.0.1+2
 
 environment:
   sdk: ^3.8.0
