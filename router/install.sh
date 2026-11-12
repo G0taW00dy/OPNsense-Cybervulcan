@@ -32,8 +32,11 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
+# The GUI caches its list of cron-able commands here; drop it so the change shows.
+GUI_CACHE=/var/lib/php/tmp/configdmodelfield.data
+
 if [ "${1:-}" = "uninstall" ]; then
-    rm -f "$SCRIPT" "$ACTIONS"
+    rm -f "$SCRIPT" "$ACTIONS" "$GUI_CACHE"
     service configd restart >/dev/null 2>&1 || true
     echo "Cybervulcan bypass timer removed. Delete its job under System > Settings > Cron too."
     exit 0
@@ -94,6 +97,7 @@ description:Cybervulcan - end expired whole-house VPN bypass
 EOF
 
 service configd restart >/dev/null 2>&1
+rm -f "$GUI_CACHE"
 
 # Quick self-check through configd, the same path cron uses.
 if configctl cybervulcan bypass expire BYPASS_ALL >/dev/null 2>&1; then
