@@ -110,8 +110,10 @@ class HelpPage extends StatelessWidget {
               'This PC (Windows): VPN or CLEAR for this PC only. CLEAR resets to VPN if the router '
                   'restarts.',
               'Whole-house bypass: takes everyone on the VPN network off the VPN, for a set time or '
-                  'until you turn it off (reminder every 4 hours). Needs at least one copy of the app '
-                  'running to switch off on time.',
+                  'until you turn it off (reminder every 4 hours).',
+              'The bypass ends on time while any copy of the app is running. To make the router end '
+                  'it by itself (PC off, phone away), install the router timer: see "Router-side '
+                  'bypass timer" in the full documentation.',
               'Tests: checks where this device\'s traffic and DNS actually exit.',
             ],
           ),

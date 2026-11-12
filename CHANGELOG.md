@@ -8,6 +8,8 @@
 
 ### Added
 
+* Router-side bypass timer (`router/install.sh`, one-line install from the
+  OPNsense console): ends an expired bypass even when no app is running.
 * Whole-house bypass "Until I turn it off" option (and 0 = no time limit as the
   default in Settings), with a reminder notification every 4 hours.
 * Setup guide (help button in the menu and on Settings): router aliases, kill
