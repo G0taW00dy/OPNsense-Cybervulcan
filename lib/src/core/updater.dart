@@ -9,7 +9,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 /// The running version. CI passes it with `--dart-define=APP_VERSION=x.y.z`
 /// (same value as `--build-name`); local builds fall back to pubspec's.
-const appVersion = String.fromEnvironment('APP_VERSION', defaultValue: '1.0.0');
+const appVersion = String.fromEnvironment('APP_VERSION', defaultValue: '1.0.1');
 
 /// Where releases are published, as `owner/repo`. Must be a repo whose
 /// releases can be read without signing in (public). Override at build time

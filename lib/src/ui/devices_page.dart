@@ -5,6 +5,7 @@ import '../api/opnsense_client.dart';
 import '../core/controller.dart';
 import '../core/network_map.dart';
 import 'format.dart';
+import 'theme.dart';
 
 /// Who's online: Dnsmasq DHCP leases grouped by house network.
 class DevicesPage extends StatefulWidget {
@@ -86,6 +87,19 @@ class _DevicesPageState extends State<DevicesPage> {
               const SizedBox(height: 4),
               Text('Devices with static IPs and no lease are not listed.',
                   style: Theme.of(context).textTheme.bodySmall),
+              if (leases.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 48),
+                  child: Column(children: [
+                    const Icon(Icons.devices_other, size: 48, color: OpnColors.muted),
+                    const SizedBox(height: 12),
+                    Text('Nothing connected yet', style: Theme.of(context).textTheme.titleMedium),
+                    const SizedBox(height: 4),
+                    Text('Devices appear here once the router gives them an address.',
+                        textAlign: TextAlign.center,
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: OpnColors.textSoft)),
+                  ]),
+                ),
               for (final net in order) ...[
                 const SizedBox(height: 16),
                 _NetworkHeader(
