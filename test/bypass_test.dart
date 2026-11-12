@@ -50,6 +50,25 @@ void main() {
       now = DateTime.utc(2026, 11, 12, 10, 0);
     });
 
+    test('no time limit: marker fits, never expires, stays on until turned off', () async {
+      final s = await manager().turnOn(duration: bypassNoLimit);
+      expect(s.active, isTrue);
+      expect(isNoLimitExpiry(s.expiresAt), isTrue);
+      now = now.add(const Duration(days: 3650));
+      final (action, after) = await manager().enforce(await manager().read());
+      expect(action, EnforceAction.none);
+      expect(after.active, isTrue);
+      final off = await manager().turnOff();
+      expect(off.active, isFalse);
+    });
+
+    test('a normal deadline is not "no time limit"', () {
+      expect(isNoLimitExpiry(DateTime.utc(2026, 11, 12, 22)), isFalse);
+      expect(isNoLimitExpiry(null), isFalse);
+      expect(isNoLimitDuration(const Duration(hours: 4)), isFalse);
+      expect(isNoLimitDuration(bypassNoLimit), isTrue);
+    });
+
     test('turnOn adds network + marker and records local expiry', () async {
       final s = await manager().turnOn();
       expect(s.active, isTrue);

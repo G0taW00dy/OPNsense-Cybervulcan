@@ -46,6 +46,10 @@ class CybervulcanController extends ChangeNotifier {
   String? _cachedArmedDetail;
   bool _disposed = false;
 
+  /// Next reminder while a no-time-limit bypass is on.
+  DateTime? _noLimitRemindAt;
+  static const noLimitReminderEvery = Duration(hours: 4);
+
   bool get isConfigured => _client != null;
   bool get hasCredentials => _creds?.isComplete ?? false;
 
@@ -137,6 +141,7 @@ class CybervulcanController extends ChangeNotifier {
       }
       bypassActive = state.active;
       bypassExpiry = state.expiresAt;
+      _remindIfNoLimit(state.active, state.expiresAt, now);
     } on OpnsenseException catch (e) {
       if (e.kind != ApiErrorKind.forbidden && e.kind != ApiErrorKind.notFound) {
         lastActionError = 'Bypass check failed: ${e.message}';
@@ -173,6 +178,22 @@ class CybervulcanController extends ChangeNotifier {
       killSwitchArmed: _cachedArmed,
       killSwitchDetail: _cachedArmedDetail,
     );
+  }
+
+  /// A bypass with no time limit is easy to forget: nudge every 4 hours.
+  void _remindIfNoLimit(bool active, DateTime? expiry, DateTime now) {
+    if (!active || !isNoLimitExpiry(expiry)) {
+      _noLimitRemindAt = null;
+      return;
+    }
+    final at = _noLimitRemindAt ??= now.add(noLimitReminderEvery);
+    if (!now.isBefore(at)) {
+      _noLimitRemindAt = now.add(noLimitReminderEvery);
+      if (config.notifyOnBypass && !_disposed) {
+        _events.add(const AlertEvent(AlertKind.bypassReminder, 'VPN bypass is still on',
+            'The whole house is still off the VPN (no time limit). Turn it off in Cybervulcan when you\'re done.'));
+      }
+    }
   }
 
   Future<void> _checkKillSwitch(OpnsenseClient client) async {

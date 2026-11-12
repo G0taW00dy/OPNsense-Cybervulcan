@@ -26,6 +26,7 @@ class AppConfig {
     this.notifyOnBypass = true,
     this.notifyOnFailover = true,
     this.useExpiryMarker = true,
+    this.checkUpdates = true,
   });
 
   final String baseUrl;
@@ -59,6 +60,9 @@ class AppConfig {
   /// entry in the bypass table, so every device enforces the same deadline.
   final bool useExpiryMarker;
 
+  /// Check GitHub Releases automatically (start-up + every 12 h).
+  final bool checkUpdates;
+
   Uri? get baseUri {
     final u = Uri.tryParse(baseUrl.trim());
     if (u == null || u.host.isEmpty || !(u.scheme == 'http' || u.scheme == 'https')) {
@@ -91,6 +95,7 @@ class AppConfig {
     bool? notifyOnBypass,
     bool? notifyOnFailover,
     bool? useExpiryMarker,
+    bool? checkUpdates,
   }) =>
       AppConfig(
         baseUrl: baseUrl ?? this.baseUrl,
@@ -115,6 +120,7 @@ class AppConfig {
         notifyOnBypass: notifyOnBypass ?? this.notifyOnBypass,
         notifyOnFailover: notifyOnFailover ?? this.notifyOnFailover,
         useExpiryMarker: useExpiryMarker ?? this.useExpiryMarker,
+        checkUpdates: checkUpdates ?? this.checkUpdates,
       );
 
   Map<String, dynamic> toJson() => {
@@ -141,6 +147,7 @@ class AppConfig {
         'notifyOnBypass': notifyOnBypass,
         'notifyOnFailover': notifyOnFailover,
         'useExpiryMarker': useExpiryMarker,
+        'checkUpdates': checkUpdates,
       };
 
   factory AppConfig.fromJson(Map<String, dynamic> j) {
@@ -195,6 +202,7 @@ class AppConfig {
       notifyOnBypass: b('notifyOnBypass', d.notifyOnBypass),
       notifyOnFailover: b('notifyOnFailover', d.notifyOnFailover),
       useExpiryMarker: b('useExpiryMarker', d.useExpiryMarker),
+      checkUpdates: b('checkUpdates', d.checkUpdates),
     );
   }
 
