@@ -27,6 +27,21 @@ First release. Replaces the PowerShell "PC Mode" app.
 * API secrets are kept in OS secure storage only.
 * GitHub Actions builds the Windows installer and Android APK, with a release on each tag.
 
+### Changed (night theme)
+
+* Always-dark night theme with ember and cyan accents.
+* New "Vulcan V" logo replaces the OPn mark: app icon, tray icons in all five
+  status colours, Android launcher, themed and notification icons.
+* Status header shows the current exit large, over a volcano illustration
+  whose tunnel line takes the house status colour.
+
+### Added (updates)
+
+* Update check against GitHub Releases at start-up and every 12 hours, with a
+  Status banner, a notification and *Settings > Updates > Check now*.
+* Windows: one-click install (SHA-256 checked when GitHub gives a digest,
+  silent installer, app reopens). Android: opens the APK download.
+
 ### Removed
 
 * STATIC mode from the old PowerShell app.

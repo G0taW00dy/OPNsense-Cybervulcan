@@ -1,6 +1,6 @@
 name: opnsense_cybervulcan
 description: >-
-  OPNsense Cybervulcan ("OPn") - companion app for a home OPNsense router:
+  OPNsense Cybervulcan - companion app for a home OPNsense router:
   Proton WireGuard failover status, kill switch, PC mode and whole-house
   VPN bypass. Windows tray app and Android app with widget + Quick Settings tile.
 publish_to: 'none'
@@ -23,6 +23,7 @@ dependencies:
   window_manager: '>=0.5.0 <0.6.0'
   home_widget: '>=0.7.0 <0.10.0'
   path: ^1.9.0
+  url_launcher: ^6.3.1
 
 dev_dependencies:
   flutter_test:

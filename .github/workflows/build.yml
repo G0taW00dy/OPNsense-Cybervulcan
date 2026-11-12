@@ -88,6 +88,7 @@ jobs:
       - run: >
           flutter build apk --release
           --build-name=${{ needs.version.outputs.name }}
+          --dart-define=APP_VERSION=${{ needs.version.outputs.name }}
           --build-number=${{ github.run_number }}
       - name: Rename APK
         run: |
@@ -117,6 +118,7 @@ jobs:
       - run: >
           flutter build windows --release
           --build-name=${{ needs.version.outputs.name }}
+          --dart-define=APP_VERSION=${{ needs.version.outputs.name }}
           --build-number=${{ github.run_number }}
       - name: Bundle the VC++ runtime next to the exe (app-local deployment)
         shell: pwsh
