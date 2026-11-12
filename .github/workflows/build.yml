@@ -90,7 +90,6 @@ jobs:
           # spaces: strip all whitespace before decoding.
           strip() { printf '%s' "$1" | tr -d '[:space:]'; }
           STORE_PW="$(strip "$ANDROID_KEYSTORE_PASSWORD")"
-          KEY_PW="$(strip "${ANDROID_KEY_PASSWORD:-$ANDROID_KEYSTORE_PASSWORD}")"
           ALIAS="$(strip "$ANDROID_KEY_ALIAS")"
           # Use the secret as-is (minus whitespace); if that isn't clean base64
           # (extra text pasted around it), fall back to its longest base64 run.
@@ -118,7 +117,9 @@ jobs:
             echo "storeFile=upload-keystore.jks"
             echo "storePassword=$STORE_PW"
             echo "keyAlias=$ALIAS"
-            echo "keyPassword=$KEY_PW"
+            # PKCS12 keystores use one password for the store and the key, so
+            # use the store password (a mis-pasted key-password secret can't break it).
+            echo "keyPassword=$STORE_PW"
           } > android/key.properties
       - name: Note debug signing
         if: env.HAS_KEYSTORE != 'true'
