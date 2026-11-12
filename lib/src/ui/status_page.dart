@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../api/models.dart';
+import '../core/bypass.dart';
 import '../core/controller.dart';
 import '../core/house_state.dart';
 import '../core/updater.dart';
@@ -339,7 +340,8 @@ class _BypassCard extends StatelessWidget {
     final s = controller.snapshot;
     final active = s.bypassActive;
     final t = Theme.of(context).textTheme;
-    final remaining = s.bypassExpiresAt?.difference(DateTime.now().toUtc());
+    final noLimit = isNoLimitExpiry(s.bypassExpiresAt);
+    final remaining = noLimit ? null : s.bypassExpiresAt?.difference(DateTime.now().toUtc());
     return Card(
       color: (active ?? false) ? OpnColors.purple.withValues(alpha: 0.16) : null,
       child: Padding(
@@ -365,7 +367,9 @@ class _BypassCard extends StatelessWidget {
               const Text('Status unknown - the API user needs "Diagnostics: PF Table IP addresses".')
             else if (active) ...[
               Text(
-                remaining != null
+                noLimit
+                    ? 'ON - no time limit. Turn it off here when you\'re done.'
+                    : remaining != null
                     ? 'ON - VPN resumes in ${formatDuration(remaining)} (at ${formatClock(s.bypassExpiresAt!)})'
                     : 'ON',
                 style: t.titleSmall?.copyWith(color: OpnColors.purple, fontWeight: FontWeight.w700),

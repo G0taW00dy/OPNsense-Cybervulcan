@@ -1,4 +1,5 @@
 import '../api/opnsense_client.dart';
+import '../core/bypass.dart';
 import '../core/config.dart';
 import '../core/house_state.dart';
 
@@ -11,6 +12,10 @@ String formatDuration(Duration d) {
   if (m > 0) return '${m}m ${s.toString().padLeft(2, '0')}s';
   return '${s}s';
 }
+
+/// Label for a bypass duration choice.
+String bypassDurationLabel(Duration d) =>
+    isNoLimitDuration(d) ? 'Until I turn it off' : formatDuration(d);
 
 String formatClock(DateTime t) {
   final l = t.toLocal();
@@ -42,7 +47,8 @@ String headline(HouseSnapshot s, AppConfig cfg) {
   if (err != null) return errorHint(err);
   if (s.bypassActive ?? false) {
     final e = s.bypassExpiresAt;
-    return 'VPN BYPASS ON (whole house)${e != null ? ' until ${formatClock(e)}' : ''}';
+    final when = isNoLimitExpiry(e) ? ' - no time limit' : (e != null ? ' until ${formatClock(e)}' : '');
+    return 'VPN BYPASS ON (whole house)$when';
   }
   final g = s.activeGateway;
   final ping = g?.delayMs != null ? ', ${g!.delayMs!.toStringAsFixed(0)} ms' : '';

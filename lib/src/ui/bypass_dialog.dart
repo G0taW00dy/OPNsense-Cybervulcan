@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../core/bypass.dart';
 import '../core/controller.dart';
 import 'format.dart';
 import 'theme.dart';
@@ -8,13 +9,14 @@ import 'theme.dart';
 /// requested. Used by the status page, tray menu, widget and QS tile.
 Future<bool> confirmAndStartBypass(BuildContext context, CybervulcanController c) async {
   if (c.snapshot.bypassActive ?? false) return false;
-  var duration = c.config.bypassDuration;
+  var duration = isNoLimitDuration(c.config.bypassDuration) ? bypassNoLimit : c.config.bypassDuration;
   final options = <Duration>{
     const Duration(minutes: 30),
     const Duration(hours: 1),
     const Duration(hours: 2),
     const Duration(hours: 4),
-    c.config.bypassDuration,
+    bypassNoLimit,
+    if (!isNoLimitDuration(c.config.bypassDuration)) c.config.bypassDuration,
   }.toList()
     ..sort();
 
@@ -39,19 +41,28 @@ Future<bool> confirmAndStartBypass(BuildContext context, CybervulcanController c
               const Text('DNS is redirected to the router\'s Quad9 DNS-over-TLS resolver while '
                   'bypass is on. The kill switch does not protect bypassed traffic.'),
               const SizedBox(height: 16),
-              const Text('Automatically turn back on after:'),
+              const Text('Turn the VPN back on:'),
               const SizedBox(height: 8),
               Wrap(
                 spacing: 8,
                 children: [
                   for (final d in options)
                     ChoiceChip(
-                      label: Text(formatDuration(d)),
+                      label: Text(bypassDurationLabel(d)),
                       selected: d == duration,
                       onSelected: (_) => setState(() => duration = d),
                     ),
                 ],
               ),
+              if (isNoLimitDuration(duration))
+                Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: Text(
+                    'No time limit: the VPN stays off for everyone until someone turns the bypass '
+                    'off. You\'ll get a reminder every 4 hours.',
+                    style: TextStyle(color: OpnColors.amber.withValues(alpha: 0.95)),
+                  ),
+                ),
             ],
           ),
         ),

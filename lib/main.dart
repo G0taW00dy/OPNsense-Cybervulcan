@@ -51,6 +51,7 @@ Future<void> main(List<String> args) async {
 
   final updates = UpdateService(
     target: Platform.isWindows ? UpdateTarget.windows : UpdateTarget.android,
+    autoCheck: () => controller.config.checkUpdates,
   );
   updates.found.listen((r) => unawaited(notifier.show(AlertEvent(
         AlertKind.updateAvailable,
@@ -65,7 +66,6 @@ Future<void> main(List<String> args) async {
     await tray.init();
     updates.quitApp = tray.quit;
   }
-  updates.start();
   if (Platform.isAndroid) {
     controller.addListener(() => unawaited(pushWidgetState(controller.snapshot, controller.config)));
     // Defer until the first frame so the navigator exists for the dialog.
@@ -75,4 +75,5 @@ Future<void> main(List<String> args) async {
   }
 
   await controller.init();
+  updates.start(); // after init, so the saved "check automatically" setting is loaded
 }
