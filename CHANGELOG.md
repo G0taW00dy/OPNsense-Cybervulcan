@@ -13,7 +13,8 @@
 * Whole-house bypass "Until I turn it off" option (and 0 = no time limit as the
   default in Settings), with a reminder notification every 4 hours.
 * Setup guide (help button in the menu and on Settings): router aliases, kill
-  switch, API user and privileges, connecting the app, troubleshooting.
+  switch, API user and privileges, connecting the app, the router timer (with a
+  copy button for the install line), troubleshooting.
 * Settings: "Start Cybervulcan in the tray when I sign in" (Windows) and
   "Check for updates automatically".
 
