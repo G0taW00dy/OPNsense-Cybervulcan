@@ -110,9 +110,32 @@ Version notes:
 * Every poll (default every 15 s) and every app start checks the deadline. If it passed while the app was closed, bypass is switched off straight away.
 * If bypass was switched on elsewhere (for example in the GUI) without a deadline, the app gives it one (now + the default duration).
 
-Limitation: if *no* Cybervulcan instance is running, nothing switches bypass off
-at the deadline. The router has no timer for runtime tables. A router reboot
-also clears it.
+Without help, nothing switches bypass off at the deadline while *no*
+Cybervulcan instance is running (PC off, phone away from home). A router
+reboot also clears it. To close that gap, install the router-side timer below.
+
+### Router-side bypass timer (recommended)
+
+`router/install.sh` installs a tiny script on OPNsense that reads the same
+deadline marker and, once it has passed, flushes `BYPASS_ALL` and resets the
+bypassed connections, so the bypass ends on time even with every app closed.
+"No time limit" bypasses are left alone (their deadline is centuries away).
+It only touches the runtime table you name, never the saved configuration,
+and logs to the system log (search "cybervulcan").
+
+1. Open a root shell on the router: console menu option **8) Shell** (no SSH
+   needed), or SSH.
+2. Run:
+   ```sh
+   fetch -qo - https://raw.githubusercontent.com/G0taW00dy/OPNsense-Cybervulcan/main/router/install.sh | sh
+   ```
+3. In the GUI: **System > Settings > Cron > +**, every field `*`, Command
+   **"Cybervulcan - end expired whole-house VPN bypass"**, Parameters
+   `BYPASS_ALL`. Save and Apply.
+
+Remove it with the same line ending in `| sh -s uninstall`, then delete the
+cron job. The files are not part of a config backup: re-run step 2 after
+restoring onto new hardware. The download needs this repo to be public.
 
 ## Connection reset on mode changes
 
