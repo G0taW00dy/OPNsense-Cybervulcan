@@ -114,8 +114,11 @@ class OpnsenseClient {
     // No keep-alive: every call gets a fresh TCP connection (and pf state).
     // Mode changes kill this device's own states, which would otherwise
     // leave a pooled connection silently dead.
+    // Never follow redirects: the Authorization header must only ever go to
+    // the configured base URL (a redirect is reported as an error below).
     final request = http.Request(method, uri)
       ..persistentConnection = false
+      ..followRedirects = false
       ..headers['Authorization'] = _auth
       ..headers['Accept'] = 'application/json';
     if (body != null) {

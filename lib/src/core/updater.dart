@@ -223,6 +223,12 @@ class UpdateService extends ChangeNotifier {
   Future<File> downloadInstaller(ReleaseInfo r) async {
     final asset = r.asset;
     if (asset == null) throw UpdateException('This release has no installer attached.');
+    // Fail closed: never run an installer whose checksum cannot be checked.
+    final want = asset.sha256;
+    if (want == null || !RegExp(r'^[0-9a-f]{64}$').hasMatch(want)) {
+      throw UpdateException('This release has no SHA-256 digest - not installing. '
+          'Download it manually from the release page.');
+    }
     downloadProgress = 0;
     error = null;
     notifyListeners();
@@ -248,8 +254,7 @@ class UpdateService extends ChangeNotifier {
       }
       await sink.close();
       hasher.close();
-      final want = asset.sha256;
-      if (want != null && hashOut.value.toString() != want) {
+      if (hashOut.value.toString() != want) {
         await dir.delete(recursive: true);
         throw UpdateException('Downloaded installer failed its checksum check - not installing.');
       }
@@ -264,14 +269,24 @@ class UpdateService extends ChangeNotifier {
   /// app has exited and released its single-instance mutex), then calls
   /// [quitApp]. The installer relaunches the app when it finishes.
   Future<void> runInstallerAndQuit(File installer, Future<void> Function() quitApp) async {
+    // Refuse paths that cmd.exe would reinterpret inside a batch file
+    // (% expansion, quotes) or mangle (non-ASCII: batch files are read in the
+    // OEM code page).
+    if (RegExp(r'[%"^!\r\n]|[^\x20-\x7E]').hasMatch(installer.path)) {
+      throw UpdateException('Unusual temp folder path - install the update manually.');
+    }
+    // Absolute System32 paths: never resolve cmd/ping from the current or
+    // application directory.
+    final sys32 = '${Platform.environment['SystemRoot'] ?? r'C:\Windows'}\\System32';
     final script = File('${installer.parent.path}${Platform.pathSeparator}run-update.cmd');
     await script.writeAsString([
       '@echo off',
-      'ping -n 4 127.0.0.1 >nul',
+      '"$sys32\\PING.EXE" -n 4 127.0.0.1 >nul',
       'start "" "${installer.path}" /SILENT /SUPPRESSMSGBOXES /NORESTART',
       '',
     ].join('\r\n'));
-    await Process.start('cmd.exe', ['/c', script.path], mode: ProcessStartMode.detached);
+    await Process.start('$sys32\\cmd.exe', ['/c', script.path],
+        mode: ProcessStartMode.detached, workingDirectory: installer.parent.path);
     await quitApp();
   }
 

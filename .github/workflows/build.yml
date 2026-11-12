@@ -49,16 +49,20 @@ jobs:
           else
             name="$(grep -E '^version:' pubspec.yaml | sed -E 's/version:[[:space:]]*([^+]+).*/\1/')"
           fi
+          # The value is reused in later run: scripts - only allow x.y.z.
+          if [[ ! "$name" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Version '$name' is not x.y.z"; exit 1
+          fi
           echo "name=$name" >> "$GITHUB_OUTPUT"
 
   android:
     needs: [test, version]
     runs-on: ubuntu-latest
     env:
-      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      # Only a flag at job level; the secrets themselves are scoped to the one
+      # step that needs them (not exposed to third-party actions).
+      HAS_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+      APP_VERSION: ${{ needs.version.outputs.name }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -71,8 +75,13 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           cache: true
       - name: Configure release signing (optional)
-        if: env.ANDROID_KEYSTORE_BASE64 != ''
+        if: env.HAS_KEYSTORE == 'true'
         shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android/app/upload-keystore.jks
           {
@@ -82,18 +91,18 @@ jobs:
             echo "keyPassword=${ANDROID_KEY_PASSWORD:-$ANDROID_KEYSTORE_PASSWORD}"
           } > android/key.properties
       - name: Note debug signing
-        if: env.ANDROID_KEYSTORE_BASE64 == ''
+        if: env.HAS_KEYSTORE != 'true'
         run: echo "::notice::No ANDROID_KEYSTORE_BASE64 secret - APK is signed with the debug key."
       - run: flutter pub get
       - run: >
           flutter build apk --release
-          --build-name=${{ needs.version.outputs.name }}
-          --dart-define=APP_VERSION=${{ needs.version.outputs.name }}
+          --build-name="$APP_VERSION"
+          --dart-define=APP_VERSION="$APP_VERSION"
           --build-number=${{ github.run_number }}
       - name: Rename APK
         run: |
           mkdir -p dist
-          cp build/app/outputs/flutter-apk/app-release.apk "dist/Cybervulcan-${{ needs.version.outputs.name }}.apk"
+          cp build/app/outputs/flutter-apk/app-release.apk "dist/Cybervulcan-$APP_VERSION.apk"
       - name: Remove signing material
         if: always()
         run: rm -f android/app/upload-keystore.jks android/key.properties

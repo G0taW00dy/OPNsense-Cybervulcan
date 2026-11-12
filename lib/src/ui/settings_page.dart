@@ -334,7 +334,14 @@ class _SettingsPageState extends State<SettingsPage> {
           _section('Bypass & PC mode'),
           _field('bypassAlias', 'Whole-house bypass alias', validator: _alias),
           _field('bypassNetwork', 'VPN network to bypass',
-              validator: (v) => canonicalCidr(v ?? '') == null ? 'CIDR, e.g. 10.10.40.0/24' : null),
+              validator: (v) {
+                final net = Ipv4Subnet.tryParse(v ?? '');
+                if (net == null || !(v ?? '').contains('/')) return 'CIDR, e.g. 10.10.40.0/24';
+                // A short prefix (e.g. 0.0.0.0/0 or /8) would take far more than the
+                // VPN VLAN off Proton and make kill_states reset most connections.
+                if (net.prefix < 16) return 'Prefix must be /16 or longer';
+                return null;
+              }),
           _field('bypassMinutes', 'Default bypass length (minutes)', number: true,
               help: '0 = no time limit (stays off until someone turns it off). You can still pick a length each time.',
               validator: (v) {
