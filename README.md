@@ -206,11 +206,15 @@ A newer, non-pre-release version shows a banner on the Status page and a
 notification.
 
 * **Windows:** *Install now* downloads `Cybervulcan-Setup-X.Y.Z.exe`, checks its
-  SHA-256 against GitHub's asset digest (when GitHub provides one), closes the
-  app and runs the installer with `/SILENT`. The installer reopens the app.
-* **Android:** *Download APK* opens the APK in the browser; tap it to install
-  (Android asks once to allow installs from the browser). Updates install over
-  the old app only if both APKs are signed with the same key, so set up release
+  SHA-256 against GitHub's asset digest (it refuses to install without one),
+  closes the app and runs the installer with `/SILENT`. The installer reopens
+  the app.
+* **Android:** *Install now* downloads the APK into the app's private cache,
+  checks its SHA-256 the same way, and opens Android's installer, where you tap
+  **Update**. The first time, Android asks you to allow "Install unknown apps"
+  for Cybervulcan (the app opens that screen for you). Android never lets a
+  sideloaded app update itself without that tap. Updates install over the old
+  app only if both APKs are signed with the same key, so set up release
   signing (below) before the first APK you keep.
 
 The version the app reports comes from `--dart-define=APP_VERSION` (CI sets it
