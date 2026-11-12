@@ -130,10 +130,11 @@ class QuickTests {
 
   /// Which recursive resolver is answering for this device. A random,
   /// never-cached subdomain forces a fresh lookup that ip-api's authoritative
-  /// server records (edns.ip-api.com; plain HTTP only).
+  /// server records (edns.ip-api.com; plain HTTP only). The label must be
+  /// exactly 32 alphanumeric characters or ip-api answers 404.
   Future<DnsResolverInfo> dnsResolver() async {
     final rnd = Random.secure();
-    final label = List.generate(24, (_) => 'abcdefghijklmnopqrstuvwxyz0123456789'[rnd.nextInt(36)]).join();
+    final label = List.generate(32, (_) => 'abcdefghijklmnopqrstuvwxyz0123456789'[rnd.nextInt(36)]).join();
     final j = await _getJson(Uri.parse('http://$label.edns.ip-api.com/json'));
     final dns = j['dns'];
     if (dns is! Map || dns['ip'] == null) throw Exception('No resolver information returned');
