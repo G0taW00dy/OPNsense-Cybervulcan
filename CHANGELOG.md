@@ -20,6 +20,8 @@
 
 ### Changed
 
+* Android updates install from inside the app: download, SHA-256 check, then
+  Android's installer opens (one tap). Needs release-signed APKs.
 * Devices page shows a "Nothing connected yet" message when there are no leases.
 * Settings: "VPN gateways" instead of "Proton gateways"; bypass length field explains 0.
 

@@ -39,7 +39,7 @@ class UpdateBanner extends StatelessWidget {
                   ]),
                   const SizedBox(height: 4),
                   Text('You have ${updates.currentVersion}.'
-                      '${windows ? ' Installing closes the app and reopens it when done.' : ' The APK downloads in your browser; tap it to install.'}',
+                      '${windows ? ' Installing closes the app and reopens it when done.' : ' It downloads here, then Android asks you to tap Update.'}',
                       style: t.bodyMedium?.copyWith(color: OpnColors.textSoft)),
                   if (r.asset == null)
                     Padding(
@@ -61,8 +61,8 @@ class UpdateBanner extends StatelessWidget {
                         style: FilledButton.styleFrom(
                             backgroundColor: OpnColors.ember, foregroundColor: OpnColors.ink),
                         onPressed: r.asset == null ? null : updates.install,
-                        icon: Icon(windows ? Icons.download : Icons.open_in_browser),
-                        label: Text(windows ? 'Install now' : 'Download APK'),
+                        icon: const Icon(Icons.download),
+                        label: const Text('Install now'),
                       ),
                       TextButton(onPressed: updates.openReleasePage, child: const Text("What's new")),
                     ]),

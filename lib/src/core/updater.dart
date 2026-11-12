@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
 
@@ -190,8 +191,12 @@ class UpdateService extends ChangeNotifier {
     }
   }
 
-  /// Installs [available]: Windows downloads and runs the installer, Android
-  /// opens the APK download in the browser (tap it to install).
+  static const _android = MethodChannel('au.cybervulcan.opnsense/updater');
+
+  /// Installs [available]. Windows downloads and runs the installer (the app
+  /// closes and reopens). Android downloads the APK into the app's cache,
+  /// checks its SHA-256 and opens Android's installer, where you tap Update.
+  /// Android never lets a sideloaded app update itself silently.
   Future<void> install() async {
     final r = available;
     if (r == null) return;
@@ -200,8 +205,16 @@ class UpdateService extends ChangeNotifier {
         final file = await downloadInstaller(r);
         await runInstallerAndQuit(file, quitApp ?? () async => exit(0));
       } else {
-        final ok = await launchUrl(r.asset?.url ?? r.pageUrl, mode: LaunchMode.externalApplication);
-        if (!ok) throw UpdateException('Could not open the browser.');
+        final allowed = await _android.invokeMethod<bool>('canInstall') ?? false;
+        if (!allowed) {
+          await _android.invokeMethod<void>('openInstallSettings');
+          throw UpdateException('Turn on "Allow from this source" for Cybervulcan in the screen '
+              'that just opened, come back, then tap Install now again.');
+        }
+        final dirPath = await _android.invokeMethod<String>('updatesDir');
+        if (dirPath == null) throw UpdateException('No folder for the update download.');
+        final file = await downloadInstaller(r, into: Directory(dirPath));
+        await _android.invokeMethod<bool>('installApk', {'path': file.path});
       }
     } on UpdateException catch (e) {
       error = e.message;
@@ -218,9 +231,9 @@ class UpdateService extends ChangeNotifier {
     if (r != null) await launchUrl(r.pageUrl, mode: LaunchMode.externalApplication);
   }
 
-  /// Windows: downloads the installer to the temp folder, checks its SHA-256
-  /// against GitHub's digest (when GitHub provides one) and returns the file.
-  Future<File> downloadInstaller(ReleaseInfo r) async {
+  /// Downloads the installer/APK (to a new temp folder, or into [into] after
+  /// emptying it), checks its SHA-256 against GitHub's digest and returns it.
+  Future<File> downloadInstaller(ReleaseInfo r, {Directory? into}) async {
     final asset = r.asset;
     if (asset == null) throw UpdateException('This release has no installer attached.');
     // Fail closed: never run an installer whose checksum cannot be checked.
@@ -236,7 +249,16 @@ class UpdateService extends ChangeNotifier {
       final res = await _http.send(http.Request('GET', asset.url));
       if (res.statusCode != 200) throw UpdateException('Download failed (${res.statusCode}).');
       final total = res.contentLength ?? 0;
-      final dir = await Directory.systemTemp.createTemp('cybervulcan-update-');
+      final Directory dir;
+      if (into != null) {
+        dir = into;
+        await dir.create(recursive: true);
+        await for (final old in dir.list()) {
+          await old.delete(recursive: true); // never leave an older APK lying around
+        }
+      } else {
+        dir = await Directory.systemTemp.createTemp('cybervulcan-update-');
+      }
       final safeName = asset.name.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
       final file = File('${dir.path}${Platform.pathSeparator}$safeName');
       final sink = file.openWrite();
@@ -255,7 +277,7 @@ class UpdateService extends ChangeNotifier {
       await sink.close();
       hasher.close();
       if (hashOut.value.toString() != want) {
-        await dir.delete(recursive: true);
+        await file.delete();
         throw UpdateException('Downloaded installer failed its checksum check - not installing.');
       }
       return file;
