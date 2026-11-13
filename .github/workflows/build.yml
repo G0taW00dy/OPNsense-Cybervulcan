@@ -47,13 +47,11 @@ jobs:
         with:
           go-version: '1.24'
           cache-dependency-path: native/cvwg/go.sum
-      - name: Resolve modules (TEMP until go.sum is committed)
+      - name: Verify modules (go.sum is committed; checked against sum.golang.org)
         run: |
-          go mod tidy
-          mkdir -p out && cp go.mod go.sum out/
-          echo "----- go.sum -----"; cat go.sum; echo "----- end -----"
-      - name: Verify modules
-        run: go mod verify
+          go mod download
+          go mod verify
+          go mod tidy -diff
       - name: Go tests (end-to-end WireGuard tunnel between two user-space peers)
         run: go vet ./... && go test -count=1 ./...
       - name: Android (arm64-v8a, armeabi-v7a, x86_64)
