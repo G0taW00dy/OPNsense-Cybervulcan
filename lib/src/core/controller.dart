@@ -4,6 +4,8 @@ import 'package:flutter/foundation.dart';
 
 import '../api/models.dart';
 import '../api/opnsense_client.dart';
+import '../net/router_link.dart';
+import '../net/tunnel.dart';
 import 'bypass.dart';
 import 'client_factory.dart';
 import 'config.dart';
@@ -11,6 +13,7 @@ import 'events.dart';
 import 'house_state.dart';
 import 'pc_mode.dart';
 import 'storage.dart';
+import 'wg_keys.dart' as wg;
 
 /// Central app state: polls the router, enforces bypass expiry, exposes
 /// actions, and emits [AlertEvent]s for the notification layer.
@@ -20,7 +23,9 @@ class CybervulcanController extends ChangeNotifier {
     required this.secrets,
     required this.supportsPcMode,
     DateTime Function()? clock,
-  }) : clock = clock ?? DateTime.now;
+    RouterLink? link,
+  })  : clock = clock ?? DateTime.now,
+        link = link ?? RouterLink(tunnel: NativeTunnel.load());
 
   final PrefsStore prefs;
   final SecretStore secrets;
@@ -29,8 +34,15 @@ class CybervulcanController extends ChangeNotifier {
   final bool supportsPcMode;
   final DateTime Function() clock;
 
+  /// Direct vs. remote (in-app WireGuard) connection to the router.
+  final RouterLink link;
+
   AppConfig config = const AppConfig();
   ApiCredentials? _creds;
+  WireGuardSecrets _wg = const WireGuardSecrets();
+
+  /// False while the Android app is in the background: no remote tunnel then.
+  bool _foreground = true;
   OpnsenseClient? _client;
   HouseSnapshot snapshot = HouseSnapshot.unconfigured(DateTime.now());
   String? lastActionError;
@@ -53,9 +65,29 @@ class CybervulcanController extends ChangeNotifier {
   bool get isConfigured => _client != null;
   bool get hasCredentials => _creds?.isComplete ?? false;
 
+  /// This device's WireGuard public key (to give to the router admin), or
+  /// null before one was generated.
+  String? get wireGuardPublicKey => _wgPublic;
+  String? _wgPublic;
+
+  Future<void> _loadWireGuard() async {
+    _wg = await secrets.readWireGuard();
+    final k = _wg.privateKey;
+    _wgPublic = k != null && wg.isWireGuardKey(k) ? wg.wireGuardPublicKey(k) : null;
+  }
+
+  bool get hasPresharedKey => (_wg.presharedKey ?? '').isNotEmpty;
+
+  /// Reasons remote access can't be used yet (empty = ready).
+  List<String> get remoteAccessIssues => [
+        if (!link.tunnel.isAvailable) link.tunnel.unavailableReason ?? 'Remote access is not available.',
+        ...remoteAccessProblems(config, _wg),
+      ];
+
   Future<void> init() async {
     config = prefs.loadConfig();
     _creds = await secrets.read();
+    await _loadWireGuard();
     _rebuildClient();
     await refresh();
     _schedule();
@@ -63,7 +95,7 @@ class CybervulcanController extends ChangeNotifier {
 
   void _rebuildClient() {
     final old = _client;
-    _client = buildRouterClient(config, _creds);
+    _client = buildRouterClient(config, _creds, route: link.routeFor);
     // Let an in-flight poll finish on the old client before closing it.
     unawaited((_inflight ?? Future<void>.value()).whenComplete(() => old?.close()));
     _cachedArmed = null;
@@ -120,6 +152,25 @@ class CybervulcanController extends ChangeNotifier {
     final client = _client;
     if (client == null) return HouseSnapshot.unconfigured(now);
 
+    // Reach the router directly, or through the in-app tunnel when away.
+    // This is a TLS handshake only: if the certificate is wrong nothing -
+    // in particular not the API key - is sent.
+    final ls = await link.check(
+        _foreground ? config : config.copyWith(remoteEnabled: false), _wg);
+    if (!ls.connected) {
+      return HouseSnapshot(
+        fetchedAt: now,
+        error: OpnsenseException(
+          ls.state == LinkState.wrongCertificate
+              ? ApiErrorKind.untrustedCertificate
+              : ApiErrorKind.network,
+          ls.describe(config),
+        ),
+        link: ls,
+        bypassActive: snapshot.bypassActive,
+      );
+    }
+
     // Gateway status is read first but a failure must NOT skip the bypass
     // expiry enforcement below (otherwise a missing "System: Gateways"
     // privilege, a 404 after an upgrade or a dpinger hiccup would keep the
@@ -135,6 +186,7 @@ class CybervulcanController extends ChangeNotifier {
     // Bypass + expiry enforcement.
     bool? bypassActive;
     DateTime? bypassExpiry;
+    var noRouterDeadline = false;
     final bm = _bypass()!;
     // Skip only when the router itself is unreachable/untrusted/rejecting us.
     final routerDown = gwError != null &&
@@ -152,6 +204,7 @@ class CybervulcanController extends ChangeNotifier {
         }
         bypassActive = state.active;
         bypassExpiry = state.expiresAt;
+        noRouterDeadline = bypassLacksRouterDeadline(state);
         _remindIfNoLimit(state.active, state.expiresAt, now);
       } on OpnsenseException catch (e) {
         // Surface every failure: if the bypass table cannot be read, expiry
@@ -166,6 +219,8 @@ class CybervulcanController extends ChangeNotifier {
         error: gwError,
         bypassActive: bypassActive ?? snapshot.bypassActive,
         bypassExpiresAt: bypassExpiry,
+        link: ls,
+        bypassNoRouterDeadline: noRouterDeadline,
       );
     }
 
@@ -198,6 +253,8 @@ class CybervulcanController extends ChangeNotifier {
       pcClear: pcClear,
       killSwitchArmed: _cachedArmed,
       killSwitchDetail: _cachedArmedDetail,
+      link: ls,
+      bypassNoRouterDeadline: noRouterDeadline,
     );
   }
 
@@ -294,6 +351,14 @@ class CybervulcanController extends ChangeNotifier {
 
   Future<void> toggleBypass() => setBypass(!(snapshot.bypassActive ?? false));
 
+  /// Stores the running bypass's deadline on the router, so the router-side
+  /// timer can end it even when no app is running.
+  Future<void> addRouterDeadline() {
+    final bm = _bypass();
+    return _action((c) => bm!.addRouterDeadline(),
+        done: 'Deadline stored on the router - it can now end the bypass by itself');
+  }
+
   Future<void> setPcClear(bool clear) async {
     if (!supportsPcMode) return;
     final ip = snapshot.pcIp ?? await detectPcIp(config);
@@ -324,8 +389,42 @@ class CybervulcanController extends ChangeNotifier {
       _creds = credentials;
     }
     _rebuildClient();
+    await link.close();
     if (pollChanged) _schedule();
     await _refreshAfterChange();
+  }
+
+  /// Makes a new WireGuard keypair for this device. The private key goes
+  /// to secure storage only; returns the public key for the router admin.
+  Future<String> generateWireGuardKey() async {
+    final priv = wg.generateWireGuardPrivateKey();
+    await secrets.writeWireGuardPrivateKey(priv);
+    await _loadWireGuard();
+    await link.close();
+    notifyListeners();
+    return _wgPublic!;
+  }
+
+  /// Stores keys from an imported wg-quick file (secure storage only).
+  Future<void> storeWireGuardSecrets({String? privateKey, String? presharedKey, bool setPsk = false}) async {
+    if (privateKey != null && wg.isWireGuardKey(privateKey)) {
+      await secrets.writeWireGuardPrivateKey(privateKey);
+    }
+    if (setPsk) await secrets.writeWireGuardPresharedKey(presharedKey);
+    await _loadWireGuard();
+    await link.close();
+    notifyListeners();
+  }
+
+  /// Called by the platform layer: no remote tunnel while in the background.
+  void setForeground(bool foreground) {
+    if (_foreground == foreground) return;
+    _foreground = foreground;
+    if (!foreground) {
+      unawaited(link.close());
+    } else {
+      unawaited(refresh());
+    }
   }
 
   Future<void> forgetCredentials() async {
@@ -340,6 +439,7 @@ class CybervulcanController extends ChangeNotifier {
     _disposed = true;
     _timer?.cancel();
     _client?.close();
+    unawaited(link.close());
     unawaited(_events.close());
     super.dispose();
   }

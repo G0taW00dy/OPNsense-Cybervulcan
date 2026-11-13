@@ -14,6 +14,8 @@ import 'src/platform/tray.dart';
 import 'src/ui/app.dart';
 import 'src/ui/bypass_dialog.dart';
 
+AppLifecycleListener? appLifecycle;
+
 Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
   final startMinimized = args.contains('--minimized');
@@ -67,6 +69,11 @@ Future<void> main(List<String> args) async {
     updates.quitApp = tray.quit;
   }
   if (Platform.isAndroid) {
+    // No remote-access tunnel while the app is in the background.
+    appLifecycle = AppLifecycleListener(
+      onStateChange: (st) => controller.setForeground(
+          st == AppLifecycleState.resumed || st == AppLifecycleState.inactive),
+    );
     controller.addListener(() => unawaited(pushWidgetState(controller.snapshot, controller.config)));
     // Defer until the first frame so the navigator exists for the dialog.
     WidgetsBinding.instance.addPostFrameCallback((_) {

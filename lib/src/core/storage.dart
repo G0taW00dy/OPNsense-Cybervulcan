@@ -37,6 +37,42 @@ class SecretStore {
     await _s.delete(key: _kKey);
     await _s.delete(key: _kSecret);
   }
+
+  // ---- WireGuard (remote access). Never shown, exported or logged.
+  static const _kWgPrivate = 'wg_private_key';
+  static const _kWgPsk = 'wg_preshared_key';
+
+  Future<WireGuardSecrets> readWireGuard() async => WireGuardSecrets(
+        privateKey: await _s.read(key: _kWgPrivate),
+        presharedKey: await _s.read(key: _kWgPsk),
+      );
+
+  Future<void> writeWireGuardPrivateKey(String key) => _s.write(key: _kWgPrivate, value: key.trim());
+
+  /// Empty or null removes the pre-shared key.
+  Future<void> writeWireGuardPresharedKey(String? key) async {
+    final k = key?.trim() ?? '';
+    if (k.isEmpty) {
+      await _s.delete(key: _kWgPsk);
+    } else {
+      await _s.write(key: _kWgPsk, value: k);
+    }
+  }
+
+  Future<void> clearWireGuard() async {
+    await _s.delete(key: _kWgPrivate);
+    await _s.delete(key: _kWgPsk);
+  }
+}
+
+/// This app's WireGuard secrets (from secure storage).
+class WireGuardSecrets {
+  const WireGuardSecrets({this.privateKey, this.presharedKey});
+
+  final String? privateKey;
+  final String? presharedKey;
+
+  bool get hasPrivateKey => privateKey != null && privateKey!.isNotEmpty;
 }
 
 class PrefsStore implements KeyValueStore {
@@ -59,7 +95,14 @@ class PrefsStore implements KeyValueStore {
   @override
   Future<void> remove(String key) => _p.remove(key);
 
+  // Kept as "v1" so settings from 1.0.x load (and migrate) unchanged.
   static const _configKey = 'app_config_v1';
+
+  static const trayHintKey = 'tray_hint_shown';
+
+  bool flag(String key) => _p.getString(key) == '1';
+
+  Future<void> setFlag(String key) => _p.setString(key, '1');
 
   AppConfig loadConfig() => AppConfig.decode(_p.getString(_configKey));
 

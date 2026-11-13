@@ -1,13 +1,15 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../core/bypass.dart';
 import '../core/controller.dart';
 import '../core/house_state.dart';
+import '../core/storage.dart';
+import '../ui/app.dart';
 import '../ui/format.dart';
 
 String trayIconAsset(Health h) {
@@ -129,6 +131,36 @@ class TrayController with TrayListener, WindowListener {
   @override
   void onWindowClose() {
     if (_quitting) return;
-    unawaited(windowManager.hide());
+    unawaited(_hideToTray());
+  }
+
+  /// Closing the window keeps Cybervulcan running in the tray. The first
+  /// time, say so - otherwise it looks as if the app quit.
+  Future<void> _hideToTray() async {
+    final prefs = controller.prefs;
+    final ctx = navigatorKey.currentContext;
+    if (!prefs.flag(PrefsStore.trayHintKey) && ctx != null && ctx.mounted) {
+      final quitNow = await showDialog<bool>(
+        context: ctx,
+        builder: (d) => AlertDialog(
+          icon: const Icon(Icons.info_outline),
+          title: const Text('Cybervulcan keeps running'),
+          content: const Text('Closing the window hides Cybervulcan in the tray (next to the clock, '
+              'maybe under the ^ arrow). It keeps watching the router and shows alerts.\n\n'
+              'Click the tray icon to open it again. To exit completely, right-click the tray icon '
+              'and choose Quit.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(d, true), child: const Text('Quit instead')),
+            FilledButton(onPressed: () => Navigator.pop(d, false), child: const Text('OK, hide to tray')),
+          ],
+        ),
+      );
+      await prefs.setFlag(PrefsStore.trayHintKey);
+      if (quitNow == true) {
+        await quit();
+        return;
+      }
+    }
+    await windowManager.hide();
   }
 }
