@@ -51,6 +51,7 @@ jobs:
         run: |
           go mod tidy
           mkdir -p out && cp go.mod go.sum out/
+          echo "----- go.sum -----"; cat go.sum; echo "----- end -----"
       - name: Verify modules
         run: go mod verify
       - name: Go tests (end-to-end WireGuard tunnel between two user-space peers)
