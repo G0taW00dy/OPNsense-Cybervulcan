@@ -99,7 +99,21 @@ BypassState readBypassState(List<String> entries, AppConfig cfg, {String? localE
   return BypassState(active: active, expiresAt: active ? expiry : null, markers: markers);
 }
 
-enum EnforceAction { none, expiredTurnedOff, adoptedWithNewDeadline, clearedStaleLocal }
+enum EnforceAction {
+  none,
+  expiredTurnedOff,
+  adoptedWithNewDeadline,
+  clearedStaleLocal,
+
+  /// The deadline was known locally but missing on the router: marker re-added.
+  restoredRouterDeadline,
+}
+
+/// True when a bypass is on but the router holds no deadline for it, so the
+/// router-side timer can't end it (only a running app can). "No time limit"
+/// bypasses are meant to stay on, so they don't count.
+bool bypassLacksRouterDeadline(BypassState s) =>
+    s.active && s.markers.isEmpty && !isNoLimitExpiry(s.expiresAt);
 
 /// Whole-house VPN bypass: on = add the VPN network to BYPASS_ALL,
 /// off = flush it. Expiry is enforced on every poll and at app start.
@@ -207,6 +221,30 @@ class BypassManager {
       final after = await turnOff();
       return (EnforceAction.expiredTurnedOff, after);
     }
+    if (config.useExpiryMarker && state.markers.isEmpty) {
+      // Known here but not on the router (e.g. turned on while the setting
+      // was off): put it back so the router can end the bypass by itself.
+      final marker = encodeExpiryMarker(expiry);
+      await client.aliasAdd(config.bypassAlias, marker);
+      return (
+        EnforceAction.restoredRouterDeadline,
+        BypassState(active: true, expiresAt: expiry, markers: [marker]),
+      );
+    }
     return (EnforceAction.none, state);
+  }
+
+  /// Adds the deadline marker for a running bypass (explicit user action,
+  /// works even when "Store bypass deadline on the router" is off).
+  Future<BypassState> addRouterDeadline() async {
+    final state = await read();
+    if (!state.active) return state;
+    final expiry = state.expiresAt ??
+        clock().toUtc().add(isNoLimitDuration(config.bypassDuration)
+            ? const Duration(hours: 2)
+            : config.bypassDuration);
+    await store.setString(localExpiryKey, expiry.toIso8601String());
+    await client.aliasAdd(config.bypassAlias, encodeExpiryMarker(expiry));
+    return read();
   }
 }

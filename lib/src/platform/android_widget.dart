@@ -66,8 +66,8 @@ Future<void> widgetBackgroundCallback(Uri? uri) async {
     if (uri?.toString() == bypassOffUri && state.active) {
       state = await bm.turnOff();
       if (cfg.notifyOnBypass) {
-        await notifier.show(const AlertEvent(AlertKind.bypassEnded, 'VPN bypass ended',
-            'The VPN network is back on Proton.'));
+        await notifier.show(AlertEvent(AlertKind.bypassEnded, 'VPN bypass ended',
+            'The VPN network is back on ${cfg.vpnName}.'));
       }
     } else {
       state = (await bm.enforce(state)).$2;

@@ -2,6 +2,7 @@ import '../api/opnsense_client.dart';
 import '../core/bypass.dart';
 import '../core/config.dart';
 import '../core/house_state.dart';
+import '../net/router_link.dart';
 
 String formatDuration(Duration d) {
   if (d.isNegative) d = Duration.zero;
@@ -33,9 +34,12 @@ String errorHint(OpnsenseException e) => switch (e.kind) {
       ApiErrorKind.unauthorized => 'API key/secret rejected - check Settings.',
       ApiErrorKind.forbidden => 'The API user is missing a privilege (${e.endpoint}).',
       ApiErrorKind.notFound => 'Endpoint not found - check the base URL / OPNsense version.',
-      ApiErrorKind.untrustedCertificate =>
-        'Router certificate not trusted - re-run "Trust certificate" in Settings.',
-      ApiErrorKind.network => 'Router unreachable: ${e.message}',
+      ApiErrorKind.untrustedCertificate => e.message.startsWith('Wrong certificate')
+          ? e.message
+          : 'Wrong certificate - not your router, or its certificate changed. '
+              'Check the certificate name (or pin) in Settings.',
+      ApiErrorKind.network =>
+        e.message.startsWith('Not home') ? e.message : 'Router unreachable: ${e.message}',
       ApiErrorKind.server => 'Router error: ${e.message}',
       ApiErrorKind.badResponse => e.message,
     };
@@ -43,6 +47,13 @@ String errorHint(OpnsenseException e) => switch (e.kind) {
 /// One-line summary used by the tray tooltip, widget and header.
 String headline(HouseSnapshot s, AppConfig cfg) {
   if (!s.configured) return 'Not set up';
+  final link = s.link;
+  if (link != null && link.state == LinkState.notHome) {
+    return link.remoteTried ? 'Not home - remote access failed' : 'Not home - router unreachable';
+  }
+  if (link != null && link.state == LinkState.wrongCertificate) {
+    return 'Wrong certificate - not your router? API key not sent';
+  }
   final err = s.error;
   if (err != null) return errorHint(err);
   if (s.bypassActive ?? false) {

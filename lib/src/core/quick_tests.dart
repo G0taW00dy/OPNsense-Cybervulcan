@@ -23,7 +23,7 @@ ExpectedPath expectedPathFor({
     if (bypassActive == null) return ExpectedPath.unknown;
     return ExpectedPath.vpn;
   }
-  if (net == 'CLEAR') return ExpectedPath.direct;
+  if (net != null && net == cfg.directNetworkName) return ExpectedPath.direct;
   return ExpectedPath.unknown;
 }
 
@@ -59,10 +59,10 @@ ExitCheckResult evaluateExit(ExitInfo info, ExpectedPath expected, AppConfig cfg
     case ExpectedPath.vpn:
       if (cc == home) {
         return ExitCheckResult(info, expected, Verdict.mismatch,
-            'Expected a Proton exit ($vpn) but traffic leaves from $home - possible leak.');
+            'Expected a ${cfg.vpnName} exit ($vpn) but traffic leaves from $home - possible leak.');
       }
       return ExitCheckResult(info, expected, cc == vpn ? Verdict.ok : Verdict.inconclusive,
-          cc == vpn ? 'Exit is in $vpn, consistent with Proton.' : 'Exit country $cc is neither $home nor $vpn.');
+          cc == vpn ? 'Exit is in $vpn, consistent with ${cfg.vpnName}.' : 'Exit country $cc is neither $home nor $vpn.');
     case ExpectedPath.direct:
       if (cc == home) {
         return ExitCheckResult(info, expected, Verdict.ok, 'Direct exit via your ISP ($home), as expected.');

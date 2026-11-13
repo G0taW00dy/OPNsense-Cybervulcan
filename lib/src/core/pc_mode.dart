@@ -12,7 +12,7 @@ String? choosePcIp(List<String> candidates, AppConfig cfg) {
     final net = networkNameFor(ip, cfg.networks);
     if (net == null) return 99;
     if (Ipv4Subnet.tryParse(cfg.bypassNetwork)?.contains(ip) ?? false) return 0;
-    if (net == 'CLEAR') return 1;
+    if (net == cfg.directNetworkName) return 1;
     return 2;
   }
 

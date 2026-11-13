@@ -35,11 +35,11 @@ Future<bool> confirmAndStartBypass(BuildContext context, CybervulcanController c
               Text(
                 'EVERY device on the VPN network (${c.config.bypassNetwork}) - phones, TVs, '
                 'laptops, everyone in the house - will go straight to the internet without '
-                'Proton until the bypass ends.',
+                '${c.config.vpnName} until the bypass ends.',
               ),
               const SizedBox(height: 8),
-              const Text('DNS is redirected to the router\'s Quad9 DNS-over-TLS resolver while '
-                  'bypass is on. The kill switch does not protect bypassed traffic.'),
+              const Text('DNS goes to the router\'s own resolver while bypass is on. '
+                  'The kill switch does not protect bypassed traffic.'),
               const SizedBox(height: 16),
               const Text('Turn the VPN back on:'),
               const SizedBox(height: 8),

@@ -1,5 +1,6 @@
 import '../api/models.dart';
 import '../api/opnsense_client.dart';
+import '../net/router_link.dart';
 
 /// Which Proton tunnel the house is currently leaving through.
 enum ProtonExit { main, backup, none, unknown }
@@ -48,6 +49,8 @@ class HouseSnapshot {
     this.killSwitchArmed,
     this.killSwitchDetail,
     this.busy = false,
+    this.link,
+    this.bypassNoRouterDeadline = false,
   });
 
   final DateTime fetchedAt;
@@ -70,6 +73,13 @@ class HouseSnapshot {
 
   /// A user-initiated change is in flight.
   final bool busy;
+
+  /// How the router was reached (direct / remote tunnel) or why not.
+  final LinkStatus? link;
+
+  /// Bypass is on but the router has no deadline marker for it, so the
+  /// router-side timer cannot end it by itself.
+  final bool bypassNoRouterDeadline;
 
   static HouseSnapshot unconfigured(DateTime now) =>
       HouseSnapshot(fetchedAt: now, configured: false);
@@ -132,6 +142,8 @@ class HouseSnapshot {
         killSwitchArmed: killSwitchArmed,
         killSwitchDetail: killSwitchDetail,
         busy: busy ?? this.busy,
+        link: link,
+        bypassNoRouterDeadline: bypassNoRouterDeadline,
       );
 }
 
