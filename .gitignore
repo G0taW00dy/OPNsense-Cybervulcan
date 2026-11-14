@@ -53,3 +53,10 @@ app.*.map.json
 key.properties
 .env
 /dist/
+
+# Cybervulcan: native remote-access library build outputs (CI builds them)
+/native/cvwg/out/
+/android/app/src/main/jniLibs/
+*.so
+cvwg.dll
+cvwg.h

@@ -1,9 +1,9 @@
 name: build
 
-# - Every push / PR to main: analyze + unit tests.
-# - Tag v* (e.g. v1.0.0) or manual dispatch: also build the Windows installer
-#   (.exe, Inno Setup) and the Android APK, upload them as artifacts, and on a
-#   tag publish a GitHub Release with both attached.
+# - Every push / PR to main: analyze + unit tests, Go tests of the native
+#   remote-access library, and build the Windows installer (.exe, Inno Setup)
+#   and the Android APK as workflow artifacts.
+# - Tag v* (e.g. v1.0.0): additionally publish a GitHub Release with both.
 
 on:
   push:
@@ -34,8 +34,60 @@ jobs:
       - run: flutter analyze --no-fatal-infos
       - run: flutter test
 
+  # Remote access: wireguard-go + gVisor netstack as a C shared library
+  # (libcvwg.so per Android ABI, cvwg.dll for Windows), loaded via dart:ffi.
+  native:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: native/cvwg
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache-dependency-path: native/cvwg/go.sum
+      - name: Verify modules (go.sum is committed; checked against sum.golang.org)
+        run: |
+          go mod download
+          go mod verify
+          go mod tidy -diff
+      - name: Go tests (end-to-end WireGuard tunnel between two user-space peers)
+        run: go vet ./... && go test -count=1 ./...
+      - name: Android (arm64-v8a, armeabi-v7a, x86_64)
+        shell: bash
+        run: |
+          NDK="${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}"
+          TC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          ls "$TC" | grep -E 'android[0-9]+-clang$' | head -3
+          pick() { for api in 21 22 23 24 26; do [ -x "$TC/$1$api-clang" ] && { echo "$TC/$1$api-clang"; return; }; done; exit 1; }
+          build() { # abi goarch triple [goarm]
+            mkdir -p "out/android/$1"
+            CGO_ENABLED=1 GOOS=android GOARCH=$2 GOARM=${4:-} CC="$(pick $3)" \
+              go build -trimpath -buildmode=c-shared \
+              -ldflags='-s -w -buildid= -extldflags=-Wl,-z,max-page-size=16384' \
+              -o "out/android/$1/libcvwg.so" .
+            rm -f "out/android/$1/libcvwg.h"
+          }
+          build arm64-v8a arm64 aarch64-linux-android
+          build armeabi-v7a arm armv7a-linux-androideabi 7
+          build x86_64 amd64 x86_64-linux-android
+          ls -la out/android/*
+      - name: Windows (x64 DLL, cross-compiled with MinGW)
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq gcc-mingw-w64-x86-64
+          mkdir -p out/windows
+          CGO_ENABLED=1 GOOS=windows GOARCH=amd64 CC=x86_64-w64-mingw32-gcc \
+            go build -trimpath -buildmode=c-shared -ldflags='-s -w -buildid=' -o out/windows/cvwg.dll .
+          rm -f out/windows/cvwg.h
+          ls -la out/windows
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cvwg-native
+          path: native/cvwg/out/
+          if-no-files-found: error
+
   version:
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     outputs:
       name: ${{ steps.v.outputs.name }}
@@ -56,7 +108,7 @@ jobs:
           echo "name=$name" >> "$GITHUB_OUTPUT"
 
   android:
-    needs: [test, version]
+    needs: [test, version, native]
     runs-on: ubuntu-latest
     env:
       # Only a flag at job level; the secrets themselves are scoped to the one
@@ -124,15 +176,25 @@ jobs:
       - name: Note debug signing
         if: env.HAS_KEYSTORE != 'true'
         run: echo "::notice::No ANDROID_KEYSTORE_BASE64 secret - APK is signed with the debug key."
+      - uses: actions/download-artifact@v4
+        with:
+          name: cvwg-native
+          path: native-out
+      - name: Add the remote-access library (jniLibs)
+        run: |
+          mkdir -p android/app/src/main/jniLibs
+          cp -r native-out/android/* android/app/src/main/jniLibs/
+          find android/app/src/main/jniLibs -type f
       - run: flutter pub get
       - run: >
           flutter build apk --release
           --build-name="$APP_VERSION"
           --dart-define=APP_VERSION="$APP_VERSION"
           --build-number=${{ github.run_number }}
-      - name: Rename APK
+      - name: Rename APK (and check the native library is inside)
         run: |
           mkdir -p dist
+          unzip -l build/app/outputs/flutter-apk/app-release.apk | grep libcvwg.so
           cp build/app/outputs/flutter-apk/app-release.apk "dist/Cybervulcan-$APP_VERSION.apk"
       - name: Remove signing material
         if: always()
@@ -144,7 +206,7 @@ jobs:
           if-no-files-found: error
 
   windows:
-    needs: [test, version]
+    needs: [test, version, native]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -160,10 +222,15 @@ jobs:
           --build-name=${{ needs.version.outputs.name }}
           --dart-define=APP_VERSION=${{ needs.version.outputs.name }}
           --build-number=${{ github.run_number }}
-      - name: Bundle the VC++ runtime next to the exe (app-local deployment)
+      - uses: actions/download-artifact@v4
+        with:
+          name: cvwg-native
+          path: native-out
+      - name: Bundle the VC++ runtime and the remote-access DLL next to the exe
         shell: pwsh
         run: |
           $dest = "build\windows\x64\runner\Release"
+          Copy-Item "native-out\windows\cvwg.dll" $dest -ErrorAction Stop
           foreach ($dll in 'msvcp140.dll','vcruntime140.dll','vcruntime140_1.dll') {
             Copy-Item "$env:WINDIR\System32\$dll" $dest -ErrorAction Stop
           }

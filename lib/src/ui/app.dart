@@ -5,6 +5,7 @@ import '../core/updater.dart';
 import 'devices_page.dart';
 import 'help_page.dart';
 import 'settings_page.dart';
+import 'setup_wizard.dart';
 import 'status_page.dart';
 import 'tests_page.dart';
 import 'theme.dart';
@@ -57,7 +58,7 @@ class _HomeShellState extends State<HomeShell> {
         if (!c.hasCredentials) {
           return Scaffold(
             appBar: AppBar(title: const _Title()),
-            body: SettingsPage(controller: c, firstRun: true),
+            body: SetupWizard(controller: c),
           );
         }
         final pages = [

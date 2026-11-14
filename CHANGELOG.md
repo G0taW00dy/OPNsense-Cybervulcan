@@ -1,5 +1,61 @@
 # Changelog
 
+## 1.1.0 (unreleased)
+
+### Added
+
+* **Remote access, app-only.** A built-in WireGuard client (wireguard-go on a
+  gVisor user-space network stack, `native/cvwg`, loaded through dart:ffi)
+  that only Cybervulcan uses. It does not take Android's VPN slot, so Proton
+  VPN can stay on. Each check tries the router directly (2 s) and only then
+  the tunnel; the tunnel stops back home, in the background (Android) and
+  after 3 minutes unused. A random per-tunnel access token protects the
+  local forwarder from other apps.
+* The app makes its own WireGuard key (private key in secure storage only,
+  never shown or exported) and shows the public key with Copy and QR.
+  Settings for endpoint (default `home.cybervulcan.com:51830`), router public
+  key, tunnel address, allowed IPs (default `10.10.10.254/32`), keepalive
+  (25 s) and an optional pre-shared key; import from a wg-quick `.conf`.
+* **Certificate name check ("Option A").** The app connects to the router
+  address (`10.10.10.254`) but checks the TLS certificate against a name
+  (default `router.cybervulcan.com`, e.g. a Let's Encrypt wildcard) with the
+  system CAs. The SHA-256 pin remains as an alternative for self-signed
+  certificates. A failed check stops before any HTTP request, so the API
+  key is never sent. Status shows Connected / Remote access / Not home /
+  Wrong certificate.
+* **First-run setup wizard** (both platforms): settings from the admin,
+  router address and certificate name, API key, connection test, optional
+  remote access.
+* **Settings export / import without secrets** (text, QR, file) so an admin
+  can hand a ready setup to another person.
+* New settings for everything that was specific to this house: VPN provider
+  name, label while bypassed, direct network name and the house networks.
+* `docs/ADMIN-SETUP.md` (per-user API keys with minimum privileges,
+  Let's Encrypt via DNS-01, road-warrior WireGuard on UDP 51830, dynamic DNS
+  with OPNsense's own os-ddclient, router timer; deSEC with per-record scoped
+  tokens as the worked example) and `docs/USER-SETUP.md`; in-app help
+  updated.
+
+### Changed
+
+* Warning when the router address is plain `http://`.
+* Warning when a whole-house bypass has no deadline on the router ("the
+  router can't end this bypass by itself") with an **Add deadline** button;
+  Settings warns when "Store bypass deadline on the router" is off; with it
+  on, a missing deadline marker is restored automatically.
+* Windows: the first time the window is closed, a one-time note explains that
+  Cybervulcan keeps running in the tray (with a "Quit instead" choice).
+* CI builds the Windows installer and the Android APK on every pull request,
+  plus the native library and its Go tests.
+
+### Upgrading from 1.0.x
+
+Existing settings keep working unchanged: a 1.0 `http://10.10.10.254` or
+pinned `https://` setup keeps checking the address (or pin) as before. A
+plain `http://` address shows a warning on the Status page with a **Switch to
+HTTPS** button (`https://<same IP>` + certificate name
+`router.cybervulcan.com`); or set it in Settings.
+
 ## 1.0.1 (2026-11-12)
 
 ### Fixed

@@ -76,13 +76,15 @@ class HelpPage extends StatelessWidget {
             number: 4,
             title: 'API user and key',
             items: [
-              'System > Access > Users: add a user just for the app (pcmode). No GUI login needed.',
+              'System > Access > Users: add one user per person/device (e.g. pcmode for the PC, kate '
+                  'for Kate\'s phone), so a lost phone\'s key can be revoked alone. No GUI login needed.',
               'Required privileges: "Diagnostics: PF Table IP addresses" (bypass + PC mode) and '
                   '"System: Gateways" (live status and failover).',
               'Recommended: "Diagnostics: Show States" (moves open connections on every switch).',
-              'Optional: "Services: Dnsmasq DNS/DHCP: Settings" (Devices page) and '
-                  '"Firewall: Rules [new]" (kill switch armed check). Without them those parts '
-                  'show "unknown"; nothing else breaks.',
+              'Optional: "Services: Dnsmasq DNS/DHCP: Settings" (Devices page).',
+              'Optional and admin-level: "Firewall: Rules [new]" (kill switch armed check). It also '
+                  'allows editing firewall rules, so only give it to your own key. Without it the kill '
+                  'switch shows "unknown"; nothing else breaks.',
               'Edit the user > API keys > "+". Your browser downloads apikey.txt with a key= and a '
                   'secret= line. Keep it private and delete it once the app is connected.',
             ],
@@ -91,9 +93,14 @@ class HelpPage extends StatelessWidget {
             number: 5,
             title: 'Connect the app',
             items: [
-              'Settings > Router base URL: https://<router address> (http:// only on a test VM).',
-              'Self-signed HTTPS certificate: press "Trust certificate..." and check the fingerprint '
-                  'against System > Trust > Certificates before accepting.',
+              'Router address: the router\'s IP, e.g. https://10.10.10.254 (http:// only on a test VM - '
+                  'the app warns about it).',
+              'Certificate name: the name on the router\'s certificate, e.g. router.cybervulcan.com '
+                  '(a Let\'s Encrypt certificate). The app connects to the IP but checks the certificate '
+                  'against this name. Wrong certificate = "not your router": the app stops before '
+                  'sending the API key.',
+              'Self-signed certificate instead: leave the name empty, press "Trust certificate..." and '
+                  'check the fingerprint against System > Trust > Certificates before accepting.',
               'Paste the API key and secret. They are stored in Windows Credential Manager / the '
                   'Android Keystore and only ever sent to the router.',
               'Set the gateway names, labels, alias names, VPN network and kill switch tag to match '
@@ -141,11 +148,45 @@ class HelpPage extends StatelessWidget {
           ),
           const _Section(
             number: 8,
+            title: 'Remote access (away from home)',
+            items: [
+              'The app has its own WireGuard tunnel that only it uses. It does not take Android\'s VPN '
+                  'slot, so Proton VPN can stay on. At home it is not used.',
+              'Settings > Remote access: "Generate key", then give the public key (Copy or QR) to the '
+                  'router admin. The private key never leaves the device.',
+              'The admin adds the key as a peer on the road-warrior WireGuard instance and tells you '
+                  'your tunnel address (e.g. 10.10.99.2/32) and the router\'s public key. Or they send '
+                  'a WireGuard .conf: use "Import a WireGuard .conf".',
+              'Endpoint: your home\'s public name (home.cybervulcan.com), port 51830 by default.',
+              'Each check: router directly first (2 s); if it does not answer, through the tunnel. '
+                  'The tunnel stops when you are home again, when the app goes to the background '
+                  '(Android) or after 3 minutes unused.',
+            ],
+          ),
+          const _Section(
+            number: 9,
+            title: 'Setting up another person',
+            items: [
+              'Admin: make them their own API user and key (no "Firewall: Rules [new]"), then '
+                  'Settings > Share settings > Export: copy, QR or file. It contains no secrets.',
+              'They install the app, choose "Load settings from admin" in the first-run setup, enter '
+                  'their own API key and secret, and (for remote access) generate their own WireGuard '
+                  'key and send you the public key.',
+              'Full admin steps: docs/ADMIN-SETUP.md on GitHub.',
+            ],
+          ),
+          const _Section(
+            number: 10,
             title: 'Troubleshooting',
             items: [
               '"API key/secret rejected": re-enter the key and secret, or make a new key.',
               '"Missing a privilege": add the privilege named in the message to the API user.',
-              '"Certificate not trusted": the router certificate changed; trust it again.',
+              '"Wrong certificate": something answered at the router address but its certificate is '
+                  'not valid for the certificate name (or not the pinned one). At home: check the name '
+                  'in Settings and the router\'s GUI certificate. Elsewhere: another network uses the '
+                  'same address - remote access handles that.',
+              '"Not home": the router did not answer directly and remote access is off or failed. '
+                  'Check the endpoint, port and keys, and that the admin added this device\'s key.',
               '"Gateways not found": the gateway names in Settings must match System > Gateways '
                   'exactly.',
               'Router unreachable: check the base URL and that this device can reach the router '

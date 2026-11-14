@@ -125,8 +125,8 @@ class _TestsPageState extends State<TestsPage> {
                 SelectableText('${_dns!.resolverIp}${_dns!.geo != null ? '\n${_dns!.geo}' : ''}'),
                 const SizedBox(height: 8),
                 Text(
-                  'On the VPN this should be a Proton/${cfg.vpnCountryCode} resolver; during bypass, '
-                  'Quad9 (via the router\'s DNS-over-TLS). An ISP resolver in ${cfg.homeCountryCode} '
+                  'On the VPN this should be a ${cfg.vpnName}/${cfg.vpnCountryCode} resolver; during '
+                  'bypass, the router\'s own DNS forwarder (e.g. Quad9). An ISP resolver in ${cfg.homeCountryCode} '
                   'while on the VPN suggests a DNS leak.',
                   style: t.bodySmall,
                 ),
@@ -143,7 +143,7 @@ class _TestsPageState extends State<TestsPage> {
           '- Uses third-party services: api.ipify.org, ipwho.is (fallback ipapi.co) and '
           'edns.ip-api.com (plain HTTP).\n'
           '- The DNS test sees one resolver from one lookup; it is not a full multi-query leak test.\n'
-          '- Country matching is a heuristic: a Proton server in your home country would look "direct".\n'
+          '- Country matching is a heuristic: a ${cfg.vpnName} server in your home country would look "direct".\n'
           '- ${Platform.isAndroid ? 'On mobile data the phone is not on a house network, so results are inconclusive.' : 'Results reflect this PC only.'}',
           style: t.bodySmall,
         ),

@@ -1,19 +1,25 @@
 import 'package:http/io_client.dart';
 
 import '../api/opnsense_client.dart';
-import '../api/tls.dart';
+import '../net/router_link.dart';
 import 'config.dart';
 import 'storage.dart';
 
-/// Builds a router client honouring the pinned self-signed certificate.
+/// Builds a router client. Sockets go to the router address (or, when
+/// [route] says so, to the in-app WireGuard tunnel) and the certificate is
+/// checked against the configured certificate name or pin before any
+/// request - and so the API key - is sent.
+///
 /// Returns null when the configuration or credentials are incomplete.
-OpnsenseClient? buildRouterClient(AppConfig cfg, ApiCredentials? creds) {
-  final base = cfg.baseUri;
-  if (base == null || creds == null || !creds.isComplete) return null;
+OpnsenseClient? buildRouterClient(AppConfig cfg, ApiCredentials? creds,
+    {RouterRoute Function(RouterTarget target)? route}) {
+  final target = RouterTarget.fromConfig(cfg);
+  if (target == null || creds == null || !creds.isComplete) return null;
+  final pick = route ?? (RouterTarget t) => RouterRoute.direct(t.host, t.port);
   return OpnsenseClient(
-    baseUrl: base,
+    baseUrl: target.requestBase,
     apiKey: creds.key,
     apiSecret: creds.secret,
-    httpClient: IOClient(buildPinnedHttpClient(pinnedSha256: cfg.pinnedCertSha256)),
+    httpClient: IOClient(buildRouterHttpClient(target, () => pick(target))),
   );
 }

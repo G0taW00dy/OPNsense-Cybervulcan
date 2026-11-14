@@ -7,6 +7,7 @@ import '../core/bypass.dart';
 import '../core/controller.dart';
 import '../core/house_state.dart';
 import '../core/updater.dart';
+import '../net/router_link.dart';
 import 'bypass_dialog.dart';
 import 'format.dart';
 import 'theme.dart';
@@ -55,6 +56,43 @@ class _StatusPageState extends State<StatusPage> {
             children: [
               _HeaderCard(snapshot: s, controller: c),
               if (widget.updates != null) UpdateBanner(updates: widget.updates!),
+              if (c.config.isPlainHttp) ...[
+                const SizedBox(height: 12),
+                _Banner(
+                  text: 'The router address is plain http:// - the API key and everything else '
+                      'travel unencrypted and nothing proves this is your router. Once the router '
+                      'has its certificate, switch to https://${c.config.routerHost ?? ''} '
+                      '(certificate name ${c.config.switchedToHttps().certName}).',
+                  color: OpnColors.amber,
+                  icon: Icons.lock_open,
+                  action: TextButton(
+                    onPressed: s.busy ? null : () => c.saveSettings(c.config.switchedToHttps()),
+                    child: const Text('Switch to HTTPS'),
+                  ),
+                ),
+              ],
+              if (s.link != null && !s.link!.connected && s.link!.state != LinkState.notConfigured) ...[
+                const SizedBox(height: 12),
+                _Banner(
+                  text: s.link!.describe(c.config),
+                  color: s.link!.state == LinkState.wrongCertificate ? OpnColors.red : OpnColors.grey,
+                  icon: s.link!.state == LinkState.wrongCertificate ? Icons.gpp_bad : Icons.wifi_off,
+                ),
+              ],
+              if (s.reachable && (s.bypassActive ?? false) && s.bypassNoRouterDeadline) ...[
+                const SizedBox(height: 12),
+                _Banner(
+                  text: 'The router has no deadline for this bypass, so the router can\'t end it by '
+                      'itself - only a running Cybervulcan app can. Add the deadline so it ends on time '
+                      'even with every app closed.',
+                  color: OpnColors.amber,
+                  icon: Icons.timer_off_outlined,
+                  action: TextButton(
+                    onPressed: s.busy ? null : c.addRouterDeadline,
+                    child: const Text('Add deadline'),
+                  ),
+                ),
+              ],
               if (c.lastActionError != null) ...[
                 const SizedBox(height: 12),
                 _Banner(text: c.lastActionError!, color: OpnColors.red, icon: Icons.error_outline),
@@ -124,6 +162,8 @@ class _HeaderCard extends StatelessWidget {
   /// Short uppercase status line above the big exit name.
   static String _label(HouseSnapshot s) {
     if (!s.configured) return 'Not set up';
+    if (s.link?.state == LinkState.notHome) return 'Not home';
+    if (s.link?.state == LinkState.wrongCertificate) return 'Wrong certificate';
     if (!s.reachable) return 'Router unreachable';
     if (s.bypassActive ?? false) return 'VPN bypass on';
     if (s.killSwitch.tripped) return 'Kill switch tripped';
@@ -139,8 +179,9 @@ class _HeaderCard extends StatelessWidget {
 
   /// The big line: where the house's traffic leaves right now.
   static String _exitName(HouseSnapshot s, CybervulcanController c) {
+    if (s.link?.state == LinkState.wrongCertificate) return 'Not your router?';
     if (!s.reachable) return 'No connection';
-    if (s.bypassActive ?? false) return 'Direct (NBN)';
+    if (s.bypassActive ?? false) return c.config.directLabel;
     return switch (s.exit) {
       ProtonExit.main => c.config.mainLabel,
       ProtonExit.backup => c.config.backupLabel,
@@ -201,6 +242,14 @@ class _HeaderCard extends StatelessWidget {
                 label: Text('Failover active'),
               ),
             ),
+          if (snapshot.reachable && (snapshot.link?.viaTunnel ?? false))
+            const Padding(
+              padding: EdgeInsets.only(top: 12),
+              child: Chip(
+                avatar: Icon(Icons.vpn_key, size: 18, color: OpnColors.glassCyan),
+                label: Text('Remote access (WireGuard)'),
+              ),
+            ),
         ],
       ),
     );
@@ -237,11 +286,12 @@ class _HeaderCard extends StatelessWidget {
 }
 
 class _Banner extends StatelessWidget {
-  const _Banner({required this.text, required this.color, required this.icon});
+  const _Banner({required this.text, required this.color, required this.icon, this.action});
 
   final String text;
   final Color color;
   final IconData icon;
+  final Widget? action;
 
   @override
   Widget build(BuildContext context) => Container(
@@ -255,6 +305,7 @@ class _Banner extends StatelessWidget {
           Icon(icon, color: color),
           const SizedBox(width: 10),
           Expanded(child: Text(text)),
+          if (action != null) ...[const SizedBox(width: 8), action!],
         ]),
       );
 }
@@ -378,7 +429,7 @@ class _BypassCard extends StatelessWidget {
               const Text('Everyone on the VPN network is going direct right now.'),
             ] else
               const Text('Off. Turning it on sends EVERY device on the VPN network straight to '
-                  'the internet (DNS via the router\'s Quad9 DoT) for a limited time.'),
+                  'the internet (DNS via the router\'s own resolver) for a limited time.'),
           ],
         ),
       ),
