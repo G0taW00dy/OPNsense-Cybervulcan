@@ -123,6 +123,35 @@ PersistentKeepalive = 25
       expect(again.toJson()['configVersion'], currentConfigVersion);
     });
 
+    test('"Switch to HTTPS" moves a 1.0.1 http setup to https + certificate name', () {
+      final c = AppConfig.decode(jsonEncode({
+        'baseUrl': 'http://10.10.10.254',
+        'bypassAlias': 'BYPASS_ALL',
+        'useExpiryMarker': true,
+      }));
+      expect(c.certName, '');
+      final m = c.switchedToHttps();
+      expect(m.baseUrl, 'https://10.10.10.254');
+      expect(m.isPlainHttp, isFalse);
+      expect(m.routerPort, 443);
+      expect(m.certName, 'router.cybervulcan.com');
+      expect(m.tlsName, 'router.cybervulcan.com');
+      expect(m.bypassAlias, 'BYPASS_ALL');
+      expect(m.useExpiryMarker, isTrue);
+      // An http port (e.g. 8080) is not carried over to https.
+      expect(const AppConfig(baseUrl: 'http://10.10.10.254:8080').switchedToHttps().baseUrl,
+          'https://10.10.10.254');
+      // A configured name is kept; https setups are left alone.
+      expect(const AppConfig(baseUrl: 'http://10.0.0.1', certName: 'gw.example.net')
+          .switchedToHttps().certName, 'gw.example.net');
+      const https = AppConfig(baseUrl: 'https://10.10.10.254', certName: '');
+      expect(identical(https.switchedToHttps(), https), isTrue);
+    });
+
+    test('no router public key is built in', () {
+      expect(const AppConfig().wgServerPublicKey, isNull);
+    });
+
     test('pinned https from 1.0.1 keeps checking against the address + pin', () {
       final c = AppConfig.decode(jsonEncode({'baseUrl': 'https://10.10.10.254', 'pinnedCertSha256': 'AB:CD'}));
       expect(c.certName, '');

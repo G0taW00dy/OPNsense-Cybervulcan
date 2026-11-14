@@ -11,7 +11,7 @@ Contents
 1. [API user per person (minimum privileges)](#1-api-user-per-person)
 2. [HTTPS certificate (Let's Encrypt) and the certificate name](#2-https-certificate-lets-encrypt)
 3. [Road-warrior WireGuard for remote access](#3-road-warrior-wireguard-remote-access)
-4. [Dynamic DNS for the home address (GoDaddy)](#4-dynamic-dns-godaddy)
+4. [Dynamic DNS for the home address (os-ddclient)](#4-dynamic-dns-os-ddclient)
 5. [Router-side bypass timer](#5-router-side-bypass-timer)
 6. [Aliases, rules and kill switch (once)](#6-aliases-rules-and-kill-switch)
 7. [Hand the settings to a new user](#7-hand-the-settings-to-a-new-user)
@@ -78,8 +78,18 @@ a public CA; Let's Encrypt via DNS-01 works without opening any port.
 2. **Services > ACME Client > Settings**: enable.
 3. **Accounts**: add a Let's Encrypt (production) account with your e-mail.
 4. **Challenge Types**: add a **DNS-01** challenge with your DNS provider's
-   API (for GoDaddy: DNS Service "GoDaddy", API key + secret). DNS-01 never
-   needs the GUI to be reachable from the internet.
+   API. DNS-01 never needs the GUI to be reachable from the internet. Any
+   provider that acme.sh supports works; the example here is
+   [deSEC](https://desec.io) (free, has a proper API and per-record tokens):
+   * deSEC web UI > **Token management > +**: a new token just for
+     certificates. Under the token's **policies** (RRset policies) add a
+     default policy with no write permission, then one policy that allows
+     writing only type `TXT`, subname `_acme-challenge` (and
+     `_acme-challenge.router` if you issue `router.cybervulcan.com` instead
+     of the wildcard), domain `cybervulcan.com`. The token can then create
+     the validation records and nothing else - it cannot change your MX,
+     SPF/DKIM/DMARC or the `home` address record.
+   * OPNsense: DNS Service **deSEC.io (dns_desec)**, paste the token.
 5. **Certificates > +**: Common name `*.cybervulcan.com` (or just
    `router.cybervulcan.com`), alt names as needed, account + challenge from
    above, auto-renew on. Issue it.
@@ -101,6 +111,11 @@ only for self-signed certificates.
 Existing v1.0 users on `http://10.10.10.254` keep working (with a warning)
 until you switch them to `https://` with the certificate name.
 
+Upgrading users from v1.0.x: their app shows "The router address is plain
+http://" with a **Switch to HTTPS** button. It changes the address to
+`https://<same IP>` and sets the certificate name to `router.cybervulcan.com`
+(when none is set). Nothing else in their settings changes.
+
 ## 3. Road-warrior WireGuard (remote access)
 
 Remote access lets the app reach the router API from anywhere. The app runs
@@ -108,7 +123,8 @@ its own WireGuard client **inside the app** (user space): it does not use
 Android's VPN slot, so the Proton VPN app can stay on, and nothing else on
 the device goes through it.
 
-Values for this house:
+Values used in this guide (change them to suit; the app's defaults are the
+endpoint, port, allowed IPs and keepalive below):
 
 | | |
 |---|---|
@@ -116,8 +132,10 @@ Values for this house:
 | Listen port | **UDP 51830** (51820/51821 are the Proton client tunnels) |
 | Tunnel network | `10.10.99.0/24`, router = `10.10.99.1/24` |
 | App peers | `10.10.99.x/32`, one per device |
-| Router public key (this house) | `rspBoRaiXUvobDZA8aQ6EmnafqEBJ9WHETHpZMa3iSk=` |
-| Endpoint name | `home.cybervulcan.com` (see step 4) |
+| Router address reached through the tunnel | `10.10.10.254` TCP 443 only (app setting "Allowed IPs" = `10.10.10.254/32`) |
+| Keepalive | 25 s |
+| Router public key | yours - generated in the next step. Example of the format: `rspBoRaiXUvobDZA8aQ6EmnafqEBJ9WHETHpZMa3iSk=` (it is not secret, but it is different on every router; the app has no default for it) |
+| Endpoint name | `home.cybervulcan.com`, port `51830` (see step 4) |
 
 ### Instance (once)
 
@@ -135,10 +153,14 @@ enable it, no IP configuration (WireGuard sets it).
   Firewall", port `51830`. Nothing else is opened.
 * **Firewall > Rules > RW** (the new interface), in this order:
   1. pass TCP from `RW net` to `10.10.10.254` port `443` - the router API/GUI.
-  2. optional: pass TCP/UDP from `RW net` to `10.10.99.1` port `53` (router
-     DNS; the app does not need it, other WireGuard clients might).
+  2. pass TCP/UDP from `RW net` to `10.10.99.1` port `53` - router DNS (the
+     app itself does not use it; it keeps other WireGuard clients on the same
+     instance working and costs nothing).
   3. nothing else (the default deny blocks the rest). In particular no
-     access to the house networks and no internet through the tunnel.
+     access to the house networks, no other router ports and no internet
+     through the tunnel.
+* 51820 and 51821 belong to the Proton client tunnels (outbound); do not
+  reuse them for the road-warrior instance.
 
 ### Per user / device
 
@@ -164,50 +186,38 @@ The app only uses the tunnel when the router does not answer directly within
 3 minutes unused. If home is behind CGNAT (no public IPv4 on WAN), inbound
 WireGuard cannot work; see the CGNAT notes in the project docs.
 
-## 4. Dynamic DNS (GoDaddy)
+## 4. Dynamic DNS (os-ddclient)
 
-`home.cybervulcan.com` must point at the house's current WAN address.
-OPNsense's `os-ddclient` has no GoDaddy service, so this repo ships a small
-updater: `router/install-ddns.sh`.
+`home.cybervulcan.com` (the WireGuard endpoint) must point at the house's
+current WAN address. OPNsense's own **os-ddclient** plugin does this; no
+extra scripts. Any provider os-ddclient supports works; the example is
+deSEC, with a token that may change **only that one name**.
 
-What it does: every 5 minutes it works out the WAN IPv4 (from the WAN
-interface; if that is a private/CGNAT address, from `api.ipify.org`) and
-optionally the WAN IPv6, reads the current GoDaddy `A`/`AAAA` record of that
-**one name** (`GET /v1/domains/cybervulcan.com/records/A/home`) and only when
-it differs replaces it (`PUT` of that same type + name). **It never touches
-any other record** - the Proton Mail MX, SPF, DKIM and DMARC records of
-`cybervulcan.com` are left exactly as they are. Everything is logged with
-tag `cybervulcan-ddns`.
+1. deSEC web UI: create the record once (**Domains > cybervulcan.com > +**:
+   subname `home`, type `A`, any address; add `AAAA` too if the WAN has
+   public IPv6).
+2. **Token management > +**: a new token just for DDNS. Policies: a default
+   policy with no write permission, then policies that allow writing
+   subname `home`, type `A` and subname `home`, type `AAAA`, domain
+   `cybervulcan.com`. Nothing else - this token cannot touch MX, SPF/DKIM/
+   DMARC, `_acme-challenge` or any other record. (Use a separate token from
+   the certificate one in step 2.)
+3. OPNsense: **System > Firmware > Plugins**: install `os-ddclient`.
+4. **Services > Dynamic DNS > Settings**: enable. **Accounts > +**:
+   * Service: **desec-v4** (and a second account with **desec-v6** for
+     IPv6, if you publish `AAAA`).
+   * Username: the hostname, `home.cybervulcan.com`.
+   * Password: the DDNS token from step 2.
+   * Hostname(s): `home.cybervulcan.com`.
+   * Check ip method: **Interface** with interface **WAN** (the router's own
+     traffic may leave through a VPN gateway, so a web check-IP service
+     could report the Proton address).
+   * Save, Apply.
+5. Check: **Services > Dynamic DNS > Log File**, and from outside:
+   `nslookup home.cybervulcan.com` shows the WAN address.
 
-1. GoDaddy: create a **production** API key at
-   https://developer.godaddy.com/keys. (GoDaddy limits API access for small
-   accounts; if every update fails with HTTP 403 "ACCESS_DENIED", the
-   account does not qualify and you need another DNS host, e.g. moving DNS
-   to Cloudflare, which os-ddclient supports.)
-2. Router shell (console option 8, or SSH) as root:
-   ```sh
-   fetch -qo /tmp/install-ddns.sh https://raw.githubusercontent.com/G0taW00dy/OPNsense-Cybervulcan/main/router/install-ddns.sh
-   sh /tmp/install-ddns.sh
-   ```
-   It asks for the key and secret (typing is not shown), the WAN interface
-   (default: the one with the default route) and whether to publish IPv6.
-   They are stored in `/usr/local/etc/cybervulcan-ddns.conf`, owned by root,
-   mode 0600; the updater refuses to run if that file is readable by anyone
-   else. The key is never put on a command line or in a log.
-   (Download first, then run: piping into `sh` would not let it ask.)
-3. Test: `configctl cybervulcan_ddns update home.cybervulcan.com`, then
-   `grep cybervulcan-ddns /var/log/system/latest.log`.
-4. **System > Settings > Cron > +**: Minutes `*/5`, the rest `*`, Command
-   **"Cybervulcan - update GoDaddy DNS"**, Parameters `home.cybervulcan.com`.
-   Save, Apply.
-
-Remove: `sh /tmp/install-ddns.sh uninstall` (also deletes the stored key),
-then delete the cron job. Re-run the installer after restoring a backup onto
-new hardware (the files are not part of the config backup).
-
-Note: the router's own traffic must leave via WAN (not a VPN gateway) for
-the check-IP fallback to see the house's address; with the interface address
-(the normal case) this does not matter.
+If home ever goes behind CGNAT again (WAN address in `100.64.0.0/10` or
+another private range), inbound WireGuard cannot work whatever DNS says.
 
 ## 5. Router-side bypass timer
 

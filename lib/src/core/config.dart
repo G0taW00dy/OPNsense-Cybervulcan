@@ -160,6 +160,20 @@ class AppConfig {
     return n.isNotEmpty ? n : baseUri?.host;
   }
 
+  /// The same settings with a plain `http://` router address moved to
+  /// `https://` on the same host (default port 443) and, when no certificate
+  /// name is set, the default one. Used to migrate v1.0.x `http://10.10.10.254`
+  /// setups once the router serves HTTPS. Returns `this` when the address is
+  /// not plain http.
+  AppConfig switchedToHttps() {
+    final u = baseUri;
+    if (u == null || u.scheme != 'http') return this;
+    return copyWith(
+      baseUrl: Uri(scheme: 'https', host: u.host).toString(),
+      certName: certName.trim().isEmpty ? defaultCertName : certName,
+    );
+  }
+
   List<String> get wgAllowedIpList => [
         for (final p in wgAllowedIps.split(RegExp(r'[,\s]+')))
           if (p.trim().isNotEmpty) p.trim(),

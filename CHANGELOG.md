@@ -31,11 +31,10 @@
 * New settings for everything that was specific to this house: VPN provider
   name, label while bypassed, direct network name and the house networks.
 * `docs/ADMIN-SETUP.md` (per-user API keys with minimum privileges,
-  Let's Encrypt, road-warrior WireGuard, DDNS, router timer) and
-  `docs/USER-SETUP.md`; in-app help updated.
-* `router/install-ddns.sh`: GoDaddy dynamic DNS updater for OPNsense (one
-  record only, changes only when the address changed, key in a root-only
-  file).
+  Let's Encrypt via DNS-01, road-warrior WireGuard on UDP 51830, dynamic DNS
+  with OPNsense's own os-ddclient, router timer; deSEC with per-record scoped
+  tokens as the worked example) and `docs/USER-SETUP.md`; in-app help
+  updated.
 
 ### Changed
 
@@ -52,8 +51,10 @@
 ### Upgrading from 1.0.x
 
 Existing settings keep working unchanged: a 1.0 `http://10.10.10.254` or
-pinned `https://` setup keeps checking the address (or pin) as before. Set
-the certificate name in Settings once the router has its certificate.
+pinned `https://` setup keeps checking the address (or pin) as before. A
+plain `http://` address shows a warning on the Status page with a **Switch to
+HTTPS** button (`https://<same IP>` + certificate name
+`router.cybervulcan.com`); or set it in Settings.
 
 ## 1.0.1 (2026-11-12)
 

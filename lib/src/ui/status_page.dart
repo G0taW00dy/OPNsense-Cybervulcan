@@ -58,12 +58,17 @@ class _StatusPageState extends State<StatusPage> {
               if (widget.updates != null) UpdateBanner(updates: widget.updates!),
               if (c.config.isPlainHttp) ...[
                 const SizedBox(height: 12),
-                const _Banner(
+                _Banner(
                   text: 'The router address is plain http:// - the API key and everything else '
-                      'travel unencrypted and nothing proves this is your router. Switch to '
-                      'https:// in Settings once the router has its certificate.',
+                      'travel unencrypted and nothing proves this is your router. Once the router '
+                      'has its certificate, switch to https://${c.config.routerHost ?? ''} '
+                      '(certificate name ${c.config.switchedToHttps().certName}).',
                   color: OpnColors.amber,
                   icon: Icons.lock_open,
+                  action: TextButton(
+                    onPressed: s.busy ? null : () => c.saveSettings(c.config.switchedToHttps()),
+                    child: const Text('Switch to HTTPS'),
+                  ),
                 ),
               ],
               if (s.link != null && !s.link!.connected && s.link!.state != LinkState.notConfigured) ...[
