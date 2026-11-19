@@ -270,6 +270,9 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           name: Cybervulcan ${{ needs.version.outputs.name }}
+          # "[prerelease]" in the tagged commit's message publishes a test
+          # build: the in-app updater ignores pre-releases until promoted.
+          prerelease: ${{ contains(github.event.head_commit.message, '[prerelease]') }}
           files: |
             dist/*.exe
             dist/*.apk
