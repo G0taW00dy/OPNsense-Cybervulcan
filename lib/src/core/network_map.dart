@@ -1,4 +1,4 @@
-/// IPv4 subnet helpers and the mapping of Alex's house networks.
+/// IPv4 subnet helpers and the house network layout (suggested default).
 library;
 
 int? ipv4ToInt(String ip) {

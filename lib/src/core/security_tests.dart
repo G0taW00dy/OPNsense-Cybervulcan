@@ -140,6 +140,19 @@ TestStatus classifyResolver({required String? countryCode, required String? org,
   }
 }
 
+/// The test id from bash.ws/id: a plain number, possibly wrapped in JSON or
+/// whitespace. Throws with what came back so the report says why.
+String bashWsId(int status, String body) {
+  if (status != 200) throw Exception('bash.ws answered HTTP $status');
+  final t = body.trim();
+  final m = RegExp(r'^"?(\d{4,20})"?$').firstMatch(t) ?? RegExp(r'"id"\s*:\s*"?(\d{4,20})').firstMatch(t);
+  if (m == null) {
+    final peek = t.length > 40 ? '${t.substring(0, 40)}...' : t;
+    throw Exception('unexpected answer "${peek.replaceAll(RegExp(r'\s+'), ' ')}"');
+  }
+  return m.group(1)!;
+}
+
 TestStatus worst(Iterable<TestStatus> s) {
   if (s.contains(TestStatus.fail)) return TestStatus.fail;
   if (s.contains(TestStatus.warn)) return TestStatus.warn;
@@ -193,7 +206,7 @@ final List<SecurityTest> allSecurityTests = [
   SecurityTest('dot', 'Encrypted DNS (DNS-over-TLS)', TestGroup.router, _dot, weight: 2),
   SecurityTest('cert', 'Router certificate', TestGroup.router, _cert, weight: 2),
   SecurityTest('latency', 'Tunnel latency & jitter', TestGroup.performance, _latency),
-  SecurityTest('bufferbloat', 'Bufferbloat & download', TestGroup.performance, _bufferbloat, external: true),
+  SecurityTest('bufferbloat', 'Bufferbloat & speed', TestGroup.performance, _bufferbloat, external: true, weight: 2),
 ];
 
 Map<String, int> get securityTestWeights => {for (final t in allSecurityTests) t.id: t.weight};
@@ -271,8 +284,7 @@ Future<SecurityTestResult> _dnsLeak(TestEnv env) async {
 
   try {
     final idRes = await env.web.get(Uri.parse('https://bash.ws/id')).timeout(const Duration(seconds: 8));
-    final id = idRes.body.trim();
-    if (idRes.statusCode != 200 || !RegExp(r'^\d{1,20}$').hasMatch(id)) throw Exception('bad id');
+    final id = bashWsId(idRes.statusCode, idRes.body);
     for (var i = 1; i <= 8; i++) {
       try {
         await InternetAddress.lookup('$i.$id.bash.ws').timeout(const Duration(seconds: 3));
@@ -500,17 +512,17 @@ Future<SecurityTestResult> _latency(TestEnv env) async {
   }, [...lines, 'Measured by the router to the tunnel monitor IPs (US servers: ~150-220 ms from AU is normal).']);
 }
 
-/// Router round trip idle vs. while downloading. Needs to be at home (the
-/// router is the nearest fixed point to measure queueing delay against).
+/// Bufferbloat: round trip to an internet server (Cloudflare 1.1.1.1:443,
+/// TCP handshake) idle, then while downloading and while uploading. This
+/// crosses the real bottleneck (e.g. a 5G / NBN line), which a round trip to
+/// the router does not. Grades on the worst added delay, like Waveform.
 Future<SecurityTestResult> _bufferbloat(TestEnv env) async {
   final t = _t('bufferbloat');
-  final target = env.target;
-  if (!env.atHome || target == null) return _r(t, TestStatus.skip, 'Only at home (measures against the router).');
 
   Future<double?> rtt() async {
     final sw = Stopwatch()..start();
     try {
-      final s = await Socket.connect(target.host, target.port, timeout: const Duration(seconds: 2));
+      final s = await Socket.connect('1.1.1.1', 443, timeout: const Duration(seconds: 4));
       sw.stop();
       s.destroy();
       return sw.elapsedMicroseconds / 1000;
@@ -519,69 +531,110 @@ Future<SecurityTestResult> _bufferbloat(TestEnv env) async {
     }
   }
 
-  double median(List<double> v) {
-    if (v.isEmpty) return double.nan;
-    final s = [...v]..sort();
-    return s[s.length ~/ 2];
+  // Warm up (Wi-Fi power save, radio wake-up), then measure idle.
+  for (var i = 0; i < 3; i++) {
+    await rtt();
   }
-
   final idle = <double>[];
-  for (var i = 0; i < 6; i++) {
+  for (var i = 0; i < 8; i++) {
     final r = await rtt();
     if (r != null) idle.add(r);
-    await Future<void>.delayed(const Duration(milliseconds: 150));
+    await Future<void>.delayed(const Duration(milliseconds: 200));
   }
-  if (idle.isEmpty) return _r(t, TestStatus.skip, 'Could not reach the router to measure.');
+  if (idle.length < 3) return _r(t, TestStatus.skip, 'Could not reach 1.1.1.1 to measure.');
 
-  final loaded = <double>[];
-  var bytes = 0;
-  final sw = Stopwatch()..start();
-  var done = false;
-  final download = () async {
-    final req = http.Request('GET', Uri.parse('https://speed.cloudflare.com/__down?bytes=50000000'));
-    final resp = await env.web.send(req).timeout(const Duration(seconds: 10));
-    await for (final chunk in resp.stream) {
-      bytes += chunk.length;
-      if (done || sw.elapsed > const Duration(seconds: 10)) break;
+  Future<(List<double>, int, double)> loaded(Future<void> Function(void Function(int) count, bool Function() stop) load) async {
+    final samples = <double>[];
+    var bytes = 0;
+    final sw = Stopwatch()..start();
+    var done = false;
+    bool stop() => done || sw.elapsed > const Duration(seconds: 10);
+    final job = load((n) => bytes += n, stop);
+    final sampler = () async {
+      await Future<void>.delayed(const Duration(milliseconds: 1000));
+      while (!stop()) {
+        final r = await rtt();
+        if (r != null) samples.add(r);
+        await Future<void>.delayed(const Duration(milliseconds: 250));
+      }
+    }();
+    try {
+      await job.timeout(const Duration(seconds: 12));
+    } on Object {
+      // A partial transfer still loads the line and gives a speed figure.
     }
-  }();
-  final sampler = () async {
-    await Future<void>.delayed(const Duration(milliseconds: 800));
-    while (!done && sw.elapsed < const Duration(seconds: 10)) {
-      final r = await rtt();
-      if (r != null) loaded.add(r);
-      await Future<void>.delayed(const Duration(milliseconds: 250));
-    }
-  }();
-  try {
-    await download.timeout(const Duration(seconds: 12));
-  } on Object {
-    // Partial download still gives a speed figure.
+    done = true;
+    await sampler;
+    sw.stop();
+    return (samples, bytes, max(sw.elapsedMilliseconds / 1000, 0.5));
   }
-  done = true;
-  await sampler;
-  sw.stop();
-  final secs = max(sw.elapsedMilliseconds / 1000, 0.5);
-  final mbps = bytes * 8 / secs / 1e6;
+
+  final down = await loaded((count, stop) async {
+    final resp = await env.web
+        .send(http.Request('GET', Uri.parse('https://speed.cloudflare.com/__down?bytes=100000000')))
+        .timeout(const Duration(seconds: 10));
+    await for (final chunk in resp.stream) {
+      count(chunk.length);
+      if (stop()) break;
+    }
+  });
+  final up = await loaded((count, stop) async {
+    // Upload in 1 MB pieces until the time is up.
+    final piece = List<int>.filled(1 << 20, 0x61);
+    while (!stop()) {
+      final r = await env.web
+          .post(Uri.parse('https://speed.cloudflare.com/__up'), body: piece)
+          .timeout(const Duration(seconds: 10));
+      if (r.statusCode >= 400) break;
+      count(piece.length);
+    }
+  });
+
   final base = median(idle);
-  final under = loaded.isEmpty ? base : median(loaded);
-  final added = max(0.0, under - base);
+  double addedFor(List<double> s) => s.isEmpty ? 0 : max(0.0, median(s) - base);
+  final addDown = addedFor(down.$1);
+  final addUp = addedFor(up.$1);
+  final worstAdd = max(addDown, addUp);
+  String mbps((List<double>, int, double) x) => (x.$2 * 8 / x.$3 / 1e6).toStringAsFixed(1);
   final lines = [
-    'Router RTT idle ${base.toStringAsFixed(1)} ms, under load ${under.toStringAsFixed(1)} ms (+${added.toStringAsFixed(1)} ms)',
-    'Download ~${mbps.toStringAsFixed(1)} Mbit/s (${(bytes / 1e6).toStringAsFixed(1)} MB in ${secs.toStringAsFixed(1)} s, via ${_expectWord(env.expected)} path)',
-    'Measured from this device to the router only, so Wi-Fi counts too.',
+    'Idle ${base.toStringAsFixed(0)} ms to 1.1.1.1',
+    'Downloading: ${down.$1.isEmpty ? 'no samples' : '${median(down.$1).toStringAsFixed(0)} ms (+${addDown.toStringAsFixed(0)})'} - ~${mbps(down)} Mbit/s',
+    'Uploading: ${up.$1.isEmpty ? 'no samples' : '${median(up.$1).toStringAsFixed(0)} ms (+${addUp.toStringAsFixed(0)})'} - ~${mbps(up)} Mbit/s',
+    'Path: ${_expectWord(env.expected)}. Added delay under load is what makes games lag when someone else downloads.',
   ];
-  final st = added > 200
-      ? TestStatus.fail
-      : added > 60
-          ? TestStatus.warn
-          : TestStatus.pass;
+  final grade = bufferbloatGrade(worstAdd);
+  final st = switch (grade) {
+    'A+' || 'A' => TestStatus.pass,
+    'B' || 'C' => TestStatus.warn,
+    _ => TestStatus.fail,
+  };
   return _r(t, st, switch (st) {
-    TestStatus.pass => 'Low bufferbloat (+${added.toStringAsFixed(0)} ms under load) - good for gaming.',
-    TestStatus.warn => 'Some bufferbloat (+${added.toStringAsFixed(0)} ms) - an FQ-CoDel shaper would help.',
-    _ => 'Heavy bufferbloat (+${added.toStringAsFixed(0)} ms) - set up the FQ-CoDel shaper.',
+    TestStatus.pass => 'Grade $grade: +${worstAdd.toStringAsFixed(0)} ms under load - good for gaming.',
+    TestStatus.warn => 'Grade $grade: +${worstAdd.toStringAsFixed(0)} ms under load - lag spikes when the line is busy. '
+        'An FQ-CoDel shaper on the router fixes this.',
+    _ => 'Grade $grade: +${worstAdd.toStringAsFixed(0)} ms under load - heavy lag when the line is busy. '
+        'Set up the FQ-CoDel shaper on the router.',
   }, lines);
 }
+
+double median(List<double> v) {
+  if (v.isEmpty) return double.nan;
+  final s = [...v]..sort();
+  return s[s.length ~/ 2];
+}
+
+/// Waveform-style grade for the added latency under load (ms).
+String bufferbloatGrade(double addedMs) => addedMs < 5
+    ? 'A+'
+    : addedMs < 30
+        ? 'A'
+        : addedMs < 60
+            ? 'B'
+            : addedMs < 200
+                ? 'C'
+                : addedMs < 400
+                    ? 'D'
+                    : 'F';
 
 // ---------------------------------------------------------------- history
 

@@ -45,7 +45,7 @@ List<NamedNetwork>? networksFromText(String text) {
 String? validateRouterAddress(String? v) {
   final u = Uri.tryParse(normaliseRouterAddress(v ?? ''));
   return u == null || u.host.isEmpty || !(u.scheme == 'http' || u.scheme == 'https')
-      ? 'e.g. https://router.example.com or https://10.10.10.254'
+      ? 'e.g. https://router.example.com or https://192.168.1.1'
       : null;
 }
 
@@ -487,23 +487,27 @@ class _SettingsPageState extends State<SettingsPage> {
         children: [
           _field('baseUrl', 'Router URL',
               hint: 'https://router.example.com',
-              help: 'Where the app finds your router. Use the router\'s name '
-                  '(https://router.example.com): its Let\'s Encrypt certificate is then checked '
-                  'normally and the same address works at home and through remote access. An IP '
-                  '(https://10.10.10.254) works too.',
+              help: 'Where the app finds your router. Best is the router\'s own name (e.g. '
+                  'https://router.example.com) if it has a real certificate (e.g. Let\'s Encrypt): it is '
+                  'then checked normally and the same address works at home and through remote access. '
+                  'An IP (e.g. https://192.168.1.1) works too - then set the certificate name below or pin '
+                  'the certificate.',
               validator: validateRouterAddress),
-          if (normaliseRouterAddress(_v('baseUrl')) != 'https://$defaultCertName' &&
-              (Uri.tryParse(normaliseRouterAddress(_v('baseUrl')))?.host ?? '') != defaultCertName)
+          if (_v('certName').isNotEmpty &&
+              validateCertName(_v('certName')) == null &&
+              !_v('certName').startsWith('*') &&
+              (Uri.tryParse(normaliseRouterAddress(_v('baseUrl')))?.host ?? '') != _v('certName'))
             Align(
               alignment: Alignment.centerLeft,
               child: TextButton.icon(
                 onPressed: () => setState(() {
-                  _t['baseUrl']!.text = 'https://$defaultCertName';
-                  if (_v('certName').isEmpty) _t['certName']!.text = defaultCertName;
+                  final lan = Uri.tryParse(normaliseRouterAddress(_v('baseUrl')))?.host ?? '';
+                  if (_v('routerLanIp').isEmpty && ipv4ToInt(lan) != null) _t['routerLanIp']!.text = lan;
+                  _t['baseUrl']!.text = 'https://${_v('certName')}';
                   _dirty = true;
                 }),
                 icon: const Icon(Icons.auto_fix_high, size: 18),
-                label: const Text('Use https://$defaultCertName'),
+                label: Text('Use https://${_v('certName')}'),
               ),
             ),
           if (normaliseRouterAddress(_v('baseUrl')).startsWith('http://'))
@@ -575,9 +579,12 @@ class _SettingsPageState extends State<SettingsPage> {
             ]),
             const SizedBox(height: 8),
             _field('routerLanIp', 'Router LAN IP',
-                help: 'The router\'s address inside the house (10.10.10.254). Remote access through '
+                help: 'The router\'s address on your home network (e.g. 192.168.1.1). Only needed when the '
+                    'router URL is a name: remote access through '
                     'WireGuard needs an IP to reach, even when the router URL is a name.',
-                validator: (v) => ipv4ToInt(v ?? '') != null ? null : 'IPv4 address, e.g. 10.10.10.254'),
+                validator: (v) => (v ?? '').trim().isEmpty || ipv4ToInt(v ?? '') != null
+                    ? null
+                    : 'IPv4 address, e.g. 192.168.1.1'),
           ]),
         ],
       ),
@@ -596,40 +603,40 @@ class _SettingsPageState extends State<SettingsPage> {
                 child: _field('mainGateway', 'Main gateway',
                     help: 'Gateway name on the router (System > Gateways), e.g. WG_MAIN_GW.', validator: _required)),
             const SizedBox(width: 12),
-            Expanded(child: _field('mainLabel', 'Shown as', help: 'Friendly name, e.g. San Jose.', validator: _required)),
+            Expanded(child: _field('mainLabel', 'Shown as', help: 'Friendly name, e.g. the server\'s city.', validator: _required)),
           ]),
           Row(children: [
             Expanded(
                 child: _field('backupGateway', 'Backup gateway',
                     help: 'The failover gateway, e.g. WG_BACKUP_GW.', validator: _required)),
             const SizedBox(width: 12),
-            Expanded(child: _field('backupLabel', 'Shown as', help: 'e.g. Los Angeles.', validator: _required)),
+            Expanded(child: _field('backupLabel', 'Shown as', help: 'e.g. the backup server\'s city.', validator: _required)),
           ]),
           _switch('Proton server switcher', _cfg.serverSwitcherEnabled, (v) => _set(_cfg.copyWith(serverSwitcherEnabled: v)),
               subtitle: 'Change the exit city from the app, or let it find the fastest server.',
               help: 'Adds a "VPN servers" card to Status. It changes which Proton server each tunnel '
                   'connects to (address + the server\'s public key). The router\'s private keys never '
                   'leave the router.\n\nNeeds the router privilege "VPN: WireGuard" on YOUR app user '
-                  'only (not Sam\'s). Note: that privilege can also read the WireGuard keys, so keep the '
+                  'only (not on keys you give to others). Note: that privilege can also read the WireGuard keys, so keep the '
                   'app lock on.'),
           if (_cfg.serverSwitcherEnabled) ...[
             Row(children: [
               Expanded(
                   child: _field('mainWgInstance', 'Main instance',
                       help: 'WireGuard instance behind the main gateway (VPN > WireGuard > Instances), '
-                          'e.g. Proton_VPN_Main.',
+                          'e.g. VPN_Main.',
                       validator: _required)),
               const SizedBox(width: 12),
               Expanded(
                   child: _field('backupWgInstance', 'Backup instance',
-                      help: 'Instance behind the backup gateway, e.g. Proton_VPN_Failover. "Find best" tests '
+                      help: 'Instance behind the backup gateway, e.g. VPN_Backup. "Find best" tests '
                           'candidates on this one, so the house never loses its main tunnel while testing.',
                       validator: _required)),
             ]),
             _field('serverCities', 'Cities to choose from',
-                help: 'Comma-separated Proton cities "find best" may pick, e.g. "San Jose, Los Angeles". '
+                help: 'Comma-separated Proton cities "find best" may pick, e.g. "Chicago, New York". Empty = any. '
                     'Keeps streaming regions predictable.',
-                hint: 'San Jose, Los Angeles'),
+                hint: 'Chicago, New York'),
             _switch('Find the best server every night', _cfg.autoBestNightly,
                 (v) => _set(_cfg.copyWith(autoBestNightly: v)),
                 subtitle: 'Between 3 and 5 am, while this app is running (best on the always-on PC).',
@@ -752,7 +759,7 @@ class _SettingsPageState extends State<SettingsPage> {
             _field('tailscaleAddress', 'Router\'s Tailscale address (optional)',
                 hint: '100.x.y.z or opnsense.tailnet.ts.net',
                 help: 'Works behind the 5G hotspot\'s CGNAT, no open ports needed.\n\n'
-                    'Best: on the router (os-tailscale plugin) advertise a subnet route for 10.10.10.254/32 and '
+                    'Best: on the router (os-tailscale plugin) advertise a subnet route for the router\'s LAN IP (/32) and '
                     'approve it in the Tailscale admin. Then leave this empty - the normal router URL just works '
                     'through Tailscale.\n\nOtherwise enter the router\'s 100.x address or MagicDNS name here. '
                     'The certificate is still checked against the certificate name.',
@@ -804,7 +811,7 @@ class _SettingsPageState extends State<SettingsPage> {
           _switch('New device joins the network', _cfg.alertNewDevices, (v) => _set(_cfg.copyWith(alertNewDevices: v)),
               help: 'Checks the router\'s DHCP leases every couple of minutes and tells you when a device it has '
                   'never seen gets an address. The first check just learns what is there. Needs the DHCP '
-                  'leases privilege (alex-app has it).'),
+                  'leases privilege.'),
           if (_cfg.alertNewDevices)
             Align(
               alignment: Alignment.centerLeft,
@@ -881,7 +888,7 @@ class _SettingsPageState extends State<SettingsPage> {
           Row(children: [
             Expanded(
                 child: _field('directLabel', 'Label while bypassed',
-                    help: 'Big status line during a bypass, e.g. Direct (NBN).', validator: _required)),
+                    help: 'Big status line during a bypass, e.g. Direct (ISP).', validator: _required)),
             const SizedBox(width: 12),
             Expanded(
                 child: _field('directNetworkName', 'Direct network',
@@ -919,7 +926,7 @@ class _SettingsPageState extends State<SettingsPage> {
       SettingsSection(
         icon: Icons.ios_share,
         title: 'Share settings',
-        summary: 'Hand a ready-made setup to Sam (no secrets)',
+        summary: 'Hand a ready-made setup to someone in your home (no secrets)',
         children: [
           const Text('Exports everything except secrets and personal preferences. The other person adds '
               'their own API key.'),
@@ -1130,8 +1137,9 @@ class InfoLine extends StatelessWidget {
       );
 }
 
-/// Save / Test always visible at the bottom, with the last message.
-class _SaveBar extends StatelessWidget {
+/// Save / Test always visible at the bottom, with the last message (long
+/// test reports start folded to a one-line summary).
+class _SaveBar extends StatefulWidget {
   const _SaveBar({
     required this.busy,
     required this.dirty,
@@ -1151,7 +1159,47 @@ class _SaveBar extends StatelessWidget {
   final VoidCallback onDismiss;
 
   @override
-  Widget build(BuildContext context) => Material(
+  State<_SaveBar> createState() => _SaveBarState();
+}
+
+/// "6 OK - 2 skipped" for a connection-test report; null for other messages.
+String? summariseReport(String message) {
+  final lines = message.split('\n').where((l) => l.trim().isNotEmpty).toList();
+  int n(String p) => lines.where((l) => l.startsWith(p)).length;
+  final ok = n('OK');
+  final fail = n('FAIL') + n('NO PRIVILEGE');
+  final warn = n('WARN');
+  final skip = n('SKIP');
+  if (ok + fail + warn + skip < 3) return null;
+  return [
+    '$ok OK',
+    if (fail > 0) '$fail failed',
+    if (warn > 0) '$warn warning${warn == 1 ? '' : 's'}',
+    if (skip > 0) '$skip skipped (optional)',
+  ].join(' - ');
+}
+
+class _SaveBarState extends State<_SaveBar> {
+  bool _open = false;
+
+  @override
+  void didUpdateWidget(_SaveBar old) {
+    super.didUpdateWidget(old);
+    if (old.message != widget.message) _open = false;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final busy = widget.busy;
+    final dirty = widget.dirty;
+    final message = widget.message;
+    final error = widget.error;
+    final onSave = widget.onSave;
+    final onTest = widget.onTest;
+    final onDismiss = widget.onDismiss;
+    final summary = message == null ? null : summariseReport(message);
+    final folded = summary != null && !_open;
+    return Material(
         color: OpnColors.rail,
         child: SafeArea(
           top: false,
@@ -1161,19 +1209,37 @@ class _SaveBar extends StatelessWidget {
             child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
               if (message != null)
                 Container(
-                  constraints: const BoxConstraints(maxHeight: 180),
+                  constraints: const BoxConstraints(maxHeight: 150),
                   margin: const EdgeInsets.only(bottom: 10),
-                  padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
+                  padding: const EdgeInsets.fromLTRB(12, 6, 4, 6),
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(12),
                     color: (error ? OpnColors.red : OpnColors.green).withValues(alpha: 0.12),
                   ),
                   child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Expanded(
-                      child: SingleChildScrollView(
-                        child: SelectableText(message!, style: const TextStyle(fontFamily: 'monospace', fontSize: 12)),
-                      ),
+                      child: folded
+                          ? Padding(
+                              padding: const EdgeInsets.only(top: 6),
+                              child: Row(children: [
+                                Icon(error ? Icons.error_outline : Icons.check_circle_outline,
+                                    size: 18, color: error ? OpnColors.red : OpnColors.green),
+                                const SizedBox(width: 8),
+                                Expanded(child: Text(summary)),
+                              ]),
+                            )
+                          : SingleChildScrollView(
+                              child: SelectableText(message,
+                                  style: const TextStyle(fontFamily: 'monospace', fontSize: 12)),
+                            ),
                     ),
+                    if (summary != null)
+                      IconButton(
+                        visualDensity: VisualDensity.compact,
+                        tooltip: _open ? 'Hide details' : 'Show details',
+                        icon: Icon(_open ? Icons.expand_less : Icons.expand_more, size: 20),
+                        onPressed: () => setState(() => _open = !_open),
+                      ),
                     IconButton(visualDensity: VisualDensity.compact, icon: const Icon(Icons.close, size: 18), onPressed: onDismiss),
                   ]),
                 ),
@@ -1202,4 +1268,5 @@ class _SaveBar extends StatelessWidget {
           ),
         ),
       );
+  }
 }

@@ -76,8 +76,8 @@ class HelpPage extends StatelessWidget {
             number: 4,
             title: 'API user and key',
             items: [
-              'System > Access > Users: add one user per person/device (e.g. pcmode for the PC, sam '
-                  'for Sam\'s phone), so a lost phone\'s key can be revoked alone. No GUI login needed.',
+              'System > Access > Users: add one user per person (e.g. alex-app, sam-app), so one '
+                  'person\'s key can be revoked alone. No GUI login needed.',
               'Required privileges: "Diagnostics: PF Table IP addresses" (bypass + PC mode) and '
                   '"System: Gateways" (live status and failover).',
               'Recommended: "Diagnostics: Show States" (moves open connections on every switch).',
@@ -96,10 +96,11 @@ class HelpPage extends StatelessWidget {
             number: 5,
             title: 'Connect the app',
             items: [
-              'Router URL: https://router.example.com (its Let\'s Encrypt certificate is checked '
-                  'normally). An IP such as https://10.10.10.254 also works.',
+              'Router URL: the router\'s name, e.g. https://router.example.com, if it has a real '
+                  '(e.g. Let\'s Encrypt) certificate - it is then checked normally. An IP such as '
+                  'https://192.168.1.1 also works.',
               'Certificate name (Settings > Router connection > Certificate & remote target): the name the '
-                  'certificate must carry, router.example.com. Wrong certificate = "not your router": the '
+                  'certificate must carry, e.g. router.example.com. Wrong certificate = "not your router": the '
                   'app stops before sending the API key.',
               'Self-signed certificate instead: leave the name empty, press "Trust certificate..." and '
                   'check the fingerprint against System > Trust > Certificates before accepting.',
@@ -169,12 +170,12 @@ class HelpPage extends StatelessWidget {
               'The admin adds the key as a peer on the road-warrior WireGuard instance and tells you '
                   'your tunnel address (e.g. 10.10.99.2/32) and the router\'s public key. Or they send '
                   'a WireGuard .conf: use "Import a WireGuard .conf".',
-              'Endpoint: your home\'s public name (home.example.com), port 51830 by default.',
+              'Endpoint: your home\'s public name (e.g. home.example.com) and the router\'s WireGuard port.',
               'Each check: router directly first (2 s); if it does not answer, through the tunnel. '
                   'The tunnel stops when you are home again, when the app goes to the background '
                   '(Android) or after 3 minutes unused.',
               'Behind CGNAT (e.g. the 5G hotspot) WireGuard can\'t get in. Use Tailscale instead: '
-                  'router: install os-tailscale, log in, advertise the route 10.10.10.254/32 and approve it '
+                  'router: install os-tailscale, log in, advertise the route <router LAN IP>/32 and approve it '
                   'in the Tailscale admin. Devices: install Tailscale and sign in. App: Settings > Remote '
                   'access > Tailscale. The router URL then works from anywhere.',
               'Android runs one VPN app at a time: with Tailscale on, the Proton app on the phone is off. '

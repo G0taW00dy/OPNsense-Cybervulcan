@@ -27,7 +27,7 @@ what.
 
 **System > Access > Users > +**
 
-* Username: e.g. `pcmode` (Alex's PC), `alex-phone`, `sam`.
+* Username: one per person, e.g. `alex-app`, `sam-app`.
 * Password: a long random one (nobody logs in to the GUI with it).
 * Login shell: none. Do not add the user to the `admins` group.
 * Save, then edit the user again and set **Effective Privileges**:
@@ -61,7 +61,7 @@ editing gateways) and *Services: Dnsmasq DNS/DHCP: Settings* (also covers
 changing DHCP/DNS). Cybervulcan itself only reads those endpoints; the
 privileges are simply that coarse.
 
-**Restricted key for a partner / family member (e.g. Sam):**
+**Restricted key for a partner / family member:**
 PF Table IP addresses + System: Gateways + Diagnostics: Show States
 (+ Dnsmasq if she wants the Devices page). **No** Firewall: Rules [new],
 **no** VPN: WireGuard.

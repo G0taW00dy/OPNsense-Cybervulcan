@@ -63,8 +63,8 @@ class _StatusPageState extends State<StatusPage> {
                 _Banner(
                   text: 'The router address is plain http:// - the API key and everything else '
                       'travel unencrypted and nothing proves this is your router. Once the router '
-                      'has its certificate, switch to https://${c.config.routerHost ?? ''} '
-                      '(certificate name ${c.config.switchedToHttps().certName}).',
+                      'has its certificate, switch to https://${c.config.routerHost ?? ''}'
+                      '${c.config.certName.trim().isEmpty ? ' and set its certificate name in Settings' : ' (certificate name ${c.config.certName})'}.',
                   color: OpnColors.amber,
                   icon: Icons.lock_open,
                   action: TextButton(
@@ -471,7 +471,7 @@ class _PcModeCard extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(children: [
-              const Icon(Icons.computer),
+              Icon(Platform.isAndroid ? Icons.smartphone : Icons.computer),
               const SizedBox(width: 8),
               Expanded(child: Text(_deviceWord(), style: t.titleMedium)),
               SegmentedButton<bool>(

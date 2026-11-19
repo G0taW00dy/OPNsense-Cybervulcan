@@ -80,7 +80,7 @@ class DnsResolverInfo {
 
   final String resolverIp;
 
-  /// e.g. "Australia - ExampleTel" or "United States - Quad9".
+  /// e.g. "Australia - (ISP name)" or "United States - Quad9".
   final String? geo;
 }
 

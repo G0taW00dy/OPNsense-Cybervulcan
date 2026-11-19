@@ -374,7 +374,7 @@ class _RemoteAccessEditorState extends State<RemoteAccessEditor> {
           help: 'Assigned by the router admin, e.g. 10.10.99.2/32.',
           validator: (v) =>
               (v == null || v.trim().isEmpty || Ipv4Subnet.tryParse(v) != null) ? null : 'e.g. 10.10.99.2/32'),
-      _field('allowed', 'Allowed IPs', help: 'Normally just the router: 10.10.10.254/32'),
+      _field('allowed', 'Allowed IPs', help: 'Normally just the router\'s LAN IP, e.g. 192.168.1.1/32'),
       _field('keepalive', 'Keepalive (seconds)', number: true, validator: (v) {
         final n = int.tryParse(v ?? '');
         return n != null && n >= 0 && n <= 65535 ? null : '0-65535';

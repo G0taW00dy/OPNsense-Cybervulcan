@@ -194,7 +194,7 @@ class _SetupWizardState extends State<SetupWizard> {
                 decoration: const InputDecoration(
                   labelText: 'Certificate name',
                   helperText: 'The router\'s certificate must be valid for this name, e.g. '
-                      'router.example.com. If not, the app refuses to connect and never sends '
+                      'router.example.com (empty = the address itself). If not, the app refuses to connect and never sends '
                       'your API key.',
                   helperMaxLines: 3,
                 ),

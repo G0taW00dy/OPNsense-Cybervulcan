@@ -1,5 +1,28 @@
 # Changelog
 
+## 2.0.1 (pre-release)
+
+### Changed
+
+* **Shareable**: no personal names, domains or cities built in any more.
+  New installs start neutral (router `https://10.10.10.254`, no certificate
+  name, tunnels "Main" / "Backup", no endpoint, no server cities); help
+  texts and docs use example values (`router.example.com`). Existing
+  settings are kept. Hand your setup to others with *Share settings*.
+* "Use https://<certificate name>" button in Settings when the router URL is
+  still an IP (also fills in the Router LAN IP).
+* Long connection-test reports fold to one line ("6 OK - 2 skipped").
+* "This phone" card shows a phone icon.
+
+### Fixed
+
+* **Bufferbloat test measured the wrong thing**: it timed the device-to-router
+  hop, which never crosses the slow internet link, so it always looked fine.
+  It now times 1.1.1.1 idle, while downloading and while uploading, and grades
+  the added delay A+ to F (Waveform-style). Wi-Fi warm-up samples are skipped.
+* bash.ws DNS leak id: accepts JSON/whitespace answers and reports what came
+  back when it fails.
+
 ## 2.0.0 (pre-release)
 
 ### Added
