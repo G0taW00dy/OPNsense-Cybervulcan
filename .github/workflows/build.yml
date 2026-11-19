@@ -7,7 +7,9 @@ name: build
 
 on:
   push:
-    branches: [main]
+    # prerelease/** : publish the pubspec version as a GitHub *pre-release*
+    # (test channel; the in-app updater ignores it until promoted).
+    branches: [main, 'prerelease/**']
     tags: ['v*']
   pull_request:
     branches: [main]
@@ -257,7 +259,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/heads/prerelease/')
     needs: [android, windows, version]
     runs-on: ubuntu-latest
     permissions:
@@ -270,9 +272,12 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           name: Cybervulcan ${{ needs.version.outputs.name }}
-          # "[prerelease]" in the tagged commit's message publishes a test
-          # build: the in-app updater ignores pre-releases until promoted.
-          prerelease: ${{ contains(github.event.head_commit.message, '[prerelease]') }}
+          # A prerelease/** branch (or "[prerelease]" in a tagged commit's
+          # message) publishes a test build: the in-app updater ignores
+          # pre-releases until they are promoted to a full release.
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('v{0}', needs.version.outputs.name) }}
+          target_commitish: ${{ github.sha }}
+          prerelease: ${{ startsWith(github.ref, 'refs/heads/prerelease/') || contains(github.event.head_commit.message, '[prerelease]') }}
           files: |
             dist/*.exe
             dist/*.apk
