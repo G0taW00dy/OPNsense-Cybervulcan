@@ -51,6 +51,7 @@ final _serverPub = wireGuardPublicKey(generateWireGuardPrivateKey());
 AppConfig remoteCfg({bool enabled = true}) => const AppConfig().copyWith(
       baseUrl: 'https://10.10.10.254',
       remoteEnabled: enabled,
+      wgEndpointHost: 'home.example.com',
       wgServerPublicKey: _serverPub,
       wgAddress: '10.10.99.2/32',
     );
