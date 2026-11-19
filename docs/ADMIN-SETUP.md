@@ -27,7 +27,7 @@ what.
 
 **System > Access > Users > +**
 
-* Username: e.g. `pcmode` (Tim's PC), `tim-phone`, `kate`.
+* Username: one per person, e.g. `alex-app`, `sam-app`.
 * Password: a long random one (nobody logs in to the GUI with it).
 * Login shell: none. Do not add the user to the `admins` group.
 * Save, then edit the user again and set **Effective Privileges**:
@@ -61,7 +61,7 @@ editing gateways) and *Services: Dnsmasq DNS/DHCP: Settings* (also covers
 changing DHCP/DNS). Cybervulcan itself only reads those endpoints; the
 privileges are simply that coarse.
 
-**Restricted key for a partner / family member (e.g. Kate):**
+**Restricted key for a partner / family member:**
 PF Table IP addresses + System: Gateways + Diagnostics: Show States
 (+ Dnsmasq if she wants the Devices page). **No** Firewall: Rules [new],
 **no** VPN: WireGuard.
@@ -78,7 +78,7 @@ alias tables through `/api/firewall/alias_util/*`.
 ## 2. HTTPS certificate (Let's Encrypt)
 
 The app connects to the router **by IP** (`10.10.10.254`) but checks the
-certificate against a **name** (default `router.cybervulcan.com`). If the
+certificate against a **name** (default `router.example.com`). If the
 certificate is not valid for that name - e.g. on a café network where some
 other box uses `10.10.10.254` - the app says "Wrong certificate - not your
 router" and stops before sending the API key. This needs a certificate from
@@ -95,22 +95,22 @@ a public CA; Let's Encrypt via DNS-01 works without opening any port.
      certificates. Under the token's **policies** (RRset policies) add a
      default policy with no write permission, then one policy that allows
      writing only type `TXT`, subname `_acme-challenge` (and
-     `_acme-challenge.router` if you issue `router.cybervulcan.com` instead
-     of the wildcard), domain `cybervulcan.com`. The token can then create
+     `_acme-challenge.router` if you issue `router.example.com` instead
+     of the wildcard), domain `example.com`. The token can then create
      the validation records and nothing else - it cannot change your MX,
      SPF/DKIM/DMARC or the `home` address record.
    * OPNsense: DNS Service **deSEC.io (dns_desec)**, paste the token.
-5. **Certificates > +**: Common name `*.cybervulcan.com` (or just
-   `router.cybervulcan.com`), alt names as needed, account + challenge from
+5. **Certificates > +**: Common name `*.example.com` (or just
+   `router.example.com`), alt names as needed, account + challenge from
    above, auto-renew on. Issue it.
 6. **System > Settings > Administration**:
    * Protocol: HTTPS, SSL certificate: the ACME certificate.
-   * **Alternate Hostnames**: add `router.cybervulcan.com` (the app sends
+   * **Alternate Hostnames**: add `router.example.com` (the app sends
      that name as the HTTP Host header; without it the GUI's DNS-rebind
      check can refuse requests).
    * Optional: restrict "Listen interfaces" to LAN/MGMT (and the WireGuard
      road-warrior interface for remote access).
-7. You do not need a public DNS record for `router.cybervulcan.com`: the
+7. You do not need a public DNS record for `router.example.com`: the
    app never looks it up, it connects to the IP.
 
 Renewals are automatic and need no change in the app (it checks the name and
@@ -123,7 +123,7 @@ until you switch them to `https://` with the certificate name.
 
 Upgrading users from v1.0.x: their app shows "The router address is plain
 http://" with a **Switch to HTTPS** button. It changes the address to
-`https://<same IP>` and sets the certificate name to `router.cybervulcan.com`
+`https://<same IP>` and sets the certificate name to `router.example.com`
 (when none is set). Nothing else in their settings changes.
 
 ## 3. Road-warrior WireGuard (remote access)
@@ -145,7 +145,7 @@ endpoint, port, allowed IPs and keepalive below):
 | Router address reached through the tunnel | `10.10.10.254` TCP 443 only (app setting "Allowed IPs" = `10.10.10.254/32`) |
 | Keepalive | 25 s |
 | Router public key | yours - generated in the next step. Example of the format: `rspBoRaiXUvobDZA8aQ6EmnafqEBJ9WHETHpZMa3iSk=` (it is not secret, but it is different on every router; the app has no default for it) |
-| Endpoint name | `home.cybervulcan.com`, port `51830` (see step 4) |
+| Endpoint name | `home.example.com`, port `51830` (see step 4) |
 
 ### Instance (once)
 
@@ -177,12 +177,12 @@ enable it, no IP configuration (WireGuard sets it).
 1. The user installs the app and, in **Settings > Remote access** (or the
    setup wizard), presses **Generate key** and sends you the **public key**
    (Copy or QR). The private key never leaves their device.
-2. **VPN > WireGuard > Peers > +**: name e.g. `kate-phone`, public key = the
+2. **VPN > WireGuard > Peers > +**: name e.g. `sam-phone`, public key = the
    one they sent, **Allowed IPs = their own `/32`** (e.g. `10.10.99.3/32`),
    optional pre-shared key (generate one; give it to them privately), no
    endpoint, instance `RW`. Save, Apply.
 3. Tell them: tunnel address `10.10.99.3/32`, router public key, endpoint
-   `home.cybervulcan.com`, port `51830` - or just send them the settings
+   `home.example.com`, port `51830` - or just send them the settings
    export (step 7), which carries all of that.
 
 Alternative: create the peer with "generate keypair" on the router and hand
@@ -220,7 +220,7 @@ connects outwards from both ends and works anyway.
 Cybervulcan: Settings > Remote access > **Tailscale**. With the subnet route
 the normal router URL works unchanged; otherwise enter the router's
 `100.x.y.z` (or MagicDNS name) as "Router's Tailscale address". The
-certificate is still checked against `router.cybervulcan.com`.
+certificate is still checked against `router.example.com`.
 
 Android runs one VPN app at a time: with Tailscale on, the Proton app on
 the phone is off. To keep the house VPN while away, set the router as the
@@ -228,33 +228,33 @@ phone's Tailscale *exit node*.
 
 ## 4. Dynamic DNS (os-ddclient)
 
-`home.cybervulcan.com` (the WireGuard endpoint) must point at the house's
+`home.example.com` (the WireGuard endpoint) must point at the house's
 current WAN address. OPNsense's own **os-ddclient** plugin does this; no
 extra scripts. Any provider os-ddclient supports works; the example is
 deSEC, with a token that may change **only that one name**.
 
-1. deSEC web UI: create the record once (**Domains > cybervulcan.com > +**:
+1. deSEC web UI: create the record once (**Domains > example.com > +**:
    subname `home`, type `A`, any address; add `AAAA` too if the WAN has
    public IPv6).
 2. **Token management > +**: a new token just for DDNS. Policies: a default
    policy with no write permission, then policies that allow writing
    subname `home`, type `A` and subname `home`, type `AAAA`, domain
-   `cybervulcan.com`. Nothing else - this token cannot touch MX, SPF/DKIM/
+   `example.com`. Nothing else - this token cannot touch MX, SPF/DKIM/
    DMARC, `_acme-challenge` or any other record. (Use a separate token from
    the certificate one in step 2.)
 3. OPNsense: **System > Firmware > Plugins**: install `os-ddclient`.
 4. **Services > Dynamic DNS > Settings**: enable. **Accounts > +**:
    * Service: **desec-v4** (and a second account with **desec-v6** for
      IPv6, if you publish `AAAA`).
-   * Username: the hostname, `home.cybervulcan.com`.
+   * Username: the hostname, `home.example.com`.
    * Password: the DDNS token from step 2.
-   * Hostname(s): `home.cybervulcan.com`.
+   * Hostname(s): `home.example.com`.
    * Check ip method: **Interface** with interface **WAN** (the router's own
      traffic may leave through a VPN gateway, so a web check-IP service
      could report the Proton address).
    * Save, Apply.
 5. Check: **Services > Dynamic DNS > Log File**, and from outside:
-   `nslookup home.cybervulcan.com` shows the WAN address.
+   `nslookup home.example.com` shows the WAN address.
 
 If home ever goes behind CGNAT again (WAN address in `100.64.0.0/10` or
 another private range), inbound WireGuard cannot work whatever DNS says.

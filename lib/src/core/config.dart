@@ -5,8 +5,8 @@ import 'network_map.dart';
 /// Current settings format. 1 = v1.0.x (no `configVersion` key), 2 = v1.1.
 const currentConfigVersion = 2;
 
-/// Default certificate name the router's TLS certificate must carry.
-const defaultCertName = 'router.cybervulcan.com';
+/// Example router name used in hints (never a real default).
+const exampleRouterName = 'router.example.com';
 
 /// Turns `10.10.10.254`, `10.10.10.254:8443` or `https://x/` into a base URL
 /// (`https://` unless `http://` was typed). Returns the input when it cannot
@@ -25,13 +25,13 @@ String normaliseRouterAddress(String input) {
 /// part of this object - see [SecretStore].
 class AppConfig {
   const AppConfig({
-    this.baseUrl = 'https://router.cybervulcan.com',
-    this.certName = defaultCertName,
+    this.baseUrl = 'https://10.10.10.254',
+    this.certName = '',
     this.pinnedCertSha256,
     this.mainGateway = 'WG_MAIN_GW',
     this.backupGateway = 'WG_BACKUP_GW',
-    this.mainLabel = 'San Jose',
-    this.backupLabel = 'Los Angeles',
+    this.mainLabel = 'Main',
+    this.backupLabel = 'Backup',
     this.pcModeAlias = 'PCMODE_CLEAR',
     this.bypassAlias = 'BYPASS_ALL',
     this.bypassNetwork = '10.10.40.0/24',
@@ -48,16 +48,16 @@ class AppConfig {
     this.useExpiryMarker = true,
     this.checkUpdates = true,
     this.vpnName = 'Proton',
-    this.directLabel = 'Direct (NBN)',
+    this.directLabel = 'Direct',
     this.directNetworkName = 'CLEAR',
     this.remoteEnabled = false,
-    this.wgEndpointHost = 'home.cybervulcan.com',
+    this.wgEndpointHost = '',
     this.wgEndpointPort = 51830,
     this.wgServerPublicKey,
     this.wgAddress = '',
     this.wgAllowedIps = '10.10.10.254/32',
     this.wgKeepalive = 25,
-    this.routerLanIp = '10.10.10.254',
+    this.routerLanIp = '',
     this.tailscaleEnabled = false,
     this.tailscaleAddress = '',
     this.externalTests = true,
@@ -71,7 +71,7 @@ class AppConfig {
     this.serverSwitcherEnabled = false,
     this.mainWgInstance = 'Proton_VPN_Main',
     this.backupWgInstance = 'Proton_VPN_Failover',
-    this.serverCities = 'San Jose, Los Angeles',
+    this.serverCities = '',
     this.autoBestNightly = false,
   });
 
@@ -80,7 +80,7 @@ class AppConfig {
   final String baseUrl;
 
   /// Name the router's TLS certificate must be valid for (e.g. a Let's
-  /// Encrypt certificate for `router.cybervulcan.com` or `*.cybervulcan.com`).
+  /// Encrypt certificate for `router.example.com` or `*.example.com`).
   /// The certificate is checked against this name, not the IP. Empty = check
   /// it against the address itself (v1.0 behaviour).
   final String certName;
@@ -227,8 +227,8 @@ class AppConfig {
   }
 
   /// The same settings with a plain `http://` router address moved to
-  /// `https://` on the same host (default port 443) and, when no certificate
-  /// name is set, the default one. Used to migrate v1.0.x `http://10.10.10.254`
+  /// `https://` on the same host (default port 443), keeping any certificate
+  /// name. Used to migrate v1.0.x `http://10.10.10.254`
   /// setups once the router serves HTTPS. Returns `this` when the address is
   /// not plain http.
   AppConfig switchedToHttps() {
@@ -236,13 +236,12 @@ class AppConfig {
     if (u == null || u.scheme != 'http') return this;
     return copyWith(
       baseUrl: Uri(scheme: 'https', host: u.host).toString(),
-      certName: certName.trim().isEmpty ? defaultCertName : certName,
     );
   }
 
   /// IPv4 address remote access must reach: the router address when it is
   /// an IP, otherwise [routerLanIp] (router address given as a name such as
-  /// https://router.cybervulcan.com). Null when neither is a valid IPv4.
+  /// https://router.example.com). Null when neither is a valid IPv4.
   String? get routerTunnelIp {
     final h = routerHost;
     if (h != null && ipv4ToInt(h) != null) return h;

@@ -134,8 +134,9 @@ PersistentKeepalive = 25
       expect(m.baseUrl, 'https://10.10.10.254');
       expect(m.isPlainHttp, isFalse);
       expect(m.routerPort, 443);
-      expect(m.certName, 'router.cybervulcan.com');
-      expect(m.tlsName, 'router.cybervulcan.com');
+      // No personal default name: the user sets the certificate name.
+      expect(m.certName, '');
+      expect(m.tlsName, '10.10.10.254');
       expect(m.bypassAlias, 'BYPASS_ALL');
       expect(m.useExpiryMarker, isTrue);
       // An http port (e.g. 8080) is not carried over to https.
@@ -159,15 +160,18 @@ PersistentKeepalive = 25
       expect(c.pinnedCertSha256, 'AB:CD');
     });
 
-    test('new installs default to the certificate name and new fields', () {
+    test('new installs get neutral defaults (no built-in personal names)', () {
       const c = AppConfig();
-      expect(c.certName, 'router.cybervulcan.com');
-      expect(c.tlsName, 'router.cybervulcan.com');
-      expect(c.wgEndpointHost, 'home.cybervulcan.com');
+      expect(c.certName, '');
+      expect(c.tlsName, '10.10.10.254');
+      expect(c.wgEndpointHost, '');
+      expect(c.mainLabel, 'Main');
+      expect(c.backupLabel, 'Backup');
+      expect(c.serverCities, '');
       expect(c.wgEndpointPort, 51830);
       expect(c.wgAllowedIpList, ['10.10.10.254/32']);
       expect(c.wgKeepalive, 25);
-      expect(AppConfig.decode(null).certName, 'router.cybervulcan.com');
+      expect(AppConfig.decode(null).certName, '');
     });
 
     test('a bare IP is accepted as https', () {

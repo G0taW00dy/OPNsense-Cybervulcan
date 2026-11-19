@@ -14,8 +14,8 @@ import 'tunnel.dart';
 ///
 /// "Option A": the app always *connects* to the configured address (an IP,
 /// e.g. 10.10.10.254) but checks the TLS certificate against the configured
-/// certificate name (e.g. router.cybervulcan.com, covered by a Let's Encrypt
-/// `*.cybervulcan.com` certificate) using the normal system CAs. An optional
+/// certificate name (e.g. router.example.com, covered by a Let's Encrypt
+/// `*.example.com` certificate) using the normal system CAs. An optional
 /// SHA-256 pin replaces the CA check for self-signed certificates. If the
 /// check fails the connection is dropped before any HTTP is sent, so the API
 /// key never leaves the device.

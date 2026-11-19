@@ -183,7 +183,7 @@ class _SetupWizardState extends State<SetupWizard> {
                 controller: _address,
                 decoration: const InputDecoration(
                   labelText: 'Router URL',
-                  helperText: 'e.g. https://router.cybervulcan.com (or the router\'s IP)',
+                  helperText: 'e.g. https://router.example.com (or the router\'s IP)',
                 ),
                 validator: validateRouterAddress,
                 onChanged: (_) => setState(() {}),
@@ -194,7 +194,7 @@ class _SetupWizardState extends State<SetupWizard> {
                 decoration: const InputDecoration(
                   labelText: 'Certificate name',
                   helperText: 'The router\'s certificate must be valid for this name, e.g. '
-                      'router.cybervulcan.com. If not, the app refuses to connect and never sends '
+                      'router.example.com (empty = the address itself). If not, the app refuses to connect and never sends '
                       'your API key.',
                   helperMaxLines: 3,
                 ),

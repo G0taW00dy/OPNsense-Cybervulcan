@@ -59,21 +59,26 @@ final secrets = WireGuardSecrets(privateKey: generateWireGuardPrivateKey());
 
 void main() {
   group('RouterTarget (address vs certificate name)', () {
-    test('v2.0 default: the router URL is both the address and the certificate name', () {
-      final t = RouterTarget.fromConfig(const AppConfig())!;
-      expect(t.host, 'router.cybervulcan.com');
-      expect(t.tlsName, 'router.cybervulcan.com');
-      expect(t.requestBase.toString(), 'https://router.cybervulcan.com');
-      // Remote access still targets the LAN IP.
+    test('router URL as a name: address and certificate name are the same', () {
+      final t = RouterTarget.fromConfig(const AppConfig(baseUrl: 'https://router.example.com'))!;
+      expect(t.host, 'router.example.com');
+      expect(t.tlsName, 'router.example.com');
+      expect(t.requestBase.toString(), 'https://router.example.com');
+      // Remote access targets the LAN IP setting then.
+      expect(const AppConfig(baseUrl: 'https://router.example.com', routerLanIp: '10.10.10.254').routerTunnelIp,
+          '10.10.10.254');
+      // Neutral defaults: nobody's personal domain is built in.
+      expect(const AppConfig().certName, '');
       expect(const AppConfig().routerTunnelIp, '10.10.10.254');
     });
 
     test('connects to the IP, checks the certificate name, Host = name', () {
-      final t = RouterTarget.fromConfig(const AppConfig(baseUrl: 'https://10.10.10.254'))!;
+      final t = RouterTarget.fromConfig(
+          const AppConfig(baseUrl: 'https://10.10.10.254', certName: 'router.example.com'))!;
       expect(t.host, '10.10.10.254');
       expect(t.port, 443);
-      expect(t.tlsName, 'router.cybervulcan.com');
-      expect(t.requestBase.toString(), 'https://router.cybervulcan.com');
+      expect(t.tlsName, 'router.example.com');
+      expect(t.requestBase.toString(), 'https://router.example.com');
     });
 
     test('empty certificate name falls back to the address; custom port kept', () {

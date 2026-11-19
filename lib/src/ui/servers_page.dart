@@ -207,7 +207,7 @@ class _ServersPageState extends State<ServersPage> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text('City of ${s.name}'),
-        content: TextField(controller: ctl, decoration: const InputDecoration(labelText: 'City, e.g. San Jose')),
+        content: TextField(controller: ctl, decoration: const InputDecoration(labelText: 'City, e.g. Chicago')),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Skip')),
           FilledButton(onPressed: () => Navigator.pop(ctx, ctl.text.trim()), child: const Text('OK')),

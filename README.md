@@ -17,7 +17,7 @@ certificate by name, and can be set up by other people in the house
 
 | | Windows | Android |
 |---|---|---|
-| Live status: active Proton exit (San Jose main / LA backup / none), ping, loss and jitter per tunnel, "failover active" | yes | yes |
+| Live status: active VPN exit (main / backup / none), ping, loss and jitter per tunnel, "failover active" | yes | yes |
 | Alerts on failover, failback, both tunnels down (kill switch tripped), and bypass start/end | yes (toast, sender "Cybervulcan") | yes, while the app is running |
 | PC mode: this PC on VPN or CLEAR via `PCMODE_CLEAR` | yes | n/a |
 | Whole-house VPN bypass toggle via `BYPASS_ALL`, with auto-expiry and a countdown | yes | yes (app, widget, QS tile) |
@@ -29,23 +29,23 @@ Tray / status colours:
 
 | Colour | Meaning |
 |---|---|
-| green | Main tunnel (San Jose) up, kill switch armed |
-| amber | Failover active (LA backup in use), latency or loss on the active tunnel, or a change is in progress |
+| green | Main tunnel up, kill switch armed |
+| amber | Failover active (backup in use), latency or loss on the active tunnel, or a change is in progress |
 | red | Router unreachable, API error, kill switch rule missing, or both tunnels down (kill switch tripped) |
 | purple | Whole-house VPN bypass is active |
 | grey | Not set up yet |
 
 ## Router assumptions
 
-The defaults match this house. Everything can be changed in Settings.
+The defaults follow the suggested layout in [docs/ADMIN-SETUP.md](docs/ADMIN-SETUP.md). Everything can be changed in Settings (or handed over with *Share settings*).
 
 | Thing | Default |
 |---|---|
 | Router API | `https://10.10.10.254` (or `http://` during the VM phase - the app warns) |
-| Certificate name | `router.cybervulcan.com` (Let's Encrypt `*.cybervulcan.com`; the app connects to the IP and checks the certificate against this name) |
-| Remote access | WireGuard road-warrior instance on UDP `51830`, tunnel `10.10.99.0/24`, endpoint `home.cybervulcan.com` |
+| Certificate name | none by default - set it to your router's name, e.g. `router.example.com` (Let's Encrypt `*.example.com`) |
+| Remote access | WireGuard road-warrior instance on UDP `51830`, tunnel `10.10.99.0/24`, endpoint `home.example.com` |
 | Networks | MGMT 10.10.10.0/24, CLEAR (VLAN20) 10.10.20.0/24, VPN (VLAN40) 10.10.40.0/24, IOT (VLAN50) 10.10.50.0/24 |
-| Gateways | `WG_MAIN_GW` (US-CA#446 San Jose, monitor 1.0.0.1) and `WG_BACKUP_GW` (US-CA#1077 Los Angeles, monitor 8.8.4.4) in group `PROTON_FAILOVER` |
+| Gateways | `WG_MAIN_GW` and `WG_BACKUP_GW` (one VPN server each, own monitor IPs) in a failover gateway group |
 | Runtime aliases (type *External (advanced)*, empty after reboot) | `PCMODE_CLEAR` (PC goes direct), `BYPASS_ALL` (whole VPN network goes direct; NAT rules send its DNS to the router's Quad9 DoT resolver) |
 | Kill switch | WAN outbound block rule matching tag `NO_WAN_EGRESS` |
 

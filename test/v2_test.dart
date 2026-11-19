@@ -12,6 +12,7 @@ import 'package:opnsense_cybervulcan/src/core/server_switcher.dart';
 import 'package:opnsense_cybervulcan/src/core/settings_transfer.dart';
 import 'package:opnsense_cybervulcan/src/core/storage.dart';
 import 'package:opnsense_cybervulcan/src/net/router_link.dart';
+import 'package:opnsense_cybervulcan/src/ui/settings_page.dart' show summariseReport;
 
 import 'connection_test.dart' show FakeTunnel;
 import 'fake_router.dart';
@@ -24,11 +25,11 @@ void main() {
   group('v2 config', () {
     test('new fields round-trip and default sensibly', () {
       const d = AppConfig();
-      expect(d.baseUrl, 'https://router.cybervulcan.com');
+      expect(d.baseUrl, 'https://10.10.10.254');
       expect(d.routerTunnelIp, '10.10.10.254');
       expect(d.externalTests, isTrue);
       expect(d.appLock, isFalse);
-      expect(d.serverCityList, ['San Jose', 'Los Angeles']);
+      expect(d.serverCityList, isEmpty);
       final c = d.copyWith(
         tailscaleEnabled: true,
         tailscaleAddress: '100.101.102.103',
@@ -59,7 +60,8 @@ void main() {
     test('router address as a name: tunnel goes to the LAN IP; IP address: to itself', () {
       expect(const AppConfig(baseUrl: 'https://10.10.10.1').routerTunnelIp, '10.10.10.1');
       expect(const AppConfig(baseUrl: 'https://router.example', routerLanIp: 'nope').routerTunnelIp, isNull);
-      expect(const AppConfig().routerAddressIsName, isTrue);
+      expect(const AppConfig().routerAddressIsName, isFalse);
+      expect(const AppConfig(baseUrl: 'https://router.example.com').routerAddressIsName, isTrue);
     });
 
     test('personal v2 preferences are not exported to other people', () {
@@ -70,7 +72,7 @@ void main() {
         expect(settings.containsKey(k), isFalse, reason: k);
       }
       expect(settings['tailscaleAddress'], isNotNull);
-      expect(settings['routerLanIp'], '10.10.10.254');
+      expect(settings.containsKey('routerLanIp'), isTrue);
     });
   });
 
@@ -292,6 +294,24 @@ Endpoint = 198.51.100.7:51820
       expect(decodeHistory('{bad'), isEmpty);
     });
 
+    test('bash.ws id parsing and bufferbloat grades', () {
+      expect(bashWsId(200, ' 1234567\n'), '1234567');
+      expect(bashWsId(200, '{"id": "98765"}'), '98765');
+      expect(() => bashWsId(200, '<html>Just a moment...</html>'), throwsA(isA<Exception>()));
+      expect(() => bashWsId(503, ''), throwsA(isA<Exception>()));
+      expect(bufferbloatGrade(3), 'A+');
+      expect(bufferbloatGrade(45), 'B');
+      expect(bufferbloatGrade(1400), 'F'); // the 5G line under load
+      expect(median([5, 1, 3]), 3);
+    });
+
+    test('connection report folds to a summary line', () {
+      const r = 'OK    Certificate valid\nOK    Gateway status\nOK    Bypass alias\n'
+          'SKIP  WireGuard peers: not granted (optional)\nSKIP  Unbound: not granted (optional)';
+      expect(summariseReport(r), '3 OK - 2 skipped (optional)');
+      expect(summariseReport('Saved. Connected to the router.'), isNull);
+    });
+
     test('outside checks are skipped when switched off', () async {
       final env = TestEnv(config: cfg.copyWith(externalTests: false), web: noHttp());
       final r = await runSecurityTest(allSecurityTests.firstWhere((t) => t.id == 'exit'), env);
@@ -321,16 +341,17 @@ Endpoint = 198.51.100.7:51820
         tunnel: FakeTunnel(),
         probe: (t, route, timeout) async {
           probed.add(route.host);
-          expect(t.tlsName, 'router.cybervulcan.com');
+          expect(t.tlsName, 'router.example.com');
           return ProbeResult(route.host == '100.101.102.103' ? ProbeKind.ok : ProbeKind.unreachable);
         },
       );
-      final cfg = const AppConfig().copyWith(tailscaleEnabled: true, tailscaleAddress: '100.101.102.103');
+      final cfg = const AppConfig(baseUrl: 'https://router.example.com')
+          .copyWith(tailscaleEnabled: true, tailscaleAddress: '100.101.102.103');
       final s = await link.check(cfg, const WireGuardSecrets());
       expect(s.state, LinkState.connected);
       expect(s.viaTailscale, isTrue);
       expect(s.remote, isTrue);
-      expect(probed, ['router.cybervulcan.com', '100.101.102.103']);
+      expect(probed, ['router.example.com', '100.101.102.103']);
       expect(link.routeFor(RouterTarget.fromConfig(cfg)!).host, '100.101.102.103');
       expect(s.describe(cfg), 'Connected via Tailscale');
     });

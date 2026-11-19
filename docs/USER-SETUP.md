@@ -24,7 +24,7 @@ The app opens a short setup:
    open the file. This fills in the router address, the certificate name and
    everything else.
 2. **Router** - normally already filled in: address `10.10.10.254` and
-   certificate name `router.cybervulcan.com`. The app connects to the address
+   certificate name `router.example.com`. The app connects to the address
    and checks that the router's certificate carries that name. If it does
    not, the app shows **"Wrong certificate - not your router"** and never
    sends your key.
