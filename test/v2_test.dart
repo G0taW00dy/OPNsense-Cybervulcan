@@ -16,7 +16,7 @@ import 'package:opnsense_cybervulcan/src/net/router_link.dart';
 import 'connection_test.dart' show FakeTunnel;
 import 'fake_router.dart';
 
-const _k1 = 'Q2N5YmVydnVsY2FuIHRlc3Qga2V5IG51bWJlciBvbmUhIT0=';
+const _k1 = 'Q3liZXJ2dWxjYW4gdGVzdCBrZXkgbnVtYmVyIG9uZSE=';
 
 String key(String c) => '${c * 43}=';
 
