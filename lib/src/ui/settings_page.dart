@@ -1,18 +1,20 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import '../api/opnsense_client.dart';
 import '../api/tls.dart';
-import 'dart:io';
-
+import '../core/bypass.dart';
 import '../core/client_factory.dart';
 import '../core/config.dart';
-import '../core/network_map.dart';
 import '../core/controller.dart';
-import '../core/bypass.dart';
+import '../core/network_map.dart';
+import '../core/schedule.dart';
 import '../core/settings_transfer.dart';
 import '../core/storage.dart';
 import '../core/updater.dart';
 import '../net/router_link.dart';
+import '../platform/app_lock.dart';
 import '../platform/autostart.dart';
 import 'format.dart';
 import 'help_page.dart';
@@ -43,7 +45,7 @@ List<NamedNetwork>? networksFromText(String text) {
 String? validateRouterAddress(String? v) {
   final u = Uri.tryParse(normaliseRouterAddress(v ?? ''));
   return u == null || u.host.isEmpty || !(u.scheme == 'http' || u.scheme == 'https')
-      ? 'e.g. https://10.10.10.254 or 10.10.10.254'
+      ? 'e.g. https://router.cybervulcan.com or https://10.10.10.254'
       : null;
 }
 
@@ -78,25 +80,29 @@ Future<List<String>> testRouterConnection(AppConfig cfg, ApiCredentials? creds) 
   }
   final client = buildRouterClient(cfg, creds);
   if (client == null) return [...lines, 'FAIL  Enter the API key and secret first'];
-  Future<void> run(String name, Future<Object?> Function() f) async {
+  Future<void> run(String name, Future<Object?> Function() f, {bool optional = false}) async {
     try {
       await f();
       lines.add('OK    $name');
     } on OpnsenseException catch (e) {
-      lines.add('${e.kind == ApiErrorKind.forbidden ? 'NO PRIVILEGE' : 'FAIL'}  $name: ${e.message}');
+      final tag = e.kind == ApiErrorKind.forbidden ? (optional ? 'SKIP ' : 'NO PRIVILEGE') : 'FAIL';
+      lines.add('$tag  $name: ${e.kind == ApiErrorKind.forbidden && optional ? 'not granted (optional)' : e.message}');
     }
   }
 
   await run('Gateway status', client.gatewayStatus);
   await run('Bypass alias ${cfg.bypassAlias}', () => client.aliasList(cfg.bypassAlias));
-  await run('PC mode alias ${cfg.pcModeAlias}', () => client.aliasList(cfg.pcModeAlias));
-  await run('DHCP leases (optional)', client.dnsmasqLeases);
-  await run('Kill switch rule search (optional)', () => client.searchRules(cfg.killSwitchTag));
+  await run('CLEAR alias ${cfg.pcModeAlias}', () => client.aliasList(cfg.pcModeAlias));
+  await run('DHCP leases (devices, new-device alerts)', client.dnsmasqLeases, optional: true);
+  await run('Kill switch rule search', () => client.searchRules(cfg.killSwitchTag), optional: true);
+  await run('WireGuard peers (server switcher)', client.wgPeers, optional: !cfg.serverSwitcherEnabled);
+  await run('Unbound DNS-over-TLS (Tests page)', client.dotServers, optional: true);
   client.close();
   return lines;
 }
 
-/// First-run setup and settings. Secrets go to OS secure storage only.
+/// v2.0 settings: fold-out sections, a "?" with a plain explanation next to
+/// every field, Save / Test always at hand. Secrets go to secure storage only.
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key, required this.controller, this.firstRun = false, this.updates});
 
@@ -107,6 +113,8 @@ class SettingsPage extends StatefulWidget {
   @override
   State<SettingsPage> createState() => _SettingsPageState();
 }
+
+enum _Remote { off, wireguard, tailscale }
 
 class _SettingsPageState extends State<SettingsPage> {
   final _form = GlobalKey<FormState>();
@@ -119,40 +127,35 @@ class _SettingsPageState extends State<SettingsPage> {
   String? _message;
   bool _messageIsError = false;
   bool? _autostart; // null = unknown / not Windows
+  bool? _tailscaleHere;
+  bool _dirty = false;
+
+  CybervulcanController get c => widget.controller;
 
   @override
   void initState() {
     super.initState();
-    _cfg = widget.controller.config;
+    _cfg = c.config;
     if (WindowsAutostart.supported) {
       WindowsAutostart.isEnabled().then((v) {
         if (mounted) setState(() => _autostart = v);
       });
     }
-    _t = {
-      'baseUrl': TextEditingController(text: _cfg.baseUrl),
-      'certName': TextEditingController(text: _cfg.certName),
-      'vpnName': TextEditingController(text: _cfg.vpnName),
-      'directLabel': TextEditingController(text: _cfg.directLabel),
-      'directNetworkName': TextEditingController(text: _cfg.directNetworkName),
-      'networks': TextEditingController(text: networksToText(_cfg.networks)),
-      'mainGateway': TextEditingController(text: _cfg.mainGateway),
-      'backupGateway': TextEditingController(text: _cfg.backupGateway),
-      'mainLabel': TextEditingController(text: _cfg.mainLabel),
-      'backupLabel': TextEditingController(text: _cfg.backupLabel),
-      'pcModeAlias': TextEditingController(text: _cfg.pcModeAlias),
-      'bypassAlias': TextEditingController(text: _cfg.bypassAlias),
-      'bypassNetwork': TextEditingController(text: _cfg.bypassNetwork),
-      'bypassMinutes': TextEditingController(
-          text: isNoLimitDuration(_cfg.bypassDuration) ? '0' : '${_cfg.bypassDuration.inMinutes}'),
-      'pcIpOverride': TextEditingController(text: _cfg.pcIpOverride ?? ''),
-      'killSwitchTag': TextEditingController(text: _cfg.killSwitchTag),
-      'killSwitchRuleUuid': TextEditingController(text: _cfg.killSwitchRuleUuid ?? ''),
-      'pollSeconds': TextEditingController(text: '${_cfg.pollInterval.inSeconds}'),
-      'homeCountryCode': TextEditingController(text: _cfg.homeCountryCode),
-      'vpnCountryCode': TextEditingController(text: _cfg.vpnCountryCode),
-    };
+    tailscaleActiveOnDevice().then((v) {
+      if (mounted) setState(() => _tailscaleHere = v);
+    });
+    _t = {for (final k in _textKeys) k: TextEditingController()};
+    _reload();
+    _dirty = false;
   }
+
+  static const _textKeys = [
+    'baseUrl', 'certName', 'routerLanIp', 'vpnName', 'directLabel', 'directNetworkName', 'networks',
+    'mainGateway', 'backupGateway', 'mainLabel', 'backupLabel', 'pcModeAlias', 'bypassAlias',
+    'bypassNetwork', 'bypassMinutes', 'pcIpOverride', 'killSwitchTag', 'killSwitchRuleUuid',
+    'pollSeconds', 'homeCountryCode', 'vpnCountryCode', 'tailscaleAddress', 'mainWgInstance',
+    'backupWgInstance', 'serverCities', 'schedStart', 'schedMinutes',
+  ];
 
   @override
   void dispose() {
@@ -169,6 +172,7 @@ class _SettingsPageState extends State<SettingsPage> {
   AppConfig _collect() => _cfg.copyWith(
         baseUrl: normaliseRouterAddress(_v('baseUrl')),
         certName: _v('certName'),
+        routerLanIp: _v('routerLanIp'),
         vpnName: _v('vpnName'),
         directLabel: _v('directLabel'),
         directNetworkName: _v('directNetworkName'),
@@ -193,7 +197,58 @@ class _SettingsPageState extends State<SettingsPage> {
         pollInterval: Duration(seconds: int.tryParse(_v('pollSeconds')) ?? 15),
         homeCountryCode: _v('homeCountryCode').toUpperCase(),
         vpnCountryCode: _v('vpnCountryCode').toUpperCase(),
+        tailscaleAddress: _v('tailscaleAddress'),
+        mainWgInstance: _v('mainWgInstance'),
+        backupWgInstance: _v('backupWgInstance'),
+        serverCities: _v('serverCities'),
+        schedStart: _v('schedStart'),
+        schedMinutes: int.tryParse(_v('schedMinutes')) ?? 180,
       );
+
+  /// Refills every text field from [_cfg] (start, after an import).
+  void _reload() {
+    final cfg = _cfg;
+    final m = {
+      'baseUrl': cfg.baseUrl,
+      'certName': cfg.certName,
+      'routerLanIp': cfg.routerLanIp,
+      'vpnName': cfg.vpnName,
+      'directLabel': cfg.directLabel,
+      'directNetworkName': cfg.directNetworkName,
+      'networks': networksToText(cfg.networks),
+      'mainGateway': cfg.mainGateway,
+      'backupGateway': cfg.backupGateway,
+      'mainLabel': cfg.mainLabel,
+      'backupLabel': cfg.backupLabel,
+      'pcModeAlias': cfg.pcModeAlias,
+      'bypassAlias': cfg.bypassAlias,
+      'bypassNetwork': cfg.bypassNetwork,
+      'bypassMinutes': isNoLimitDuration(cfg.bypassDuration) ? '0' : '${cfg.bypassDuration.inMinutes}',
+      'pcIpOverride': cfg.pcIpOverride ?? '',
+      'killSwitchTag': cfg.killSwitchTag,
+      'killSwitchRuleUuid': cfg.killSwitchRuleUuid ?? '',
+      'pollSeconds': '${cfg.pollInterval.inSeconds}',
+      'homeCountryCode': cfg.homeCountryCode,
+      'vpnCountryCode': cfg.vpnCountryCode,
+      'tailscaleAddress': cfg.tailscaleAddress,
+      'mainWgInstance': cfg.mainWgInstance,
+      'backupWgInstance': cfg.backupWgInstance,
+      'serverCities': cfg.serverCities,
+      'schedStart': cfg.schedStart,
+      'schedMinutes': '${cfg.schedMinutes}',
+    };
+    for (final e in m.entries) {
+      _t[e.key]!.text = e.value;
+    }
+    _remoteGen++;
+  }
+
+  int _remoteGen = 0;
+
+  void _set(AppConfig cfg) => setState(() {
+        _cfg = cfg;
+        _dirty = true;
+      });
 
   ApiCredentials? _newCreds() {
     final k = _apiKey.text.trim();
@@ -207,34 +262,40 @@ class _SettingsPageState extends State<SettingsPage> {
       });
 
   Future<void> _save() async {
-    if (!_form.currentState!.validate()) return;
+    if (!_form.currentState!.validate()) {
+      _say('Some fields need fixing - look for the red text in the open sections.', error: true);
+      return;
+    }
     final creds = _newCreds();
     if (creds != null && !creds.isComplete) {
       _say('Enter both the API key and the API secret.', error: true);
       return;
     }
-    if (!widget.controller.hasCredentials && creds == null) {
+    if (!c.hasCredentials && creds == null) {
       _say('API key and secret are required.', error: true);
       return;
     }
+    // Saving can loosen protection (e.g. turn the app lock off): ask first.
+    if (c.config.appLock && !await c.authorize('Save Cybervulcan settings')) return;
     setState(() => _busy = true);
-    await widget.controller.saveSettings(_collect(), credentials: creds);
+    await c.saveSettings(_collect(), credentials: creds);
     if (!mounted) return;
     _apiKey.clear();
     _apiSecret.clear();
-    _cfg = widget.controller.config;
-    setState(() => _busy = false);
-    final s = widget.controller.snapshot;
-    final err = s.error;
-    _say(err == null ? 'Saved. Connected to the router.' : 'Saved, but: ${errorHint(err)}',
-        error: err != null);
+    _cfg = c.config;
+    setState(() {
+      _busy = false;
+      _dirty = false;
+    });
+    final err = c.snapshot.error;
+    _say(err == null ? 'Saved. Connected to the router.' : 'Saved, but: ${errorHint(err)}', error: err != null);
   }
 
   /// Trust-on-first-use for a self-signed router certificate.
   Future<void> _trustCertificate() async {
     final uri = Uri.tryParse(normaliseRouterAddress(_v('baseUrl')));
     if (uri == null || uri.scheme != 'https' || uri.host.isEmpty) {
-      _say('Certificate pinning only applies to an https:// base URL.', error: true);
+      _say('Certificate pinning only applies to an https:// address.', error: true);
       return;
     }
     setState(() => _busy = true);
@@ -245,28 +306,21 @@ class _SettingsPageState extends State<SettingsPage> {
       _say('Could not read a TLS certificate from ${uri.host}.', error: true);
       return;
     }
-    if (!mounted) return;
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Trust this router certificate?'),
         content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('Compare the SHA-256 fingerprint with the one shown on the router '
-                  '(System > Trust > Certificates, or the browser\'s certificate viewer) '
-                  'before trusting it.'),
-              const SizedBox(height: 12),
-              SelectableText(cert.fingerprint,
-                  style: const TextStyle(fontFamily: 'monospace', fontSize: 13)),
-              const SizedBox(height: 12),
-              Text('Subject: ${cert.subject}'),
-              Text('Issuer: ${cert.issuer}'),
-              Text('Valid: ${cert.validFrom.toLocal()} - ${cert.validTo.toLocal()}'),
-            ],
-          ),
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Compare the SHA-256 fingerprint with the one shown on the router '
+                '(System > Trust > Certificates, or the browser\'s certificate viewer) before trusting it.'),
+            const SizedBox(height: 12),
+            SelectableText(cert.fingerprint, style: const TextStyle(fontFamily: 'monospace', fontSize: 13)),
+            const SizedBox(height: 12),
+            Text('Subject: ${cert.subject}'),
+            Text('Issuer: ${cert.issuer}'),
+            Text('Valid: ${cert.validFrom.toLocal()} - ${cert.validTo.toLocal()}'),
+          ]),
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
@@ -275,13 +329,13 @@ class _SettingsPageState extends State<SettingsPage> {
       ),
     );
     if (ok != true) return;
-    _cfg = _cfg.copyWith(pinnedCertSha256: cert.fingerprint);
+    _set(_cfg.copyWith(pinnedCertSha256: cert.fingerprint));
     _say('Certificate pinned. Press Save to apply.');
   }
 
   Future<void> _testConnection() async {
     if (!_form.currentState!.validate()) return;
-    final creds = _newCreds() ?? await widget.controller.secrets.read();
+    final creds = _newCreds() ?? await c.secrets.read();
     if (!mounted) return;
     setState(() => _busy = true);
     final results = await testRouterConnection(_collect(), creds);
@@ -300,8 +354,8 @@ class _SettingsPageState extends State<SettingsPage> {
           width: 520,
           child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
             const Text('Everything except secrets: no API key or secret, no WireGuard private or '
-                'pre-shared key. The other person enters their own API key and makes their own '
-                'WireGuard key on their device.'),
+                'pre-shared key, and none of your personal preferences. The other person enters '
+                'their own API key and makes their own WireGuard key on their device.'),
             const SizedBox(height: 12),
             ConstrainedBox(
               constraints: const BoxConstraints(maxHeight: 260),
@@ -314,8 +368,7 @@ class _SettingsPageState extends State<SettingsPage> {
         actions: [
           TextButton(onPressed: () => copyText(ctx, text, 'Settings copied'), child: const Text('Copy')),
           TextButton(
-            onPressed: () => showQrDialog(ctx,
-                title: 'Settings (no secrets)', text: exportSettings(_collect(), pretty: false)),
+            onPressed: () => showQrDialog(ctx, title: 'Settings (no secrets)', text: exportSettings(_collect(), pretty: false)),
             child: const Text('QR'),
           ),
           if (Platform.isWindows)
@@ -335,13 +388,13 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   Future<void> _import() async {
-    final text = await pasteOrOpenText(context,
-        title: 'Import settings', hint: 'Paste the settings text you were given (JSON).');
+    final text = await pasteOrOpenText(context, title: 'Import settings', hint: 'Paste the settings text you were given (JSON).');
     if (text == null || text.trim().isEmpty || !mounted) return;
     try {
       final r = importSettings(text, _collect());
       setState(() {
         _cfg = r.config;
+        _dirty = true;
         _reload();
       });
       _say([
@@ -354,44 +407,52 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
-  /// Refills every text field from [_cfg] (after an import).
-  void _reload() {
-    _t['baseUrl']!.text = _cfg.baseUrl;
-    _t['certName']!.text = _cfg.certName;
-    _t['vpnName']!.text = _cfg.vpnName;
-    _t['directLabel']!.text = _cfg.directLabel;
-    _t['directNetworkName']!.text = _cfg.directNetworkName;
-    _t['networks']!.text = networksToText(_cfg.networks);
-    _t['mainGateway']!.text = _cfg.mainGateway;
-    _t['backupGateway']!.text = _cfg.backupGateway;
-    _t['mainLabel']!.text = _cfg.mainLabel;
-    _t['backupLabel']!.text = _cfg.backupLabel;
-    _t['pcModeAlias']!.text = _cfg.pcModeAlias;
-    _t['bypassAlias']!.text = _cfg.bypassAlias;
-    _t['bypassNetwork']!.text = _cfg.bypassNetwork;
-    _t['bypassMinutes']!.text =
-        isNoLimitDuration(_cfg.bypassDuration) ? '0' : '${_cfg.bypassDuration.inMinutes}';
-    _t['killSwitchTag']!.text = _cfg.killSwitchTag;
-    _t['killSwitchRuleUuid']!.text = _cfg.killSwitchRuleUuid ?? '';
-    _t['pollSeconds']!.text = '${_cfg.pollInterval.inSeconds}';
-    _t['homeCountryCode']!.text = _cfg.homeCountryCode;
-    _t['vpnCountryCode']!.text = _cfg.vpnCountryCode;
-    _remoteGen++;
+  Future<void> _toggleAppLock(bool on) async {
+    if (on) {
+      final lock = AppLock();
+      if (!await lock.supported()) {
+        _say(Platform.isWindows
+            ? 'Windows Hello (PIN, fingerprint or face) is not set up on this PC. Set it up in Windows Settings > Accounts > Sign-in options first.'
+            : 'This phone has no screen lock. Set a PIN, pattern or fingerprint in Android Settings first.',
+            error: true);
+        return;
+      }
+      if (!await lock.authorize('Turn on the Cybervulcan app lock')) return;
+    }
+    _set(_cfg.copyWith(appLock: on));
   }
 
-  int _remoteGen = 0;
+  // ------------------------------------------------------------- widgets
 
   Widget _field(String key, String label,
-          {String? help, String? Function(String?)? validator, bool number = false, ValueChanged<String>? onChanged}) =>
+          {String? help, String? hint, String? note, String? Function(String?)? validator, bool number = false}) =>
       Padding(
         padding: const EdgeInsets.only(bottom: 12),
         child: TextFormField(
           controller: _t[key],
-          decoration: InputDecoration(labelText: label, helperText: help, helperMaxLines: 3),
+          decoration: InputDecoration(
+            labelText: label,
+            hintText: hint,
+            helperText: note,
+            helperMaxLines: 3,
+            suffixIcon: help == null ? null : HelpButton(title: label, text: help),
+          ),
           keyboardType: number ? TextInputType.number : TextInputType.text,
           validator: validator,
-          onChanged: onChanged,
+          onChanged: (_) => setState(() => _dirty = true),
         ),
+      );
+
+  Widget _switch(String title, bool value, ValueChanged<bool> onChanged, {String? subtitle, String? help}) =>
+      SwitchListTile(
+        contentPadding: EdgeInsets.zero,
+        title: Row(children: [
+          Flexible(child: Text(title)),
+          if (help != null) HelpButton(title: title, text: help, small: true),
+        ]),
+        subtitle: subtitle == null ? null : Text(subtitle),
+        value: value,
+        onChanged: onChanged,
       );
 
   String? _required(String? v) => (v == null || v.trim().isEmpty) ? 'Required' : null;
@@ -399,68 +460,69 @@ class _SettingsPageState extends State<SettingsPage> {
   String? _alias(String? v) =>
       RegExp(r'^[A-Za-z0-9_]{1,32}$').hasMatch(v?.trim() ?? '') ? null : 'Letters, digits, _ only';
 
+  _Remote get _remote => _cfg.tailscaleEnabled
+      ? _Remote.tailscale
+      : _cfg.remoteEnabled
+          ? _Remote.wireguard
+          : _Remote.off;
+
   @override
   Widget build(BuildContext context) {
     final t = Theme.of(context).textTheme;
-    final hasCreds = widget.controller.hasCredentials;
-    return Form(
-      key: _form,
-      child: ListView(
-        padding: const EdgeInsets.all(16),
+    final hasCreds = c.hasCredentials;
+    final isPhone = Platform.isAndroid;
+    final deviceNoun = isPhone ? 'phone' : 'PC';
+    final routerSummary = [
+      normaliseRouterAddress(_v('baseUrl')),
+      hasCreds ? 'API key stored' : 'no API key',
+    ].join(' - ');
+
+    final sections = <Widget>[
+      // 1 ------------------------------------------------------------ router
+      SettingsSection(
+        icon: Icons.router_outlined,
+        title: 'Router connection',
+        summary: routerSummary,
+        initiallyExpanded: widget.firstRun || !hasCreds,
         children: [
-          Align(
-            alignment: Alignment.centerRight,
-            child: OutlinedButton.icon(
-              onPressed: () => openSetupGuide(context),
-              icon: const Icon(Icons.help_outline),
-              label: const Text('Setup guide'),
+          _field('baseUrl', 'Router URL',
+              hint: 'https://router.cybervulcan.com',
+              help: 'Where the app finds your router. Use the router\'s name '
+                  '(https://router.cybervulcan.com): its Let\'s Encrypt certificate is then checked '
+                  'normally and the same address works at home and through remote access. An IP '
+                  '(https://10.10.10.254) works too.',
+              validator: validateRouterAddress),
+          if (normaliseRouterAddress(_v('baseUrl')) != 'https://$defaultCertName' &&
+              (Uri.tryParse(normaliseRouterAddress(_v('baseUrl')))?.host ?? '') != defaultCertName)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: () => setState(() {
+                  _t['baseUrl']!.text = 'https://$defaultCertName';
+                  if (_v('certName').isEmpty) _t['certName']!.text = defaultCertName;
+                  _dirty = true;
+                }),
+                icon: const Icon(Icons.auto_fix_high, size: 18),
+                label: const Text('Use https://$defaultCertName'),
+              ),
             ),
-          ),
-          if (widget.firstRun) ...[
-            Text('Welcome to Cybervulcan', style: t.headlineSmall),
-            const SizedBox(height: 8),
-            const Text('Connect to your OPNsense router with your own API key (from the router admin). '
-                'See the setup guide for the privileges it needs.'),
-            const SizedBox(height: 16),
-          ],
-          _section('Router'),
-          _field('baseUrl', 'Router address',
-              help: 'The app connects here, e.g. https://10.10.10.254',
-              validator: validateRouterAddress,
-              onChanged: (_) => setState(() {})),
-          _field('certName', 'Certificate name',
-              help: 'The router\'s certificate must be valid for this name (e.g. router.cybervulcan.com). '
-                  'If it is not, the app refuses to connect and never sends the API key. '
-                  'Leave empty to check the certificate against the address (or use a pin).',
-              validator: validateCertName),
           if (normaliseRouterAddress(_v('baseUrl')).startsWith('http://'))
-            const _Warning('Plain http:// sends the API key unencrypted and cannot prove this is '
-                'your router. Use https:// once the router has its certificate.'),
-          Row(children: [
-            Expanded(
-              child: Text(
-                _cfg.pinnedCertSha256 == null
-                    ? 'No pinned certificate (only CA-trusted certificates are accepted).'
-                    : 'Pinned SHA-256: ${_cfg.pinnedCertSha256}',
-                style: t.bodySmall,
-              ),
-            ),
-            TextButton(onPressed: _busy ? null : _trustCertificate, child: const Text('Trust certificate...')),
-            if (_cfg.pinnedCertSha256 != null)
-              TextButton(
-                onPressed: () => setState(() => _cfg = _cfg.copyWith(clearPin: true)),
-                child: const Text('Forget'),
-              ),
-          ]),
-          const SizedBox(height: 12),
+            const WarningLine('Plain http:// sends the API key unencrypted and cannot prove this is your router. '
+                'Use https:// once the router has its certificate.'),
           TextFormField(
             controller: _apiKey,
             decoration: InputDecoration(
               labelText: 'API key',
               helperText: hasCreds ? 'Stored securely. Leave blank to keep the current key.' : null,
+              suffixIcon: const HelpButton(
+                  title: 'API key',
+                  text: 'Your own key for the router (System > Access > Users > your app user > API keys). '
+                      'One user per person, e.g. tim-app / kate-app, with only the privileges the app needs. '
+                      'Kept in Windows Credential Manager / the Android Keystore, never shown again or exported.'),
             ),
             autocorrect: false,
             enableSuggestions: false,
+            onChanged: (_) => setState(() => _dirty = true),
           ),
           const SizedBox(height: 12),
           TextFormField(
@@ -468,6 +530,7 @@ class _SettingsPageState extends State<SettingsPage> {
             obscureText: !_showSecret,
             autocorrect: false,
             enableSuggestions: false,
+            onChanged: (_) => setState(() => _dirty = true),
             decoration: InputDecoration(
               labelText: 'API secret',
               suffixIcon: IconButton(
@@ -480,65 +543,350 @@ class _SettingsPageState extends State<SettingsPage> {
             Align(
               alignment: Alignment.centerLeft,
               child: TextButton.icon(
-                onPressed: _busy ? null : () async {
-                  await widget.controller.forgetCredentials();
-                  if (mounted) setState(() {});
-                },
+                onPressed: _busy
+                    ? null
+                    : () async {
+                        await c.forgetCredentials();
+                        if (mounted) setState(() {});
+                      },
                 icon: const Icon(Icons.delete_outline),
                 label: const Text('Forget stored API key'),
               ),
             ),
-          const SizedBox(height: 8),
-          _section('VPN gateways (main / backup)'),
+          const SizedBox(height: 4),
+          SubSection(title: 'Certificate & remote target', children: [
+            _field('certName', 'Certificate name',
+                help: 'The router\'s certificate must be valid for this name. If it is not, the app refuses '
+                    'to connect and never sends the API key - protection against a fake router. Leave '
+                    'empty to check against the router URL itself (or use a pin).',
+                validator: validateCertName),
+            Row(children: [
+              Expanded(
+                child: Text(
+                  _cfg.pinnedCertSha256 == null
+                      ? 'No pinned certificate (CA-trusted certificates only).'
+                      : 'Pinned SHA-256: ${_cfg.pinnedCertSha256}',
+                  style: t.bodySmall,
+                ),
+              ),
+              TextButton(onPressed: _busy ? null : _trustCertificate, child: const Text('Pin...')),
+              if (_cfg.pinnedCertSha256 != null)
+                TextButton(onPressed: () => _set(_cfg.copyWith(clearPin: true)), child: const Text('Forget')),
+            ]),
+            const SizedBox(height: 8),
+            _field('routerLanIp', 'Router LAN IP',
+                help: 'The router\'s address inside the house (10.10.10.254). Remote access through '
+                    'WireGuard needs an IP to reach, even when the router URL is a name.',
+                validator: (v) => ipv4ToInt(v ?? '') != null ? null : 'IPv4 address, e.g. 10.10.10.254'),
+          ]),
+        ],
+      ),
+
+      // 2 ----------------------------------------------------------- tunnels
+      SettingsSection(
+        icon: Icons.vpn_lock_outlined,
+        title: 'VPN tunnels & servers',
+        summary: '${_cfg.mainLabel} main, ${_cfg.backupLabel} backup'
+            '${_cfg.serverSwitcherEnabled ? ' - server switcher on' : ''}',
+        children: [
+          _field('vpnName', 'VPN provider name',
+              help: 'Only used in texts, e.g. "back on Proton".', validator: _required),
           Row(children: [
-            Expanded(child: _field('mainGateway', 'Main gateway', validator: _required)),
+            Expanded(
+                child: _field('mainGateway', 'Main gateway',
+                    help: 'Gateway name on the router (System > Gateways), e.g. WG_MAIN_GW.', validator: _required)),
             const SizedBox(width: 12),
-            Expanded(child: _field('mainLabel', 'Label', validator: _required)),
+            Expanded(child: _field('mainLabel', 'Shown as', help: 'Friendly name, e.g. San Jose.', validator: _required)),
           ]),
           Row(children: [
-            Expanded(child: _field('backupGateway', 'Backup gateway', validator: _required)),
+            Expanded(
+                child: _field('backupGateway', 'Backup gateway',
+                    help: 'The failover gateway, e.g. WG_BACKUP_GW.', validator: _required)),
             const SizedBox(width: 12),
-            Expanded(child: _field('backupLabel', 'Label', validator: _required)),
+            Expanded(child: _field('backupLabel', 'Shown as', help: 'e.g. Los Angeles.', validator: _required)),
           ]),
-          _section('Bypass & PC mode'),
-          _field('bypassAlias', 'Whole-house bypass alias', validator: _alias),
-          _field('bypassNetwork', 'VPN network to bypass',
-              validator: (v) {
-                final net = Ipv4Subnet.tryParse(v ?? '');
-                if (net == null || !(v ?? '').contains('/')) return 'CIDR, e.g. 10.10.40.0/24';
-                // A short prefix (e.g. 0.0.0.0/0 or /8) would take far more than the
-                // VPN VLAN off Proton and make kill_states reset most connections.
-                if (net.prefix < 16) return 'Prefix must be /16 or longer';
-                return null;
-              }),
-          _field('bypassMinutes', 'Default bypass length (minutes)', number: true,
-              help: '0 = no time limit (stays off until someone turns it off). You can still pick a length each time.',
+          _switch('Proton server switcher', _cfg.serverSwitcherEnabled, (v) => _set(_cfg.copyWith(serverSwitcherEnabled: v)),
+              subtitle: 'Change the exit city from the app, or let it find the fastest server.',
+              help: 'Adds a "VPN servers" card to Status. It changes which Proton server each tunnel '
+                  'connects to (address + the server\'s public key). The router\'s private keys never '
+                  'leave the router.\n\nNeeds the router privilege "VPN: WireGuard" on YOUR app user '
+                  'only (not Kate\'s). Note: that privilege can also read the WireGuard keys, so keep the '
+                  'app lock on.'),
+          if (_cfg.serverSwitcherEnabled) ...[
+            Row(children: [
+              Expanded(
+                  child: _field('mainWgInstance', 'Main instance',
+                      help: 'WireGuard instance behind the main gateway (VPN > WireGuard > Instances), '
+                          'e.g. Proton_VPN_Main.',
+                      validator: _required)),
+              const SizedBox(width: 12),
+              Expanded(
+                  child: _field('backupWgInstance', 'Backup instance',
+                      help: 'Instance behind the backup gateway, e.g. Proton_VPN_Failover. "Find best" tests '
+                          'candidates on this one, so the house never loses its main tunnel while testing.',
+                      validator: _required)),
+            ]),
+            _field('serverCities', 'Cities to choose from',
+                help: 'Comma-separated Proton cities "find best" may pick, e.g. "San Jose, Los Angeles". '
+                    'Keeps streaming regions predictable.',
+                hint: 'San Jose, Los Angeles'),
+            _switch('Find the best server every night', _cfg.autoBestNightly,
+                (v) => _set(_cfg.copyWith(autoBestNightly: v)),
+                subtitle: 'Between 3 and 5 am, while this app is running (best on the always-on PC).',
+                help: 'Tests a few servers on the backup tunnel, then moves the fastest to main if it is '
+                    'clearly better (at least 10 %). Takes about 5 minutes. You get a notification with the result.'),
+          ],
+        ],
+      ),
+
+      // 3 ------------------------------------------------- bypass & device
+      SettingsSection(
+        icon: Icons.public_off_outlined,
+        title: 'Bypass & $deviceNoun mode',
+        summary: 'Default ${isNoLimitDuration(_cfg.bypassDuration) ? 'no limit' : '${_cfg.bypassDuration.inMinutes} min'}'
+            ' - schedule: ${describeSchedule(_cfg)}',
+        children: [
+          _field('bypassMinutes', 'Default bypass length (minutes)',
+              number: true,
+              help: 'How long the whole-house bypass lasts unless you pick another length. 0 = no time limit '
+                  '(stays off the VPN until someone turns it back on).',
               validator: (v) {
                 final n = int.tryParse(v ?? '');
                 return n != null && (n == 0 || n >= 5) ? null : '0, or at least 5';
               }),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('Store bypass deadline on the router'),
-            subtitle: const Text('Adds a marker entry (240.x.x.x) to the bypass table so every '
-                'device enforces the same expiry. Harmless: that range never appears on the LAN.'),
-            value: _cfg.useExpiryMarker,
-            onChanged: (v) => setState(() => _cfg = _cfg.copyWith(useExpiryMarker: v)),
-          ),
+          _switch('Store the deadline on the router', _cfg.useExpiryMarker, (v) => _set(_cfg.copyWith(useExpiryMarker: v)),
+              help: 'Adds a marker (240.x.x.x) to the bypass table so the router\'s own timer ends the bypass '
+                  'on time even when every app is closed. Harmless: that range never appears on the LAN.'),
           if (!_cfg.useExpiryMarker)
-            const _Warning('Off: the router-side timer can\'t see the deadline, so a bypass only '
-                'ends while a Cybervulcan app is running. Leave this on unless you have a reason.'),
-          _field('pcModeAlias', 'PC mode (CLEAR) alias', validator: _alias),
-          _field('pcIpOverride', 'This PC\'s IP (blank = auto-detect)',
-              validator: (v) => (v == null || v.trim().isEmpty || ipv4ToInt(v) != null) ? null : 'IPv4 address'),
-          _section('Names and networks'),
-          Row(children: [
-            Expanded(child: _field('vpnName', 'VPN provider name', validator: _required)),
-            const SizedBox(width: 12),
-            Expanded(child: _field('directLabel', 'Label while bypassed', validator: _required)),
+            const WarningLine('Off: the bypass only ends while a Cybervulcan app is running. Leave this on.'),
+          SubSection(title: 'Scheduled bypass', children: [
+            _switch('Bypass on a schedule', _cfg.schedBypassEnabled, (v) => _set(_cfg.copyWith(schedBypassEnabled: v)),
+                help: 'Turns the whole-house bypass on automatically, e.g. for TV in the evening, and lets the '
+                    'normal timer end it. Runs from this device while the app is running.'),
+            if (_cfg.schedBypassEnabled) ...[
+              Wrap(spacing: 6, runSpacing: 6, children: [
+                for (var d = 1; d <= 7; d++)
+                  FilterChip(
+                    label: Text(weekdayShort[d - 1]),
+                    selected: _cfg.schedDays & weekdayBit(d) != 0,
+                    onSelected: (on) => _set(_cfg.copyWith(
+                        schedDays: on ? _cfg.schedDays | weekdayBit(d) : _cfg.schedDays & ~weekdayBit(d))),
+                  ),
+              ]),
+              const SizedBox(height: 12),
+              Row(children: [
+                Expanded(
+                  child: _field('schedStart', 'Start (24 h)',
+                      hint: '19:00',
+                      help: 'Local time the bypass starts, e.g. 19:00.',
+                      validator: (v) => parseClock(v ?? '') == null ? 'HH:MM' : null),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: _field('schedMinutes', 'Length (minutes)',
+                      number: true,
+                      help: 'How long it stays on, e.g. 180 for 3 hours.',
+                      validator: (v) => (int.tryParse(v ?? '') ?? 0) >= 5 ? null : 'At least 5'),
+                ),
+              ]),
+              if (_cfg.schedDays == 0) const WarningLine('Pick at least one day.'),
+            ],
           ]),
-          _field('directNetworkName', 'Direct (clear) network name',
-              help: 'Which network below always goes straight out (for PC IP detection and tests).'),
+          SubSection(title: 'Router aliases', children: [
+            _field('bypassAlias', 'Whole-house bypass alias',
+                help: 'The router table the app fills to send the VPN network direct (BYPASS_ALL).', validator: _alias),
+            _field('bypassNetwork', 'VPN network to bypass',
+                help: 'The network the bypass applies to, e.g. 10.10.40.0/24.',
+                validator: (v) {
+                  final net = Ipv4Subnet.tryParse(v ?? '');
+                  if (net == null || !(v ?? '').contains('/')) return 'CIDR, e.g. 10.10.40.0/24';
+                  if (net.prefix < 16) return 'Prefix must be /16 or longer';
+                  return null;
+                }),
+            _field('pcModeAlias', 'CLEAR alias',
+                help: 'Router table for single devices that go direct (PCMODE_CLEAR). Used by "This PC" and "This phone".',
+                validator: _alias),
+            _field('pcIpOverride', 'This $deviceNoun\'s IP (blank = auto)',
+                help: 'Normally detected automatically from the house network. Only set it if detection picks '
+                    'the wrong address.',
+                validator: (v) => (v == null || v.trim().isEmpty || ipv4ToInt(v) != null) ? null : 'IPv4 address'),
+          ]),
+          if (isPhone)
+            const InfoLine('CLEAR on the phone only helps while Proton VPN on the phone is off - otherwise the phone '
+                'still tunnels everything itself.'),
+        ],
+      ),
+
+      // 4 ----------------------------------------------------------- remote
+      SettingsSection(
+        icon: Icons.travel_explore,
+        title: 'Remote access',
+        summary: switch (_remote) {
+          _Remote.off => 'Off - home only',
+          _Remote.wireguard => 'WireGuard (needs a public IP at home)',
+          _Remote.tailscale => 'Tailscale${_tailscaleHere == true ? ' - active on this $deviceNoun' : ''}',
+        },
+        children: [
+          Text('Use the app away from home.', style: t.bodySmall),
+          const SizedBox(height: 8),
+          SegmentedButton<_Remote>(
+            segments: const [
+              ButtonSegment(value: _Remote.off, label: Text('Off')),
+              ButtonSegment(value: _Remote.wireguard, label: Text('WireGuard')),
+              ButtonSegment(value: _Remote.tailscale, label: Text('Tailscale')),
+            ],
+            selected: {_remote},
+            onSelectionChanged: (v) => _set(_cfg.copyWith(
+              remoteEnabled: v.first == _Remote.wireguard,
+              tailscaleEnabled: v.first == _Remote.tailscale,
+            )),
+          ),
+          const SizedBox(height: 12),
+          if (_remote == _Remote.tailscale) ...[
+            InfoLine(_tailscaleHere == null
+                ? 'Checking for Tailscale on this $deviceNoun...'
+                : _tailscaleHere!
+                    ? 'Tailscale is connected on this $deviceNoun.'
+                    : 'Tailscale is not connected on this $deviceNoun right now (fine at home).'),
+            const SizedBox(height: 8),
+            _field('tailscaleAddress', 'Router\'s Tailscale address (optional)',
+                hint: '100.x.y.z or opnsense.tailnet.ts.net',
+                help: 'Works behind the 5G hotspot\'s CGNAT, no open ports needed.\n\n'
+                    'Best: on the router (os-tailscale plugin) advertise a subnet route for 10.10.10.254/32 and '
+                    'approve it in the Tailscale admin. Then leave this empty - the normal router URL just works '
+                    'through Tailscale.\n\nOtherwise enter the router\'s 100.x address or MagicDNS name here. '
+                    'The certificate is still checked against the certificate name.',
+                validator: (v) {
+                  final s = v?.trim() ?? '';
+                  if (s.isEmpty) return null;
+                  return RegExp(r'^[A-Za-z0-9.:-]+$').hasMatch(s) ? null : 'An IP or host name';
+                }),
+            if (isPhone)
+              const InfoLine('Android allows one VPN app at a time: while Tailscale is on, the Proton app on the '
+                  'phone is off. Use Tailscale\'s "exit node" = home router if you want the house VPN while away.'),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: () => openSetupGuide(context),
+                icon: const Icon(Icons.menu_book_outlined, size: 18),
+                label: const Text('Router setup steps (guide)'),
+              ),
+            ),
+          ],
+          if (_remote == _Remote.wireguard)
+            RemoteAccessEditor(
+              key: ValueKey('remote-$_remoteGen'),
+              controller: c,
+              config: _cfg,
+              showToggle: false,
+              onChanged: _set,
+            ),
+        ],
+      ),
+
+      // 5 ----------------------------------------------------------- alerts
+      SettingsSection(
+        icon: Icons.notifications_none,
+        title: 'Alerts & reminders',
+        summary: [
+          if (_cfg.notifyOnFailover) 'failover',
+          if (_cfg.notifyOnBypass) 'bypass',
+          if (_cfg.alertNewDevices) 'new devices',
+          if (_cfg.backupReminderDays > 0) 'backup every ${_cfg.backupReminderDays} d',
+        ].join(', ').let((s) => s.isEmpty ? 'All off' : s),
+        children: [
+          _switch('Failover, failback, both tunnels down', _cfg.notifyOnFailover,
+              (v) => _set(_cfg.copyWith(notifyOnFailover: v)),
+              help: 'A notification when the house moves between the main and backup tunnel, or loses both '
+                  '(kill switch active). Also used for server-switch results.'),
+          _switch('Bypass starts / ends', _cfg.notifyOnBypass, (v) => _set(_cfg.copyWith(notifyOnBypass: v)),
+              help: 'Including a reminder every 4 hours while a no-limit bypass is on.'),
+          _switch('New device joins the network', _cfg.alertNewDevices, (v) => _set(_cfg.copyWith(alertNewDevices: v)),
+              help: 'Checks the router\'s DHCP leases every couple of minutes and tells you when a device it has '
+                  'never seen gets an address. The first check just learns what is there. Needs the DHCP '
+                  'leases privilege (tim-app has it).'),
+          if (_cfg.alertNewDevices)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton(
+                onPressed: () async {
+                  await c.resetKnownDevices();
+                  _say('Known devices forgotten - the next check re-learns them quietly.');
+                },
+                child: const Text('Forget known devices'),
+              ),
+            ),
+          Row(children: [
+            const Expanded(child: Text('Router backup reminder')),
+            const HelpButton(
+                title: 'Router backup reminder',
+                text: 'Reminds you to save an encrypted router config backup (System > Configuration > Backups) '
+                    'to Proton Drive. Tap "I saved a backup" on the Status page to reset the timer. The app '
+                    'never downloads the config itself - that needs far too much access.',
+                small: true),
+            DropdownButton<int>(
+              value: const [0, 7, 14, 30].contains(_cfg.backupReminderDays) ? _cfg.backupReminderDays : 0,
+              items: const [
+                DropdownMenuItem(value: 0, child: Text('Off')),
+                DropdownMenuItem(value: 7, child: Text('Weekly')),
+                DropdownMenuItem(value: 14, child: Text('Every 2 weeks')),
+                DropdownMenuItem(value: 30, child: Text('Monthly')),
+              ],
+              onChanged: (v) => _set(_cfg.copyWith(backupReminderDays: v ?? 0)),
+            ),
+          ]),
+          const SizedBox(height: 8),
+          _field('pollSeconds', 'Check the router every (seconds)',
+              number: true,
+              help: 'How often status refreshes. 15 s is a good balance; lower uses a little more battery on the phone.',
+              validator: (v) => (int.tryParse(v ?? '') ?? 0) >= 5 ? null : 'At least 5'),
+        ],
+      ),
+
+      // 6 ------------------------------------------------- security & privacy
+      SettingsSection(
+        icon: Icons.lock_outline,
+        title: 'Security & privacy',
+        summary: '${_cfg.appLock ? 'App lock on' : 'App lock off'} - '
+            '${_cfg.externalTests ? 'outside test services allowed' : 'router-only tests'}',
+        children: [
+          _switch('App lock', _cfg.appLock, _toggleAppLock,
+              subtitle: Platform.isWindows ? 'Windows Hello before risky actions' : 'Fingerprint / face / PIN before risky actions',
+              help: 'Asks for your ${Platform.isWindows ? 'Windows Hello PIN, fingerprint or face' : 'fingerprint, face or phone PIN'} '
+                  'before anything that takes devices off the VPN (bypass, CLEAR), changes VPN servers or saves '
+                  'settings. Going back on the VPN never asks. Cybervulcan never sees the fingerprint or PIN.'),
+          _switch('Allow outside test services', _cfg.externalTests, (v) => _set(_cfg.copyWith(externalTests: v)),
+              help: 'Leak tests need a server on the internet to say where your traffic and DNS really come from '
+                  '(ipify, ipwho.is, bash.ws, Akamai, Cloudflare - all HTTPS). On the VPN they only see the '
+                  'Proton exit. Off = the Tests page runs router-side checks only.'),
+          Row(children: [
+            Expanded(
+                child: _field('homeCountryCode', 'Home country',
+                    help: 'Two-letter code of your ISP\'s country (AU). Seeing it while on the VPN means a leak.',
+                    validator: _required)),
+            const SizedBox(width: 12),
+            Expanded(
+                child: _field('vpnCountryCode', 'VPN exit country',
+                    help: 'Two-letter code of your VPN servers\' country (US).', validator: _required)),
+          ]),
+        ],
+      ),
+
+      // 7 ---------------------------------------------------------- network
+      SettingsSection(
+        icon: Icons.lan_outlined,
+        title: 'Network layout',
+        summary: '${_cfg.networks.length} networks - kill switch tag ${_cfg.killSwitchTag}',
+        children: [
+          Row(children: [
+            Expanded(
+                child: _field('directLabel', 'Label while bypassed',
+                    help: 'Big status line during a bypass, e.g. Direct (NBN).', validator: _required)),
+            const SizedBox(width: 12),
+            Expanded(
+                child: _field('directNetworkName', 'Direct network',
+                    help: 'Which network below always goes straight out (CLEAR). Used for device detection and tests.')),
+          ]),
           Padding(
             padding: const EdgeInsets.only(bottom: 12),
             child: TextFormField(
@@ -546,119 +894,214 @@ class _SettingsPageState extends State<SettingsPage> {
               maxLines: null,
               minLines: 3,
               style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
+              onChanged: (_) => setState(() => _dirty = true),
               decoration: const InputDecoration(
                 labelText: 'House networks',
-                helperText: 'One per line: NAME CIDR description, e.g. "VPN 10.10.40.0/24 Everything via VPN"',
-                helperMaxLines: 2,
+                helperText: 'One per line: NAME CIDR description',
+                suffixIcon: HelpButton(
+                    title: 'House networks',
+                    text: 'Lets the app work out which network a device is on, e.g.\n'
+                        'VPN 10.10.40.0/24 Everything via Proton\nCLEAR 10.10.20.0/24 Direct internet'),
               ),
               validator: (v) => networksFromText(v ?? '') == null ? 'Each line: NAME a.b.c.d/nn [description]' : null,
             ),
           ),
-          _section('Kill switch'),
-          _field('killSwitchTag', 'Kill switch tag', validator: _required),
-          _field('killSwitchRuleUuid', 'Rule UUID (optional)',
+          _field('killSwitchTag', 'Kill switch tag',
+              help: 'The tag the router\'s kill switch rule blocks (NO_WAN_EGRESS). The app checks the rule is '
+                  'loaded and counts what it blocked.',
+              validator: _required),
+          _field('killSwitchRuleUuid', 'Kill switch rule UUID (optional)',
               help: 'Only needed if the API user has "Firewall: Rules" but not "Firewall: Rules [new]".'),
-          _section('Checks & alerts'),
-          _field('pollSeconds', 'Poll every (seconds)', number: true,
-              validator: (v) => (int.tryParse(v ?? '') ?? 0) >= 5 ? null : 'At least 5'),
-          Row(children: [
-            Expanded(child: _field('homeCountryCode', 'Home country (ISP)', validator: _required)),
-            const SizedBox(width: 12),
-            Expanded(child: _field('vpnCountryCode', 'VPN exit country', validator: _required)),
-          ]),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('Notify on failover / failback / both tunnels down'),
-            value: _cfg.notifyOnFailover,
-            onChanged: (v) => setState(() => _cfg = _cfg.copyWith(notifyOnFailover: v)),
-          ),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('Notify when bypass starts / ends'),
-            value: _cfg.notifyOnBypass,
-            onChanged: (v) => setState(() => _cfg = _cfg.copyWith(notifyOnBypass: v)),
-          ),
-          _section('Remote access (WireGuard)'),
-          RemoteAccessEditor(
-            key: ValueKey('remote-$_remoteGen'),
-            controller: widget.controller,
-            config: _cfg,
-            onChanged: (c) => setState(() => _cfg = c),
-          ),
-          const SizedBox(height: 16),
-          _section('Share settings'),
-          const Text('Hand a ready-made setup to another person (no secrets included), or load one.'),
+        ],
+      ),
+
+      // 8 ------------------------------------------------------------ share
+      SettingsSection(
+        icon: Icons.ios_share,
+        title: 'Share settings',
+        summary: 'Hand a ready-made setup to Kate (no secrets)',
+        children: [
+          const Text('Exports everything except secrets and personal preferences. The other person adds '
+              'their own API key.'),
           const SizedBox(height: 8),
           Wrap(spacing: 12, runSpacing: 12, children: [
             OutlinedButton.icon(onPressed: _export, icon: const Icon(Icons.ios_share), label: const Text('Export...')),
             OutlinedButton.icon(onPressed: _import, icon: const Icon(Icons.download), label: const Text('Import...')),
           ]),
-          const SizedBox(height: 16),
-          if (_message != null)
-            Container(
-              padding: const EdgeInsets.all(12),
-              margin: const EdgeInsets.only(bottom: 12),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(12),
-                color: (_messageIsError ? Colors.red : Colors.green).withValues(alpha: 0.12),
-              ),
-              child: SelectableText(_message!, style: const TextStyle(fontFamily: 'monospace')),
-            ),
-          Wrap(spacing: 12, runSpacing: 12, children: [
-            FilledButton.icon(
-              onPressed: _busy ? null : _save,
-              icon: const Icon(Icons.save),
-              label: const Text('Save'),
-            ),
-            OutlinedButton.icon(
-              onPressed: _busy ? null : _testConnection,
-              icon: const Icon(Icons.network_check),
-              label: const Text('Test connection & privileges'),
-            ),
-          ]),
-          if (_autostart != null) ...[
-            const SizedBox(height: 24),
-            _section('App'),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Start Cybervulcan in the tray when I sign in'),
-              subtitle: const Text('Applies straight away.'),
-              value: _autostart!,
-              onChanged: (v) async {
+        ],
+      ),
+
+      // 9 -------------------------------------------------------------- app
+      if (_autostart != null || widget.updates != null)
+        SettingsSection(
+          icon: Icons.system_update_alt,
+          title: 'App & updates',
+          summary: _cfg.checkUpdates ? 'Checks for updates automatically' : 'Manual updates',
+          children: [
+            if (_autostart != null)
+              _switch('Start in the tray when I sign in', _autostart!, (v) async {
                 final ok = await WindowsAutostart.setEnabled(v);
                 final now = await WindowsAutostart.isEnabled();
                 if (!mounted) return;
                 setState(() => _autostart = now);
                 if (!ok) _say('Could not change the startup setting.', error: true);
-              },
-            ),
+              }, subtitle: 'Applies straight away.'),
+            if (widget.updates != null) ...[
+              _switch('Check for updates automatically', _cfg.checkUpdates, (v) => _set(_cfg.copyWith(checkUpdates: v)),
+                  subtitle: 'At start-up and every 12 hours.'),
+              UpdateSettingsCard(updates: widget.updates!),
+            ],
           ],
-          if (widget.updates != null) ...[
-            const SizedBox(height: 24),
-            _section('Updates'),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Check for updates automatically'),
-              subtitle: const Text('At start-up and every 12 hours. Save to apply.'),
-              value: _cfg.checkUpdates,
-              onChanged: (v) => setState(() => _cfg = _cfg.copyWith(checkUpdates: v)),
-            ),
-            UpdateSettingsCard(updates: widget.updates!),
-          ],
-          const SizedBox(height: 32),
-        ],
+        ),
+    ];
+
+    return Form(
+      key: _form,
+      child: Column(children: [
+        Expanded(
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+            children: [
+              Row(children: [
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(widget.firstRun ? 'Welcome to Cybervulcan' : 'Settings', style: t.headlineSmall),
+                    const SizedBox(height: 2),
+                    Text('Tap a section to open it. Every ? explains the field.',
+                        style: t.bodySmall?.copyWith(color: OpnColors.textSoft)),
+                  ]),
+                ),
+                OutlinedButton.icon(
+                  onPressed: () => openSetupGuide(context),
+                  icon: const Icon(Icons.help_outline),
+                  label: const Text('Guide'),
+                ),
+              ]),
+              const SizedBox(height: 16),
+              ...sections,
+            ],
+          ),
+        ),
+        _SaveBar(
+          busy: _busy,
+          dirty: _dirty,
+          message: _message,
+          error: _messageIsError,
+          onSave: _save,
+          onTest: _testConnection,
+          onDismiss: () => setState(() => _message = null),
+        ),
+      ]),
+    );
+  }
+}
+
+extension _Let<T> on T {
+  R let<R>(R Function(T) f) => f(this);
+}
+
+/// A fold-out settings group with an icon and a one-line summary.
+class SettingsSection extends StatelessWidget {
+  const SettingsSection({
+    super.key,
+    required this.icon,
+    required this.title,
+    required this.summary,
+    required this.children,
+    this.initiallyExpanded = false,
+  });
+
+  final IconData icon;
+  final String title;
+  final String summary;
+  final List<Widget> children;
+  final bool initiallyExpanded;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      clipBehavior: Clip.antiAlias,
+      child: ExpansionTile(
+        initiallyExpanded: initiallyExpanded,
+        // Collapsed sections keep their fields alive so Save validates them all.
+        maintainState: true,
+        shape: const Border(),
+        collapsedShape: const Border(),
+        leading: Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: OpnColors.glassCyan.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Icon(icon, color: OpnColors.glassCyan, size: 22),
+        ),
+        title: Text(title, style: t.titleMedium),
+        subtitle: Text(summary, maxLines: 1, overflow: TextOverflow.ellipsis,
+            style: t.bodySmall?.copyWith(color: OpnColors.textSoft)),
+        childrenPadding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+        expandedCrossAxisAlignment: CrossAxisAlignment.start,
+        children: children,
       ),
     );
   }
+}
 
-  Widget _section(String title) => Padding(
-        padding: const EdgeInsets.only(top: 8, bottom: 12),
-        child: Text(title, style: Theme.of(context).textTheme.titleMedium),
+/// A titled block inside a section.
+class SubSection extends StatelessWidget {
+  const SubSection({super.key, required this.title, required this.children});
+  final String title;
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        width: double.infinity,
+        margin: const EdgeInsets.only(top: 4, bottom: 12),
+        padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
+        decoration: BoxDecoration(
+          border: Border.all(color: OpnColors.border),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(title.toUpperCase(),
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(color: OpnColors.muted, letterSpacing: 1.1)),
+          const SizedBox(height: 10),
+          ...children,
+        ]),
       );
 }
 
-class _Warning extends StatelessWidget {
-  const _Warning(this.text);
+/// The "?" next to a field: opens a short plain-language explanation.
+class HelpButton extends StatelessWidget {
+  const HelpButton({super.key, required this.title, required this.text, this.small = false});
+  final String title;
+  final String text;
+  final bool small;
+
+  @override
+  Widget build(BuildContext context) => IconButton(
+        tooltip: 'What is this?',
+        visualDensity: small ? VisualDensity.compact : null,
+        iconSize: small ? 18 : 20,
+        icon: const Icon(Icons.help_outline, color: OpnColors.muted),
+        onPressed: () => showDialog<void>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            icon: const Icon(Icons.help_outline, color: OpnColors.glassCyan),
+            title: Text(title),
+            content: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 460),
+              child: SingleChildScrollView(child: Text(text)),
+            ),
+            actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('Got it'))],
+          ),
+        ),
+      );
+}
+
+class WarningLine extends StatelessWidget {
+  const WarningLine(this.text, {super.key});
   final String text;
 
   @override
@@ -669,5 +1112,94 @@ class _Warning extends StatelessWidget {
           const SizedBox(width: 8),
           Expanded(child: Text(text, style: const TextStyle(color: OpnColors.amber))),
         ]),
+      );
+}
+
+class InfoLine extends StatelessWidget {
+  const InfoLine(this.text, {super.key});
+  final String text;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Icon(Icons.info_outline, color: OpnColors.glassCyan, size: 18),
+          const SizedBox(width: 8),
+          Expanded(child: Text(text, style: Theme.of(context).textTheme.bodySmall)),
+        ]),
+      );
+}
+
+/// Save / Test always visible at the bottom, with the last message.
+class _SaveBar extends StatelessWidget {
+  const _SaveBar({
+    required this.busy,
+    required this.dirty,
+    required this.message,
+    required this.error,
+    required this.onSave,
+    required this.onTest,
+    required this.onDismiss,
+  });
+
+  final bool busy;
+  final bool dirty;
+  final String? message;
+  final bool error;
+  final VoidCallback onSave;
+  final VoidCallback onTest;
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) => Material(
+        color: OpnColors.rail,
+        child: SafeArea(
+          top: false,
+          child: Container(
+            decoration: const BoxDecoration(border: Border(top: BorderSide(color: OpnColors.border))),
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              if (message != null)
+                Container(
+                  constraints: const BoxConstraints(maxHeight: 180),
+                  margin: const EdgeInsets.only(bottom: 10),
+                  padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(12),
+                    color: (error ? OpnColors.red : OpnColors.green).withValues(alpha: 0.12),
+                  ),
+                  child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Expanded(
+                      child: SingleChildScrollView(
+                        child: SelectableText(message!, style: const TextStyle(fontFamily: 'monospace', fontSize: 12)),
+                      ),
+                    ),
+                    IconButton(visualDensity: VisualDensity.compact, icon: const Icon(Icons.close, size: 18), onPressed: onDismiss),
+                  ]),
+                ),
+              Row(children: [
+                if (dirty)
+                  const Expanded(
+                    child: Text('Unsaved changes', style: TextStyle(color: OpnColors.amber, fontSize: 13)),
+                  )
+                else
+                  const Spacer(),
+                OutlinedButton.icon(
+                  onPressed: busy ? null : onTest,
+                  icon: const Icon(Icons.network_check, size: 18),
+                  label: const Text('Test'),
+                ),
+                const SizedBox(width: 8),
+                FilledButton.icon(
+                  onPressed: busy ? null : onSave,
+                  icon: busy
+                      ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.save),
+                  label: const Text('Save'),
+                ),
+              ]),
+            ]),
+          ),
+        ),
       );
 }

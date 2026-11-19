@@ -182,8 +182,8 @@ class _SetupWizardState extends State<SetupWizard> {
               TextFormField(
                 controller: _address,
                 decoration: const InputDecoration(
-                  labelText: 'Router address',
-                  helperText: 'Where the app connects, e.g. 10.10.10.254 (https is assumed)',
+                  labelText: 'Router URL',
+                  helperText: 'e.g. https://router.cybervulcan.com (or the router\'s IP)',
                 ),
                 validator: validateRouterAddress,
                 onChanged: (_) => setState(() {}),

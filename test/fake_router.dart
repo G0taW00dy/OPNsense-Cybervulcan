@@ -29,6 +29,39 @@ class FakeRouter {
 
   List<Map<String, dynamic>> leases = [];
 
+  // ---- v2.0 WireGuard (server switcher)
+  static const keyA = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=';
+  static const keyB = 'BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=';
+  List<Map<String, dynamic>> wgClients = [
+    {
+      'uuid': '11111111-1111-4111-8111-111111111111',
+      'enabled': '1',
+      'name': 'Proton_446',
+      'pubkey': keyA,
+      'privkey': 'PRIVATE-MUST-NOT-LEAK',
+      'psk': 'PSK-MUST-NOT-LEAK',
+      'serveraddress': '149.36.48.154',
+      'serverport': '51820',
+      '%servers': 'Proton_VPN_Main',
+    },
+    {
+      'uuid': '22222222-2222-4222-8222-222222222222',
+      'enabled': '1',
+      'name': 'Proton_1077',
+      'pubkey': keyB,
+      'privkey': 'PRIVATE-MUST-NOT-LEAK',
+      'psk': '',
+      'serveraddress': '149.34.251.130',
+      'serverport': '51820',
+      '%servers': 'Proton_VPN_Failover',
+    },
+  ];
+
+  /// Gateway delay (ms) reported while a tunnel points at this server IP.
+  Map<String, double> delayByServer = {};
+  int wgReconfigures = 0;
+  List<Map<String, dynamic>> dotRows = [];
+
   /// Filters received by kill_states, in order.
   final List<String> killedFilters = [];
 
@@ -66,7 +99,50 @@ class FakeRouter {
         http.Response(jsonEncode(o), 200, headers: {'content-type': 'application/json'});
 
     if (path == '/api/routes/gateway/status') {
-      return json({'items': gateways, 'status': 'ok'});
+      String? serverOf(String instance) {
+        for (final c in wgClients) {
+          if (c['%servers'] == instance) return c['serveraddress'] as String;
+        }
+        return null;
+      }
+
+      final items = [
+        for (final g in gateways)
+          {
+            ...g,
+            if (g['name'] == 'WG_MAIN_GW' && delayByServer.containsKey(serverOf('Proton_VPN_Main')))
+              'delay': '${delayByServer[serverOf('Proton_VPN_Main')]} ms',
+            if (g['name'] == 'WG_BACKUP_GW' && delayByServer.containsKey(serverOf('Proton_VPN_Failover')))
+              'delay': '${delayByServer[serverOf('Proton_VPN_Failover')]} ms',
+          },
+      ];
+      return json({'items': items, 'status': 'ok'});
+    }
+    if (path == '/api/wireguard/client/search_client') {
+      return json({'total': wgClients.length, 'rowCount': wgClients.length, 'current': 1, 'rows': wgClients});
+    }
+    final setClient = RegExp(r'^/api/wireguard/client/set_client/([0-9a-f-]{36})$').firstMatch(path);
+    if (setClient != null) {
+      final c = wgClients.where((x) => x['uuid'] == setClient.group(1)).firstOrNull;
+      if (c == null) return json({'result': 'failed'});
+      final body = (jsonDecode(r.body) as Map)['client'] as Map;
+      c.addAll(body.cast<String, dynamic>());
+      return json({'result': 'saved'});
+    }
+    if (path == '/api/wireguard/service/reconfigure') {
+      wgReconfigures++;
+      return json({'status': 'ok'});
+    }
+    if (path == '/api/wireguard/service/show') {
+      return json({
+        'rows': [
+          for (final c in wgClients)
+            {'type': 'peer', 'name': c['name'], 'ifname': c['%servers'], 'latest-handshake-age': 12, 'peer-status': 'online'},
+        ],
+      });
+    }
+    if (path == '/api/unbound/settings/search_dot') {
+      return json({'rows': dotRows});
     }
     final alias = RegExp(r'^/api/firewall/alias_util/(list|add|delete|flush)/(\w+)$').firstMatch(path);
     if (alias != null) {

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 
@@ -11,9 +12,15 @@ import 'client_factory.dart';
 import 'config.dart';
 import 'events.dart';
 import 'house_state.dart';
+import 'network_map.dart';
 import 'pc_mode.dart';
+import 'schedule.dart';
+import 'server_switcher.dart';
 import 'storage.dart';
 import 'wg_keys.dart' as wg;
+
+/// Start of the poll-time bypass failure message (cleared by the next good poll).
+const bypassCheckFailedPrefix = 'Bypass check failed (expiry not enforced): ';
 
 /// Central app state: polls the router, enforces bypass expiry, exposes
 /// actions, and emits [AlertEvent]s for the notification layer.
@@ -30,7 +37,7 @@ class CybervulcanController extends ChangeNotifier {
   final PrefsStore prefs;
   final SecretStore secrets;
 
-  /// True on Windows: PC mode only makes sense for the PC itself.
+  /// Per-device CLEAR (Windows PC, Android phone).
   final bool supportsPcMode;
   final DateTime Function() clock;
 
@@ -48,6 +55,23 @@ class CybervulcanController extends ChangeNotifier {
   String? lastActionError;
   String? lastActionInfo;
 
+  /// Set by the UI: asks for fingerprint / face / device PIN. Used for the
+  /// risky direction only (going off the VPN, server changes, settings) when
+  /// "App lock" is on. Returning to the VPN never needs it.
+  Future<bool> Function(String reason)? authorizer;
+
+  Future<bool> authorize(String reason) async {
+    if (!config.appLock) return true;
+    final a = authorizer;
+    if (a == null) return true;
+    final ok = await a(reason);
+    if (!ok) {
+      lastActionError = 'Not unlocked - nothing was changed.';
+      notifyListeners();
+    }
+    return ok;
+  }
+
   final _events = StreamController<AlertEvent>.broadcast();
   Stream<AlertEvent> get events => _events.stream;
 
@@ -63,6 +87,22 @@ class CybervulcanController extends ChangeNotifier {
   static const noLimitReminderEvery = Duration(hours: 4);
 
   bool get isConfigured => _client != null;
+
+  /// The router API client (null until configured). For the Tests page and
+  /// the server switcher; regular actions go through [_action].
+  OpnsenseClient? get routerClient => _client;
+
+  /// How the router is identified (address, certificate name, pin).
+  RouterTarget? get routerTarget => RouterTarget.fromConfig(config);
+
+  /// Where router sockets go right now (direct, tunnel or Tailscale).
+  RouterRoute? get routerRoute {
+    final t = routerTarget;
+    return t == null ? null : link.routeFor(t);
+  }
+
+  /// Router reached directly, i.e. this device is at home.
+  bool get atHome => (snapshot.link?.connected ?? false) && !(snapshot.link?.remote ?? false);
   bool get hasCredentials => _creds?.isComplete ?? false;
 
   /// This device's WireGuard public key (to give to the router admin), or
@@ -133,7 +173,197 @@ class CybervulcanController extends ChangeNotifier {
       _events.add(e);
     }
     notifyListeners();
+    // After the poll has finished (actions below refresh again themselves).
+    if (next.reachable) Timer.run(() => unawaited(_afterPoll()));
   }
+
+  // ------------------------------------------------- v2.0 background jobs
+
+  bool _afterPollRunning = false;
+  int _afterPollCount = 0;
+  static const _knownMacsKey = 'known_macs_v1';
+  static const _schedFiredKey = 'sched_bypass_fired_day';
+  static const backupAckKey = 'router_backup_ack_at';
+  static const _backupRemindedKey = 'router_backup_reminded_at';
+  static const _bestRunKey = 'server_best_last_run';
+  static const serverCacheKey = 'proton_servers_v1';
+
+  Future<void> _afterPoll() async {
+    if (_afterPollRunning || _disposed) return;
+    _afterPollRunning = true;
+    try {
+      final now = clock();
+      // Scheduled whole-house bypass (no app lock: it was set up on purpose).
+      final due = scheduledBypassDue(config, now.toLocal(), prefs.getString(_schedFiredKey));
+      if (due != null && snapshot.bypassActive == false) {
+        await prefs.setString(_schedFiredKey, dayKey(now.toLocal()));
+        await setBypass(true, duration: due, skipLock: true);
+        _events.add(AlertEvent(AlertKind.scheduledBypass, 'Scheduled VPN bypass started',
+            'The whole house goes direct for ${due.inMinutes} min (${describeSchedule(config)}).'));
+      }
+
+      // New devices on the network (every 8th good poll, ~2 min).
+      if (config.alertNewDevices && _afterPollCount++ % 8 == 0) await _checkNewDevices();
+
+      // Router backup reminder.
+      if (config.backupReminderDays > 0) {
+        var ack = DateTime.tryParse(prefs.getString(backupAckKey) ?? '');
+        if (ack == null) {
+          ack = now;
+          await prefs.setString(backupAckKey, now.toUtc().toIso8601String());
+        }
+        final reminded = DateTime.tryParse(prefs.getString(_backupRemindedKey) ?? '');
+        if (backupReminderDue(config, now, ack, reminded)) {
+          await prefs.setString(_backupRemindedKey, now.toUtc().toIso8601String());
+          _events.add(AlertEvent(AlertKind.backupReminder, 'Time for a router backup',
+              'Last confirmed backup ${now.difference(ack).inDays} days ago. Save an encrypted config '
+              'backup (System > Configuration > Backups) to Proton Drive, then tap "I saved a backup".'));
+          notifyListeners();
+        }
+      }
+
+      // Nightly "find best server".
+      final lastBest = DateTime.tryParse(prefs.getString(_bestRunKey) ?? '');
+      if (nightlyBestDue(config, now.toLocal(), lastBest?.toLocal()) && !serverBusy) {
+        final cached = cachedServers();
+        if (cached.isNotEmpty) {
+          await prefs.setString(_bestRunKey, now.toUtc().toIso8601String());
+          unawaited(findBestServer(pickCandidates(cached, config.serverCityList), (_) {}, skipLock: true));
+        }
+      }
+    } on Object catch (_) {
+      // Background jobs must never break polling.
+    } finally {
+      _afterPollRunning = false;
+    }
+  }
+
+  /// Days since the user last confirmed a router backup (null = never asked).
+  int? get daysSinceBackup {
+    final ack = DateTime.tryParse(prefs.getString(backupAckKey) ?? '');
+    return ack == null ? null : clock().difference(ack).inDays;
+  }
+
+  bool get backupOverdue {
+    final d = daysSinceBackup;
+    return config.backupReminderDays > 0 && d != null && d >= config.backupReminderDays;
+  }
+
+  Future<void> acknowledgeBackup() async {
+    await prefs.setString(backupAckKey, clock().toUtc().toIso8601String());
+    notifyListeners();
+  }
+
+  Future<void> _checkNewDevices() async {
+    final c = _client;
+    if (c == null) return;
+    final List<DhcpLease> leases;
+    try {
+      leases = await c.dnsmasqLeases();
+    } on OpnsenseException {
+      return;
+    }
+    final known = <String>{
+      for (final m in (jsonDecode(prefs.getString(_knownMacsKey) ?? '[]') as List)) '$m',
+    };
+    final fresh = newMacs(leases.map((l) => l.mac), known);
+    final all = {...known, ...leases.map((l) => l.mac.toLowerCase()).where((m) => m.isNotEmpty)};
+    if (all.length != known.length) await prefs.setString(_knownMacsKey, jsonEncode(all.toList()));
+    for (final mac in fresh.take(5)) {
+      final l = leases.firstWhere((x) => x.mac.toLowerCase() == mac);
+      final net = networkNameFor(l.address, config.networks);
+      _events.add(AlertEvent(AlertKind.newDevice, 'New device: ${l.hostname ?? l.vendor ?? mac}',
+          '${l.address}${net != null ? ' on $net' : ''} ($mac) joined the network.'));
+    }
+  }
+
+  /// Forgets the known-device list (next check re-learns it silently).
+  Future<void> resetKnownDevices() => prefs.remove(_knownMacsKey);
+
+  // ------------------------------------------------------ server switcher
+
+  bool serverBusy = false;
+  ServerSwitcher? _switcher;
+
+  List<ProtonServer> cachedServers() {
+    try {
+      final j = jsonDecode(prefs.getString(serverCacheKey) ?? '[]');
+      return [
+        if (j is List)
+          for (final s in j) ?ProtonServer.fromJson(s),
+      ];
+    } on FormatException {
+      return [];
+    }
+  }
+
+  Future<void> saveServers(List<ProtonServer> servers) =>
+      prefs.setString(serverCacheKey, jsonEncode([for (final s in servers) s.toJson()]));
+
+  ServerSwitcher? _newSwitcher() {
+    final c = _client;
+    return c == null ? null : ServerSwitcher(client: c, config: config);
+  }
+
+  /// Current main / backup peers (public data only).
+  Future<(WgPeerInfo, WgPeerInfo)> tunnelPeers() async {
+    final sw = _newSwitcher();
+    if (sw == null) throw OpnsenseException(ApiErrorKind.network, 'Router not configured');
+    final (m, b) = await sw.peers();
+    return (WgPeerInfo(m.serverAddress, m.serverPort, m.publicKey), WgPeerInfo(b.serverAddress, b.serverPort, b.publicKey));
+  }
+
+  /// Points the main or backup tunnel at [server].
+  Future<bool> moveTunnel({required bool main, required ProtonServer server}) async {
+    if (serverBusy) return false;
+    if (!await authorize('Change the ${main ? 'main' : 'backup'} VPN server')) return false;
+    final sw = _newSwitcher();
+    if (sw == null) return false;
+    serverBusy = true;
+    notifyListeners();
+    final r = await _action((c) async {
+      final (m, b) = await sw.peers();
+      await sw.apply(main ? m : b, server);
+      return true;
+    }, done: '${main ? config.mainLabel : config.backupLabel} tunnel now uses ${server.name}');
+    serverBusy = false;
+    notifyListeners();
+    return r ?? false;
+  }
+
+  /// Tests [candidates] on the backup tunnel and moves the best to main.
+  Future<BestServerPlan?> findBestServer(List<ProtonServer> candidates, void Function(String) log,
+      {bool skipLock = false}) async {
+    if (serverBusy || candidates.isEmpty) return null;
+    if (!skipLock && !await authorize('Find and switch to the best VPN server')) return null;
+    final sw = _switcher = _newSwitcher();
+    if (sw == null) return null;
+    serverBusy = true;
+    notifyListeners();
+    try {
+      final plan = await sw.findBest(candidates, log);
+      if (plan != null && config.notifyOnFailover) {
+        _events.add(AlertEvent(AlertKind.serverChanged,
+            plan.changeMain ? 'VPN moved to ${plan.newMain.server.name}' : 'VPN server check done',
+            '${plan.reason} ${plan.newMain.describe()}'));
+      }
+      return plan;
+    } on OpnsenseException catch (e) {
+      log('Stopped: ${e.message}');
+      lastActionError = 'Server switch failed: ${e.message}';
+      return null;
+    } on ArgumentError catch (e) {
+      log('Stopped: ${e.message}');
+      return null;
+    } finally {
+      serverBusy = false;
+      _switcher = null;
+      notifyListeners();
+      unawaited(_refreshAfterChange());
+    }
+  }
+
+  void cancelFindBest() => _switcher?.cancel();
 
   Future<HouseSnapshot> _safePoll() async {
     try {
@@ -196,6 +426,9 @@ class CybervulcanController extends ChangeNotifier {
     if (!routerDown) {
       try {
         var state = await bm.read();
+        // A good read means expiry is enforced again: drop a stale failure
+        // banner from an earlier poll (e.g. before the URL was fixed).
+        if (lastActionError?.startsWith(bypassCheckFailedPrefix) ?? false) lastActionError = null;
         final (action, enforced) = await bm.enforce(state);
         state = enforced;
         if (action == EnforceAction.expiredTurnedOff) {
@@ -209,7 +442,7 @@ class CybervulcanController extends ChangeNotifier {
       } on OpnsenseException catch (e) {
         // Surface every failure: if the bypass table cannot be read, expiry
         // cannot be enforced either, and the user must know.
-        lastActionError = 'Bypass check failed (expiry not enforced): ${e.message}';
+        lastActionError = '$bypassCheckFailedPrefix${e.message}';
       }
     }
 
@@ -340,9 +573,10 @@ class CybervulcanController extends ChangeNotifier {
     }
   }
 
-  Future<void> setBypass(bool on, {Duration? duration}) {
+  Future<void> setBypass(bool on, {Duration? duration, bool skipLock = false}) async {
+    if (on && !skipLock && !await authorize('Turn the whole-house VPN bypass on')) return;
     final bm = _bypass();
-    return _action(
+    await _action(
       (c) => on ? bm!.turnOn(duration: duration) : bm!.turnOff(),
       done: on ? 'VPN bypass is ON for the whole house' : 'VPN bypass is OFF',
       detail: (_) => bm?.lastKill?.describe(),
@@ -361,9 +595,10 @@ class CybervulcanController extends ChangeNotifier {
 
   Future<void> setPcClear(bool clear) async {
     if (!supportsPcMode) return;
+    if (clear && !await authorize('Take this device off the VPN (CLEAR)')) return;
     final ip = snapshot.pcIp ?? await detectPcIp(config);
     if (ip == null) {
-      lastActionError = 'Could not detect this PC\'s house IP - set it in Settings';
+      lastActionError = 'Could not detect this device\'s house IP - at home? (or set it in Settings)';
       notifyListeners();
       return;
     }

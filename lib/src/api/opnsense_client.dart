@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 
 import 'models.dart';
+import 'wireguard_models.dart';
 
 /// Why an API call failed - drives the UI wording and the tray colour.
 enum ApiErrorKind {
@@ -303,6 +304,84 @@ class OpnsenseClient {
     }
     final n = map['dropped_states'];
     return n is num ? n.toInt() : int.tryParse('$n') ?? 0;
+  }
+
+  // ------------------------------------------------------------- WireGuard
+  // Privilege "VPN: WireGuard" (api/wireguard/*). Only the server switcher
+  // and the Tests page use these; everything else works without them.
+
+  static final _uuidRe = RegExp(r'^[0-9a-fA-F-]{36}$');
+
+  /// Configured peers. Private / pre-shared keys in the response are ignored.
+  Future<List<WgPeer>> wgPeers() async {
+    const ep = '/api/wireguard/client/search_client';
+    final json = await _send('POST', ep, body: const {'current': 1, 'rowCount': -1, 'searchPhrase': ''});
+    return [
+      for (final r in _rows(_asMap(json, ep)))
+        if (r is Map) WgPeer.fromJson(r.cast<String, dynamic>()),
+    ];
+  }
+
+  /// Points a peer at another server: endpoint address, port and the
+  /// server's public key. Nothing else (in particular no private key) is sent.
+  Future<void> setWgPeerServer(String uuid, {required String address, required int port, required String publicKey}) async {
+    if (!_uuidRe.hasMatch(uuid)) throw ArgumentError.value(uuid, 'uuid', 'not a UUID');
+    if (InternetAddress.tryParse(address.trim()) == null) {
+      throw ArgumentError.value(address, 'address', 'not an IP address');
+    }
+    if (port < 1 || port > 65535) throw ArgumentError.value(port, 'port');
+    if (!RegExp(r'^[A-Za-z0-9+/]{43}=$').hasMatch(publicKey.trim())) {
+      throw ArgumentError.value('(key)', 'publicKey', 'not a WireGuard public key');
+    }
+    final ep = '/api/wireguard/client/set_client/$uuid';
+    final map = _asMap(
+        await _send('POST', ep, body: {
+          'client': {'serveraddress': address.trim(), 'serverport': '$port', 'pubkey': publicKey.trim()},
+        }),
+        ep);
+    if (map['result'] != 'saved') {
+      final v = map['validations'];
+      throw OpnsenseException(ApiErrorKind.server,
+          'Router did not save the peer${v is Map && v.isNotEmpty ? ': ${v.values.join('; ')}' : ''}',
+          endpoint: ep);
+    }
+  }
+
+  /// Applies WireGuard changes (restarts the tunnels that changed).
+  Future<void> wgReconfigure() async {
+    const ep = '/api/wireguard/service/reconfigure';
+    _expectDone(await _send('POST', ep, body: const {}, timeout: const Duration(seconds: 30)), ep);
+  }
+
+  /// Runtime interfaces and peers (handshakes, traffic).
+  Future<List<WgRuntime>> wgShow() async {
+    const ep = '/api/wireguard/service/show';
+    return [
+      for (final r in _rows(_asMap(await _send('GET', ep), ep)))
+        if (r is Map) WgRuntime.fromJson(r.cast<String, dynamic>()),
+    ];
+  }
+
+  // ------------------------------------------------------------ Unbound DNS
+  // Privilege "Services: Unbound DNS: Settings" - optional, Tests page only.
+
+  Future<List<DotServer>> dotServers() async {
+    const ep = '/api/unbound/settings/search_dot';
+    final json = await _send('POST', ep, body: const {'current': 1, 'rowCount': -1, 'searchPhrase': ''});
+    return [
+      for (final r in _rows(_asMap(json, ep)))
+        if (r is Map) DotServer.fromJson(r.cast<String, dynamic>()),
+    ];
+  }
+
+  /// Whether Unbound validates DNSSEC (null when not reported).
+  Future<bool?> unboundDnssec() async {
+    const ep = '/api/unbound/settings/get';
+    final map = _asMap(await _send('GET', ep), ep);
+    final u = map['unbound'];
+    final g = u is Map ? u['general'] : null;
+    final v = g is Map ? g['dnssec'] : null;
+    return v == null ? null : (v == '1' || v == 1 || v == true);
   }
 
   void close() => _http.close();

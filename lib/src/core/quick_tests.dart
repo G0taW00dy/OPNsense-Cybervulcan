@@ -105,6 +105,41 @@ class QuickTests {
     final ipJson = await _getJson(Uri.parse('https://api.ipify.org?format=json'));
     final ip = '${ipJson['ip'] ?? ''}';
     if (ip.isEmpty) throw Exception('ipify returned no IP');
+    return geo(ip);
+  }
+
+  /// This device's public IP as seen by one of two independent services.
+  Future<String> publicIp({bool alternate = false}) async {
+    if (alternate) {
+      final j = await _getJson(Uri.parse('https://ipwho.is/?fields=ip'));
+      final ip = '${j['ip'] ?? ''}';
+      if (ip.isEmpty) throw Exception('ipwho.is returned no IP');
+      return ip;
+    }
+    final j = await _getJson(Uri.parse('https://api.ipify.org?format=json'));
+    final ip = '${j['ip'] ?? ''}';
+    if (ip.isEmpty) throw Exception('ipify returned no IP');
+    return ip;
+  }
+
+  /// IPv6 address this device reaches the internet with; throws when there
+  /// is no IPv6 path (api6.ipify.org is IPv6-only).
+  Future<String> publicIpv6() async {
+    final j = await _getJson(Uri.parse('https://api6.ipify.org?format=json'));
+    final ip = '${j['ip'] ?? ''}';
+    if (!ip.contains(':')) throw Exception('no IPv6 address returned');
+    return ip;
+  }
+
+  /// GET returning JSON (any shape) - for the extended leak test.
+  Future<Object?> getAny(Uri uri) async {
+    final r = await _http.get(uri, headers: {'Accept': 'application/json'}).timeout(timeout);
+    if (r.statusCode != 200) throw Exception('${uri.host} answered HTTP ${r.statusCode}');
+    return jsonDecode(r.body);
+  }
+
+  /// Country / city / organisation of [ip] via ipwho.is (fallback ipapi.co).
+  Future<ExitInfo> geo(String ip) async {
     try {
       final g = await _getJson(Uri.parse('https://ipwho.is/$ip'));
       if (g['success'] == false) throw Exception('${g['message']}');
