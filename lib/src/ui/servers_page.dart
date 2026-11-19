@@ -33,7 +33,12 @@ class _ServersCardState extends State<ServersCard> {
   Future<void> _load() async {
     try {
       final p = await c.tunnelPeers();
-      if (mounted) setState(() => (_peers, _error) = (p, null));
+      if (mounted) {
+        setState(() {
+          _peers = p;
+          _error = null;
+        });
+      }
     } on OpnsenseException catch (e) {
       if (mounted) {
         setState(() => _error = e.kind == ApiErrorKind.forbidden

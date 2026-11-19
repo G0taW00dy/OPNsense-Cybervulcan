@@ -1,5 +1,56 @@
 # Changelog
 
+## 2.0.0 (pre-release)
+
+### Added
+
+* **Phone CLEAR.** "This phone" switches just the phone between VPN and
+  direct internet (same `PCMODE_CLEAR` alias as the PC; at home on Wi-Fi).
+* **Tailscale remote access** (works behind CGNAT). Settings > Remote access
+  picks Off / WireGuard / Tailscale. Uses the device's Tailscale app: either
+  a subnet route for the router (the normal URL just works) or the router's
+  tailnet address. The certificate-name check still applies. Status shows
+  "Away - via Tailscale".
+* **Pro Tests page.** Security score (A+ to D) from weighted checks:
+  * Router side: kill switch armed + blocked count, both tunnels up +
+    WireGuard handshakes, DNS-over-TLS servers (and DNSSEC), router
+    certificate validity and days to expiry, tunnel latency / jitter / loss.
+  * Outside (HTTPS only, can be switched off): exit IP, exit consistency
+    across two providers, extended DNS leak test (bash.ws unique lookups +
+    Akamai whoami), IPv6 leak, bufferbloat and download speed.
+  * Run all or one, details per check, last 20 runs kept, copyable report
+    with no secrets.
+* **Proton server switcher** (optional, needs *VPN: WireGuard* on your own
+  key): download Proton's server list or add servers from Proton `.conf`
+  files (only the public key and endpoint are kept), switch either tunnel's
+  server, and **Find best**: candidates are measured on the backup tunnel
+  (the house stays on main), the winner is promoted only if it is at least
+  10 % better, the runner-up from another city becomes the backup. Optional
+  nightly run (3-5 am).
+* **Preferences**: app lock (fingerprint / face / PIN / Windows Hello before
+  bypass, CLEAR, server changes and saving settings), new-device alerts from
+  the DHCP leases, scheduled whole-house bypass, router backup reminder.
+* **Router URL** setting default `https://router.example.com`, plus a
+  separate *Router LAN IP* (`10.10.10.254`) that remote access targets.
+
+### Changed
+
+* **Settings redesigned**: fold-out sections with one-line summaries, a "?"
+  explanation on every field, Save / Test bar always visible with an
+  "unsaved changes" hint. Settings export leaves out personal preferences.
+* Connection test lists optional privileges as SKIP instead of failures.
+
+### Fixed
+
+* A "Bypass check failed" banner from an earlier poll (e.g. before the router
+  URL was fixed) stayed until the next button press; a good poll now clears it.
+
+### Not yet tested on real devices
+
+Tailscale on the router, the server switcher against Proton, the app lock on
+Windows Hello / Samsung, and the new Tests against the live network.
+
+
 ## 1.1.0 (unreleased)
 
 ### Added
