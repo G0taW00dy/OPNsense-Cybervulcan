@@ -81,7 +81,10 @@ class HelpPage extends StatelessWidget {
               'Required privileges: "Diagnostics: PF Table IP addresses" (bypass + PC mode) and '
                   '"System: Gateways" (live status and failover).',
               'Recommended: "Diagnostics: Show States" (moves open connections on every switch).',
-              'Optional: "Services: Dnsmasq DNS/DHCP: Settings" (Devices page).',
+              'Optional: "Services: Dnsmasq DNS/DHCP: Settings" (Devices page, new-device alerts).',
+              'Optional, v2.0: "Services: Unbound DNS" (Tests page checks the router\'s encrypted DNS) and '
+                  '"VPN: WireGuard" (server switcher + tunnel handshakes). VPN: WireGuard can also read the '
+                  'WireGuard keys - your own key only, with the app lock on.',
               'Optional and admin-level: "Firewall: Rules [new]" (kill switch armed check). It also '
                   'allows editing firewall rules, so only give it to your own key. Without it the kill '
                   'switch shows "unknown"; nothing else breaks.',
@@ -93,19 +96,20 @@ class HelpPage extends StatelessWidget {
             number: 5,
             title: 'Connect the app',
             items: [
-              'Router address: the router\'s IP, e.g. https://10.10.10.254 (http:// only on a test VM - '
-                  'the app warns about it).',
-              'Certificate name: the name on the router\'s certificate, e.g. router.cybervulcan.com '
-                  '(a Let\'s Encrypt certificate). The app connects to the IP but checks the certificate '
-                  'against this name. Wrong certificate = "not your router": the app stops before '
-                  'sending the API key.',
+              'Router URL: https://router.cybervulcan.com (its Let\'s Encrypt certificate is checked '
+                  'normally). An IP such as https://10.10.10.254 also works.',
+              'Certificate name (Settings > Router connection > Certificate & remote target): the name the '
+                  'certificate must carry, router.cybervulcan.com. Wrong certificate = "not your router": the '
+                  'app stops before sending the API key.',
               'Self-signed certificate instead: leave the name empty, press "Trust certificate..." and '
                   'check the fingerprint against System > Trust > Certificates before accepting.',
               'Paste the API key and secret. They are stored in Windows Credential Manager / the '
                   'Android Keystore and only ever sent to the router.',
               'Set the gateway names, labels, alias names, VPN network and kill switch tag to match '
                   'your router, then Save.',
-              'Press "Test connection & privileges": every line should say OK.',
+              'Press "Test" at the bottom of Settings: every required line should say OK (SKIP lines are '
+                  'optional privileges).',
+              'Every field in Settings has a "?" that explains it.',
             ],
           ),
           const _Section(
@@ -115,13 +119,21 @@ class HelpPage extends StatelessWidget {
               'Tray icon colours: green = main tunnel up, amber = failover or a change in progress, '
                   'red = problem (router unreachable, kill switch tripped or not armed), '
                   'purple = whole-house bypass on, grey = not set up.',
-              'This PC (Windows): VPN or CLEAR for this PC only. CLEAR resets to VPN if the router '
-                  'restarts.',
+              'This PC / This phone: VPN or CLEAR for this device only (phone: at home on Wi-Fi, with the '
+                  'Proton app on the phone off). CLEAR resets to VPN if the router restarts.',
               'Whole-house bypass: takes everyone on the VPN network off the VPN, for a set time or '
                   'until you turn it off (reminder every 4 hours).',
               'The bypass ends on time while any copy of the app is running. To make the router end '
                   'it by itself (PC off, phone away), install the router timer (section 7).',
-              'Tests: checks where this device\'s traffic and DNS actually exit.',
+              'Tests: a security score from router checks (kill switch, tunnels, encrypted DNS, '
+                  'certificate) and outside checks (exit IP, DNS and IPv6 leaks, bufferbloat). Outside checks '
+                  'can be turned off in Settings > Security & privacy.',
+              'VPN servers card (Settings > VPN tunnels & servers > server switcher): change the city of '
+                  'either tunnel, or "Find best" - tested on the backup tunnel, so the house stays online.',
+              'App lock (Settings > Security & privacy): fingerprint / face / PIN / Windows Hello before '
+                  'going off the VPN, changing servers or saving settings.',
+              'Alerts: new devices on the network, scheduled bypass (e.g. TV evenings) and a router '
+                  'backup reminder.',
             ],
           ),
           _Section(
@@ -161,6 +173,12 @@ class HelpPage extends StatelessWidget {
               'Each check: router directly first (2 s); if it does not answer, through the tunnel. '
                   'The tunnel stops when you are home again, when the app goes to the background '
                   '(Android) or after 3 minutes unused.',
+              'Behind CGNAT (e.g. the 5G hotspot) WireGuard can\'t get in. Use Tailscale instead: '
+                  'router: install os-tailscale, log in, advertise the route 10.10.10.254/32 and approve it '
+                  'in the Tailscale admin. Devices: install Tailscale and sign in. App: Settings > Remote '
+                  'access > Tailscale. The router URL then works from anywhere.',
+              'Android runs one VPN app at a time: with Tailscale on, the Proton app on the phone is off. '
+                  'Set the home router as Tailscale exit node to keep the house VPN while away.',
             ],
           ),
           const _Section(

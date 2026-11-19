@@ -40,6 +40,15 @@ what.
 | Services: Dnsmasq DNS/DHCP: Settings | "Devices" page (who's online) | optional |
 | Firewall: Rules [new] | Kill switch "armed" check | **admin only** - see below |
 | Firewall: Rules (+ rule UUID in Settings) | Alternative kill switch check | optional |
+| Services: Unbound DNS: Settings | Tests page: router DNS-over-TLS / DNSSEC check | optional (v2.0) |
+| VPN: WireGuard | Server switcher, tunnel handshakes on the Tests page | **admin only** (v2.0) - see below |
+
+**VPN: WireGuard is admin-level too.** It lets the key change the tunnels
+and, through the API, read the WireGuard private keys of the Proton tunnels.
+Cybervulcan only ever sends a peer's server address, port and the server's
+*public* key, and ignores the key fields it receives - but the privilege is
+that coarse. Give it to your own key only and turn on the app lock
+(Settings > Security & privacy).
 
 **Firewall: Rules [new] is admin-level.** OPNsense has no read-only version:
 the same privilege lets the key create, change and delete firewall rules
@@ -54,7 +63,8 @@ privileges are simply that coarse.
 
 **Restricted key for a partner / family member (e.g. Kate):**
 PF Table IP addresses + System: Gateways + Diagnostics: Show States
-(+ Dnsmasq if she wants the Devices page). **No** Firewall: Rules [new].
+(+ Dnsmasq if she wants the Devices page). **No** Firewall: Rules [new],
+**no** VPN: WireGuard.
 
 Create the key: edit the user > **API keys > +**. The browser downloads
 `apikey.txt` with a `key=` and a `secret=` line. Send it to the person over a
@@ -185,6 +195,36 @@ The app only uses the tunnel when the router does not answer directly within
 ~2 s, and stops it when back home, in the background (Android) or after
 3 minutes unused. If home is behind CGNAT (no public IPv4 on WAN), inbound
 WireGuard cannot work; see the CGNAT notes in the project docs.
+
+## 3b. Tailscale (remote access behind CGNAT) - v2.0
+
+WireGuard (section 3) needs the router to be reachable from the internet.
+Behind CGNAT - for example a 5G hotspot - nothing can connect in. Tailscale
+connects outwards from both ends and works anyway.
+
+**Router (once)**
+
+1. System > Firmware > Plugins: install **os-tailscale**.
+2. VPN > Tailscale > Settings: enable, set **Advertise routes** to
+   `10.10.10.254/32` (just the router), Apply, then log in with the link it
+   shows (your Tailscale account).
+3. In the Tailscale admin console: approve the subnet route; disable key
+   expiry for the router.
+4. Interfaces > Assignments: assign the `tailscale0` interface (e.g. `TS`)
+   and allow on it only TCP to `10.10.10.254:443` (and DNS to the router if
+   wanted) - the same "router only" rule as the road-warrior interface.
+5. If System > Settings > Administration has restricted *Listen
+   interfaces*, add the Tailscale interface.
+
+**Each device**: install Tailscale, sign in to the same tailnet. In
+Cybervulcan: Settings > Remote access > **Tailscale**. With the subnet route
+the normal router URL works unchanged; otherwise enter the router's
+`100.x.y.z` (or MagicDNS name) as "Router's Tailscale address". The
+certificate is still checked against `router.cybervulcan.com`.
+
+Android runs one VPN app at a time: with Tailscale on, the Proton app on
+the phone is off. To keep the house VPN while away, set the router as the
+phone's Tailscale *exit node*.
 
 ## 4. Dynamic DNS (os-ddclient)
 
