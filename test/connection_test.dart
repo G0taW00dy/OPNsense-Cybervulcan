@@ -49,6 +49,7 @@ class FakeTunnel implements AppTunnel {
 final _serverPub = wireGuardPublicKey(generateWireGuardPrivateKey());
 
 AppConfig remoteCfg({bool enabled = true}) => const AppConfig().copyWith(
+      baseUrl: 'https://10.10.10.254',
       remoteEnabled: enabled,
       wgServerPublicKey: _serverPub,
       wgAddress: '10.10.99.2/32',
@@ -58,8 +59,17 @@ final secrets = WireGuardSecrets(privateKey: generateWireGuardPrivateKey());
 
 void main() {
   group('RouterTarget (address vs certificate name)', () {
-    test('connects to the IP, checks the certificate name, Host = name', () {
+    test('v2.0 default: the router URL is both the address and the certificate name', () {
       final t = RouterTarget.fromConfig(const AppConfig())!;
+      expect(t.host, 'router.example.com');
+      expect(t.tlsName, 'router.example.com');
+      expect(t.requestBase.toString(), 'https://router.example.com');
+      // Remote access still targets the LAN IP.
+      expect(const AppConfig().routerTunnelIp, '10.10.10.254');
+    });
+
+    test('connects to the IP, checks the certificate name, Host = name', () {
+      final t = RouterTarget.fromConfig(const AppConfig(baseUrl: 'https://10.10.10.254'))!;
       expect(t.host, '10.10.10.254');
       expect(t.port, 443);
       expect(t.tlsName, 'router.example.com');

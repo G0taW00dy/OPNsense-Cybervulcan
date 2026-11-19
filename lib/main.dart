@@ -9,6 +9,7 @@ import 'src/core/events.dart';
 import 'src/core/storage.dart';
 import 'src/core/updater.dart';
 import 'src/platform/android_widget.dart';
+import 'src/platform/app_lock.dart';
 import 'src/platform/notifications.dart';
 import 'src/platform/tray.dart';
 import 'src/ui/app.dart';
@@ -39,8 +40,12 @@ Future<void> main(List<String> args) async {
   final controller = CybervulcanController(
     prefs: await PrefsStore.open(),
     secrets: SecretStore(),
-    supportsPcMode: Platform.isWindows,
+    // Per-device CLEAR: the PC, and (v2.0) the phone on house Wi-Fi.
+    supportsPcMode: Platform.isWindows || Platform.isAndroid,
   );
+
+  final appLock = AppLock();
+  controller.authorizer = appLock.authorize;
 
   final notifier = Notifier();
   await notifier.init();

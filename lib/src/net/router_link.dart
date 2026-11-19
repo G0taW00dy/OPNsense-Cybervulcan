@@ -201,10 +201,17 @@ enum LinkState {
 }
 
 class LinkStatus {
-  const LinkStatus(this.state, {this.viaTunnel = false, this.detail, this.remoteTried = false});
+  const LinkStatus(this.state,
+      {this.viaTunnel = false, this.viaTailscale = false, this.detail, this.remoteTried = false});
 
   final LinkState state;
   final bool viaTunnel;
+
+  /// Reached through the device's Tailscale app (router's tailnet address).
+  final bool viaTailscale;
+
+  /// Reached the router some other way than directly at home.
+  bool get remote => viaTunnel || viaTailscale;
   final String? detail;
 
   /// Remote access was configured and tried (and failed when not connected).
@@ -216,7 +223,11 @@ class LinkStatus {
 
   String describe(AppConfig cfg) => switch (state) {
         LinkState.notConfigured => 'Router address not set',
-        LinkState.connected => viaTunnel ? 'Connected via remote access (WireGuard)' : 'Connected',
+        LinkState.connected => viaTunnel
+            ? 'Connected via remote access (WireGuard)'
+            : viaTailscale
+                ? 'Connected via Tailscale'
+                : 'Connected',
         LinkState.notHome => 'Not home - ${cfg.routerHost ?? 'the router'} did not answer'
             '${remoteTried ? ' (remote access: ${detail ?? 'no answer'})' : ''}',
         LinkState.wrongCertificate =>
@@ -232,13 +243,25 @@ List<String> remoteAccessProblems(AppConfig cfg, WireGuardSecrets secrets) {
   if (Ipv4Subnet.tryParse(cfg.wgAddress) == null) p.add('Tunnel address is missing (e.g. 10.10.99.2/32).');
   if (cfg.wgEndpointHost.trim().isEmpty) p.add('Endpoint host is missing.');
   if (cfg.wgEndpointPort < 1 || cfg.wgEndpointPort > 65535) p.add('Endpoint port must be 1-65535.');
-  final host = cfg.routerHost;
-  if (host == null || ipv4ToInt(host) == null) {
-    p.add('Remote access needs the router address as an IPv4 address (e.g. 10.10.10.254).');
+  final host = cfg.routerTunnelIp;
+  if (host == null) {
+    p.add('Remote access needs the router\'s LAN IPv4 (e.g. 10.10.10.254) - set "Router LAN IP".');
   } else if (!cfg.wgAllowedIpList.any((a) => Ipv4Subnet.tryParse(a)?.contains(host) ?? false)) {
     p.add('Allowed IPs must include the router address $host.');
   }
   return p;
+}
+
+/// True when this device has a Tailscale address (100.64.0.0/10), i.e. the
+/// Tailscale app is connected here.
+Future<bool> tailscaleActiveOnDevice() async {
+  try {
+    final ifaces = await NetworkInterface.list(type: InternetAddressType.IPv4);
+    final cgnat = Ipv4Subnet.tryParse('100.64.0.0/10')!;
+    return ifaces.any((i) => i.addresses.any((a) => cgnat.contains(a.address)));
+  } on Object {
+    return false;
+  }
 }
 
 typedef EndpointResolver = Future<String> Function(String host, int port);
@@ -312,6 +335,33 @@ class RouterLink {
       return status = const LinkStatus(LinkState.connected);
     }
 
+    // Tailscale: the device's own Tailscale app carries the packets. With a
+    // subnet route for the router address the direct probe above already
+    // worked; otherwise try the router's tailnet address (100.x / MagicDNS).
+    // The certificate is still checked against the certificate name.
+    final tsAddr = cfg.tailscaleAddress.trim();
+    if (cfg.tailscaleEnabled && tsAddr.isNotEmpty && d.kind != ProbeKind.wrongCertificate) {
+      final via = RouterRoute.direct(tsAddr, target.port);
+      final r = await _probe(target, via, tunnelTimeout);
+      if (r.ok) {
+        _route = via;
+        await _tunnelDown();
+        return status = const LinkStatus(LinkState.connected, viaTailscale: true);
+      }
+      if (r.kind == ProbeKind.wrongCertificate) {
+        _route = direct;
+        await _tunnelDown();
+        return status = LinkStatus(LinkState.wrongCertificate, detail: r.detail, remoteTried: true);
+      }
+      if (!cfg.remoteEnabled) {
+        _route = direct;
+        await _tunnelDown();
+        return status = LinkStatus(LinkState.notHome,
+            detail: 'Tailscale address $tsAddr did not answer - is Tailscale connected on this device?',
+            remoteTried: true);
+      }
+    }
+
     final remoteReady = cfg.remoteEnabled &&
         tunnel.isAvailable &&
         remoteAccessProblems(cfg, secrets).isEmpty;
@@ -352,7 +402,7 @@ class RouterLink {
   Future<String?> _ensureTunnel(AppConfig cfg, WireGuardSecrets secrets, RouterTarget target) async {
     final sig = [
       cfg.wgEndpointHost, cfg.wgEndpointPort, cfg.wgServerPublicKey, cfg.wgAddress,
-      cfg.wgAllowedIps, cfg.wgKeepalive, target.host, target.port,
+      cfg.wgAllowedIps, cfg.wgKeepalive, cfg.routerTunnelIp, target.port,
       // Not the keys themselves: just whether they changed.
       secrets.privateKey.hashCode, secrets.presharedKey.hashCode,
     ].join('|');
@@ -373,7 +423,7 @@ class RouterLink {
         address: cfg.wgAddress.trim(),
         allowedIps: cfg.wgAllowedIpList,
         keepalive: cfg.wgKeepalive,
-        target: '${target.host}:${target.port}',
+        target: '${cfg.routerTunnelIp}:${target.port}',
         token: base64.encode(token),
       ));
       _token = token;

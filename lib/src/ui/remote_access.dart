@@ -129,11 +129,15 @@ class RemoteAccessEditor extends StatefulWidget {
     required this.controller,
     required this.config,
     required this.onChanged,
+    this.showToggle = true,
   });
 
   final CybervulcanController controller;
   final AppConfig config;
   final ValueChanged<AppConfig> onChanged;
+
+  /// Show the on/off switch (v2.0 settings pick the method elsewhere).
+  final bool showToggle;
 
   @override
   State<RemoteAccessEditor> createState() => _RemoteAccessEditorState();
@@ -301,6 +305,7 @@ class _RemoteAccessEditorState extends State<RemoteAccessEditor> {
           child: Text(c.link.tunnel.unavailableReason ?? 'Not available on this device.',
               style: t.bodySmall?.copyWith(color: OpnColors.amber)),
         ),
+      if (widget.showToggle)
       SwitchListTile(
         contentPadding: EdgeInsets.zero,
         title: const Text('Use remote access when the router is not reachable'),

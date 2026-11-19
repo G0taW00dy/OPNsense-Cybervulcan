@@ -1,0 +1,649 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+import 'dart:math';
+
+import 'package:http/http.dart' as http;
+
+import '../api/opnsense_client.dart';
+import '../net/router_link.dart';
+import 'config.dart';
+import 'house_state.dart';
+import 'quick_tests.dart';
+
+/// Pro security tests (v2.0 Tests page).
+///
+/// Two kinds of check:
+/// * router side - asks the router itself (kill switch, tunnels, encrypted
+///   DNS, certificate). No third parties involved.
+/// * outside - only a server on the internet can see where this device's
+///   traffic and DNS queries really come from (exit IP, DNS leak, IPv6).
+///   HTTPS only, two independent providers where possible, and they can be
+///   switched off in Settings. While on the VPN these services only ever see
+///   the VPN exit, never the home IP.
+
+enum TestStatus { pass, warn, fail, skip, info }
+
+enum TestGroup {
+  leaks('Leak protection'),
+  router('Router security'),
+  performance('Performance');
+
+  const TestGroup(this.label);
+  final String label;
+}
+
+class SecurityTestResult {
+  const SecurityTestResult({
+    required this.id,
+    required this.title,
+    required this.group,
+    required this.status,
+    required this.summary,
+    this.details = const [],
+    this.external = false,
+  });
+
+  final String id;
+  final String title;
+  final TestGroup group;
+  final TestStatus status;
+  final String summary;
+  final List<String> details;
+
+  /// Used an outside service.
+  final bool external;
+
+  Map<String, dynamic> toJson() => {'id': id, 'title': title, 'status': status.name, 'summary': summary};
+
+  static SecurityTestResult? fromJson(Object? j, TestGroup Function(String id) groupOf) {
+    if (j is! Map) return null;
+    final st = TestStatus.values.where((s) => s.name == j['status']);
+    if (st.isEmpty) return null;
+    final id = '${j['id'] ?? ''}';
+    return SecurityTestResult(
+        id: id, title: '${j['title'] ?? id}', group: groupOf(id), status: st.first, summary: '${j['summary'] ?? ''}');
+  }
+}
+
+/// What the tests can use. Everything is optional except config and web.
+class TestEnv {
+  TestEnv({
+    required this.config,
+    required this.web,
+    this.client,
+    this.snapshot,
+    this.deviceIp,
+    this.expected = ExpectedPath.unknown,
+    this.target,
+    this.route,
+    this.atHome = false,
+  });
+
+  final AppConfig config;
+
+  /// HTTP client for the outside checks.
+  final http.Client web;
+  final OpnsenseClient? client;
+  final HouseSnapshot? snapshot;
+  final String? deviceIp;
+  final ExpectedPath expected;
+  final RouterTarget? target;
+  final RouterRoute? route;
+
+  /// The router was reached directly (not via a tunnel / Tailscale).
+  final bool atHome;
+
+  QuickTests get quick => QuickTests(web);
+}
+
+typedef TestRunner = Future<SecurityTestResult> Function(TestEnv env);
+
+class SecurityTest {
+  const SecurityTest(this.id, this.title, this.group, this.run, {this.external = false, this.weight = 1});
+
+  final String id;
+  final String title;
+  final TestGroup group;
+  final TestRunner run;
+  final bool external;
+  final int weight;
+}
+
+SecurityTestResult _r(SecurityTest t, TestStatus s, String summary, [List<String> details = const []]) =>
+    SecurityTestResult(
+        id: t.id, title: t.title, group: t.group, status: s, summary: summary, details: details, external: t.external);
+
+String _expectWord(ExpectedPath p) => switch (p) {
+      ExpectedPath.vpn => 'VPN',
+      ExpectedPath.direct => 'direct (CLEAR / bypass)',
+      ExpectedPath.unknown => 'unknown',
+    };
+
+/// Classifies one DNS resolver against what this device should be using.
+TestStatus classifyResolver({required String? countryCode, required String? org, required ExpectedPath expected, required AppConfig cfg}) {
+  final cc = countryCode?.toUpperCase();
+  final o = (org ?? '').toLowerCase();
+  final quad9 = o.contains('quad9') || o.contains('woodynet');
+  switch (expected) {
+    case ExpectedPath.vpn:
+      if (cc == null) return TestStatus.info;
+      if (cc == cfg.homeCountryCode.toUpperCase() && !quad9) return TestStatus.fail;
+      if (cc == cfg.vpnCountryCode.toUpperCase() || quad9) return TestStatus.pass;
+      return TestStatus.warn;
+    case ExpectedPath.direct:
+      if (quad9) return TestStatus.pass;
+      if (cc == cfg.homeCountryCode.toUpperCase()) return TestStatus.warn; // ISP DNS, not the router's DoT
+      return TestStatus.info;
+    case ExpectedPath.unknown:
+      return TestStatus.info;
+  }
+}
+
+TestStatus worst(Iterable<TestStatus> s) {
+  if (s.contains(TestStatus.fail)) return TestStatus.fail;
+  if (s.contains(TestStatus.warn)) return TestStatus.warn;
+  if (s.contains(TestStatus.pass)) return TestStatus.pass;
+  if (s.contains(TestStatus.info)) return TestStatus.info;
+  return TestStatus.skip;
+}
+
+/// 0-100 from pass / warn / fail (skips and info don't count).
+int? securityScore(List<SecurityTestResult> results, Map<String, int> weights) {
+  var total = 0.0;
+  var got = 0.0;
+  for (final r in results) {
+    final w = (weights[r.id] ?? 1).toDouble();
+    switch (r.status) {
+      case TestStatus.pass:
+        total += w;
+        got += w;
+      case TestStatus.warn:
+        total += w;
+        got += w / 2;
+      case TestStatus.fail:
+        total += w;
+      case TestStatus.skip:
+      case TestStatus.info:
+        break;
+    }
+  }
+  return total == 0 ? null : (got / total * 100).round();
+}
+
+String scoreGrade(int score) => score >= 95
+    ? 'A+'
+    : score >= 85
+        ? 'A'
+        : score >= 70
+            ? 'B'
+            : score >= 50
+                ? 'C'
+                : 'D';
+
+// ------------------------------------------------------------------ tests
+
+final List<SecurityTest> allSecurityTests = [
+  SecurityTest('exit', 'Exit IP', TestGroup.leaks, _exitTest, external: true, weight: 3),
+  SecurityTest('exit_consistency', 'Exit consistency', TestGroup.leaks, _exitConsistency, external: true),
+  SecurityTest('dns_leak', 'DNS leak (extended)', TestGroup.leaks, _dnsLeak, external: true, weight: 3),
+  SecurityTest('ipv6', 'IPv6 leak', TestGroup.leaks, _ipv6, external: true, weight: 2),
+  SecurityTest('kill_switch', 'Kill switch', TestGroup.router, _killSwitch, weight: 3),
+  SecurityTest('tunnels', 'VPN tunnels & failover', TestGroup.router, _tunnels, weight: 2),
+  SecurityTest('dot', 'Encrypted DNS (DNS-over-TLS)', TestGroup.router, _dot, weight: 2),
+  SecurityTest('cert', 'Router certificate', TestGroup.router, _cert, weight: 2),
+  SecurityTest('latency', 'Tunnel latency & jitter', TestGroup.performance, _latency),
+  SecurityTest('bufferbloat', 'Bufferbloat & download', TestGroup.performance, _bufferbloat, external: true),
+];
+
+Map<String, int> get securityTestWeights => {for (final t in allSecurityTests) t.id: t.weight};
+
+TestGroup groupOfTest(String id) =>
+    allSecurityTests.firstWhere((t) => t.id == id, orElse: () => allSecurityTests.first).group;
+
+SecurityTest _t(String id) => allSecurityTests.firstWhere((t) => t.id == id);
+
+/// Runs one test, turning crashes into a FAIL/skip result and honouring the
+/// "outside services" setting.
+Future<SecurityTestResult> runSecurityTest(SecurityTest t, TestEnv env) async {
+  if (t.external && !env.config.externalTests) {
+    return _r(t, TestStatus.skip, 'Outside services are switched off (Settings > Tests & privacy).');
+  }
+  try {
+    return await t.run(env).timeout(const Duration(seconds: 60));
+  } on TimeoutException {
+    return _r(t, TestStatus.warn, 'Timed out.');
+  } on OpnsenseException catch (e) {
+    if (e.kind == ApiErrorKind.forbidden) {
+      return _r(t, TestStatus.skip, 'The API user lacks the privilege for this check.', [e.message]);
+    }
+    return _r(t, TestStatus.warn, 'Router check failed: ${e.message}');
+  } on Object catch (e) {
+    return _r(t, TestStatus.warn, 'Could not run: $e');
+  }
+}
+
+Future<SecurityTestResult> _exitTest(TestEnv env) async {
+  final t = _t('exit');
+  final info = await env.quick.exitInfo();
+  final r = evaluateExit(info, env.expected, env.config);
+  final st = switch (r.verdict) {
+    Verdict.ok => TestStatus.pass,
+    Verdict.mismatch => TestStatus.fail,
+    Verdict.inconclusive => TestStatus.info,
+  };
+  return _r(t, st, r.explanation, [
+    'Exit ${info.ip} - ${[info.city, info.country].whereType<String>().join(', ')}${info.org != null ? ' (${info.org})' : ''}',
+    'This device: ${env.deviceIp ?? 'not on a house network'} - expected ${_expectWord(env.expected)}',
+  ]);
+}
+
+Future<SecurityTestResult> _exitConsistency(TestEnv env) async {
+  final t = _t('exit_consistency');
+  final q = env.quick;
+  final ips = <String>[];
+  final errors = <String>[];
+  for (var i = 0; i < 4; i++) {
+    try {
+      ips.add(await q.publicIp(alternate: i.isOdd));
+    } on Object catch (e) {
+      errors.add('$e');
+    }
+    if (i < 3) await Future<void>.delayed(const Duration(milliseconds: 600));
+  }
+  if (ips.length < 2) return _r(t, TestStatus.warn, 'Not enough answers to compare.', errors);
+  final distinct = ips.toSet();
+  if (distinct.length == 1) {
+    return _r(t, TestStatus.pass, 'Same exit ${ips.first} from ${ips.length} lookups via two providers.');
+  }
+  return _r(t, TestStatus.warn,
+      'Exit changed between lookups (${distinct.join(', ')}) - flapping between tunnels, or split routing.',
+      ['A failover during the test also causes this - run it again.']);
+}
+
+/// bash.ws: unique names are resolved, then bash.ws lists every resolver
+/// that asked for them. Akamai's whoami name is the second, DNS-only check.
+Future<SecurityTestResult> _dnsLeak(TestEnv env) async {
+  final t = _t('dns_leak');
+  final q = env.quick;
+  final seen = <String, ExitInfo?>{};
+  final notes = <String>[];
+
+  try {
+    final idRes = await env.web.get(Uri.parse('https://bash.ws/id')).timeout(const Duration(seconds: 8));
+    final id = idRes.body.trim();
+    if (idRes.statusCode != 200 || !RegExp(r'^\d{1,20}$').hasMatch(id)) throw Exception('bad id');
+    for (var i = 1; i <= 8; i++) {
+      try {
+        await InternetAddress.lookup('$i.$id.bash.ws').timeout(const Duration(seconds: 3));
+      } on Object {
+        // NXDOMAIN is expected - the lookup itself is what counts.
+      }
+    }
+    final rows = await q.getAny(Uri.parse('https://bash.ws/dnsleak/test/$id?json'));
+    if (rows is List) {
+      for (final r in rows) {
+        if (r is Map && r['type'] == 'dns' && r['ip'] != null) seen['${r['ip']}'] = null;
+      }
+    }
+    notes.add('bash.ws: ${seen.length} resolver(s) seen from 8 unique lookups.');
+  } on Object catch (e) {
+    notes.add('bash.ws unavailable: $e');
+  }
+
+  try {
+    final before = seen.length;
+    for (var i = 0; i < 3; i++) {
+      final a = await InternetAddress.lookup('whoami.akamai.net').timeout(const Duration(seconds: 4));
+      for (final x in a) {
+        if (x.type == InternetAddressType.IPv4) seen.putIfAbsent(x.address, () => null);
+      }
+    }
+    notes.add('Akamai whoami: ${seen.length - before} more resolver(s).');
+  } on Object catch (e) {
+    notes.add('Akamai whoami unavailable: $e');
+  }
+
+  if (seen.isEmpty) return _r(t, TestStatus.warn, 'Neither leak-test service answered.', notes);
+
+  final verdicts = <TestStatus>[];
+  final lines = <String>[];
+  for (final ip in seen.keys.take(8)) {
+    ExitInfo? g;
+    try {
+      g = await q.geo(ip);
+    } on Object {
+      g = null;
+    }
+    final v = classifyResolver(countryCode: g?.countryCode, org: g?.org, expected: env.expected, cfg: env.config);
+    verdicts.add(v);
+    lines.add('${v.name.toUpperCase().padRight(4)} $ip - ${g?.country ?? '?'}${g?.org != null ? ' (${g!.org})' : ''}');
+  }
+  final st = worst(verdicts);
+  final summary = switch (st) {
+    TestStatus.fail => 'DNS LEAK: a resolver in ${env.config.homeCountryCode} answered while this device should be on the VPN.',
+    TestStatus.warn => env.expected == ExpectedPath.direct
+        ? 'Direct mode is using a resolver other than the router\'s encrypted DNS.'
+        : 'Some resolvers are in an unexpected place - check the details.',
+    TestStatus.pass => 'No leak: all ${seen.length} resolver(s) match the expected path (${_expectWord(env.expected)}).',
+    _ => 'Resolvers listed - this device is not on a house network the app can judge.',
+  };
+  return _r(t, st, summary, [...lines, ...notes]);
+}
+
+Future<SecurityTestResult> _ipv6(TestEnv env) async {
+  final t = _t('ipv6');
+  final String v6;
+  try {
+    v6 = await env.quick.publicIpv6();
+  } on Object {
+    return _r(t, TestStatus.pass, 'No IPv6 path out of this device - nothing can leak over IPv6.');
+  }
+  ExitInfo? g;
+  try {
+    g = await env.quick.geo(v6);
+  } on Object {
+    g = null;
+  }
+  final cc = g?.countryCode?.toUpperCase();
+  final where = '$v6 - ${g?.country ?? 'unknown country'}${g?.org != null ? ' (${g!.org})' : ''}';
+  if (env.expected == ExpectedPath.vpn) {
+    if (cc == env.config.homeCountryCode.toUpperCase()) {
+      return _r(t, TestStatus.fail, 'IPv6 LEAK: IPv6 traffic leaves via your ISP, around the VPN.', [where]);
+    }
+    if (cc == env.config.vpnCountryCode.toUpperCase()) {
+      return _r(t, TestStatus.pass, 'IPv6 goes through the VPN too.', [where]);
+    }
+    return _r(t, TestStatus.warn, 'IPv6 works and exits somewhere unexpected.', [where]);
+  }
+  return _r(t, TestStatus.info, 'IPv6 works on this device.', [where]);
+}
+
+Future<SecurityTestResult> _killSwitch(TestEnv env) async {
+  final t = _t('kill_switch');
+  final s = env.snapshot;
+  if (s == null || !s.reachable) return _r(t, TestStatus.skip, 'Router not reachable.');
+  final k = s.killSwitch;
+  if (k.tripped) {
+    return _r(t, TestStatus.warn, 'Tripped right now: both tunnels are down, so the VPN network is blocked (as designed).',
+        [k.detail ?? '']);
+  }
+  return switch (k.armed) {
+    true => _r(t, TestStatus.pass, 'Armed: VPN-tagged traffic can never leave via the WAN.', [k.detail ?? '']),
+    false => _r(t, TestStatus.fail, 'NOT ARMED: if both tunnels drop, VPN devices could go out unprotected.',
+        [k.detail ?? '']),
+    null => _r(t, TestStatus.skip, 'Unknown - the API user can\'t read the firewall rules.', [k.detail ?? '']),
+  };
+}
+
+Future<SecurityTestResult> _tunnels(TestEnv env) async {
+  final t = _t('tunnels');
+  final c = env.client;
+  if (c == null) return _r(t, TestStatus.skip, 'Router not configured.');
+  final gws = await c.gatewayStatus();
+  final cfg = env.config;
+  final main = gws.where((g) => g.name == cfg.mainGateway).firstOrNull;
+  final backup = gws.where((g) => g.name == cfg.backupGateway).firstOrNull;
+  final lines = <String>[
+    '${cfg.mainLabel} (main): ${main == null ? 'not found' : '${main.health.name}, ${main.delayMs?.toStringAsFixed(0) ?? '?'} ms'}',
+    '${cfg.backupLabel} (backup): ${backup == null ? 'not found' : '${backup.health.name}, ${backup.delayMs?.toStringAsFixed(0) ?? '?'} ms'}',
+  ];
+  try {
+    final peers = (await c.wgShow()).where((p) => p.isPeer);
+    for (final p in peers) {
+      final age = p.handshakeAgeSeconds;
+      lines.add('Peer ${p.name}: ${p.online ? 'online' : 'offline'}'
+          '${age != null ? ', last handshake ${age}s ago' : ''}');
+    }
+  } on OpnsenseException {
+    lines.add('(Handshake details need the "VPN: WireGuard" privilege.)');
+  }
+  final mainUp = main?.health.isUp ?? false;
+  final backupUp = backup?.health.isUp ?? false;
+  if (mainUp && backupUp) return _r(t, TestStatus.pass, 'Both tunnels up - failover is ready.', lines);
+  if (mainUp || backupUp) {
+    return _r(t, TestStatus.warn, 'Only one tunnel is up - no failover left if it drops.', lines);
+  }
+  return _r(t, TestStatus.fail, 'Both tunnels are down.', lines);
+}
+
+Future<SecurityTestResult> _dot(TestEnv env) async {
+  final t = _t('dot');
+  final c = env.client;
+  if (c == null) return _r(t, TestStatus.skip, 'Router not configured.');
+  final servers = await c.dotServers();
+  final tls = servers.where((s) => s.enabled && s.isTls).toList();
+  final lines = [
+    for (final s in tls) '${s.server}:${s.port ?? 853}${s.verify != null ? ' (verifies ${s.verify})' : ' (NO name verification)'}',
+  ];
+  bool? dnssec;
+  try {
+    dnssec = await c.unboundDnssec();
+  } on OpnsenseException {
+    dnssec = null;
+  }
+  if (dnssec != null) {
+    lines.add(dnssec
+        ? 'DNSSEC validated on the router.'
+        : 'DNSSEC not validated on the router (Quad9 validates upstream, so this is fine).');
+  }
+  if (tls.isEmpty) {
+    return _r(t, TestStatus.warn, 'The router sends DNS upstream unencrypted (no DNS-over-TLS servers).', lines);
+  }
+  if (tls.any((s) => s.verify == null)) {
+    return _r(t, TestStatus.warn, 'DNS-over-TLS is on, but some servers have no name to verify.', lines);
+  }
+  return _r(t, TestStatus.pass, 'Router DNS is encrypted to ${tls.length} DNS-over-TLS server(s).', lines);
+}
+
+Future<SecurityTestResult> _cert(TestEnv env) async {
+  final t = _t('cert');
+  final target = env.target;
+  final route = env.route;
+  if (target == null || route == null) return _r(t, TestStatus.skip, 'Router not configured.');
+  if (!target.secure) {
+    return _r(t, TestStatus.fail, 'Plain http:// - no certificate, the API key travels unencrypted.');
+  }
+  final Socket s;
+  try {
+    s = await openRouterSocket(target, route, const Duration(seconds: 6));
+  } on WrongCertificateException catch (e) {
+    return _r(t, TestStatus.fail, 'Certificate rejected - this may not be your router.', [e.detail]);
+  }
+  final cert = s is SecureSocket ? s.peerCertificate : null;
+  s.destroy();
+  if (cert == null) return _r(t, TestStatus.warn, 'Connected, but no certificate details were available.');
+  final days = cert.endValidity.difference(DateTime.now()).inDays;
+  final lines = [
+    'Valid for ${target.tlsName}${target.pinned ? ' (pinned)' : ''}',
+    'Issuer: ${cert.issuer}',
+    'Expires: ${cert.endValidity.toLocal().toString().substring(0, 16)} ($days days)',
+  ];
+  if (days < 3) return _r(t, TestStatus.fail, 'Certificate expires in $days days - renewal is failing.', lines);
+  if (days < 21) {
+    return _r(t, TestStatus.warn, 'Certificate expires in $days days - check the ACME renewal.', lines);
+  }
+  return _r(t, TestStatus.pass, 'Valid for ${target.tlsName}, $days days left.', lines);
+}
+
+Future<SecurityTestResult> _latency(TestEnv env) async {
+  final t = _t('latency');
+  final c = env.client;
+  if (c == null) return _r(t, TestStatus.skip, 'Router not configured.');
+  final gws = await c.gatewayStatus();
+  final cfg = env.config;
+  final lines = <String>[];
+  final statuses = <TestStatus>[];
+  for (final (name, label) in [(cfg.mainGateway, cfg.mainLabel), (cfg.backupGateway, cfg.backupLabel)]) {
+    final g = gws.where((x) => x.name == name).firstOrNull;
+    if (g == null || g.delayMs == null) {
+      lines.add('$label: no data');
+      continue;
+    }
+    final d = g.delayMs!;
+    final j = g.stddevMs ?? 0;
+    final l = g.lossPercent ?? 0;
+    final st = l >= 2 || d > 350 || j > 60
+        ? TestStatus.fail
+        : (l > 0 || d > 250 || j > 30)
+            ? TestStatus.warn
+            : TestStatus.pass;
+    statuses.add(st);
+    lines.add('$label: ${d.toStringAsFixed(0)} ms, jitter ${j.toStringAsFixed(1)} ms, loss ${l.toStringAsFixed(1)} %');
+  }
+  final st = worst(statuses);
+  return _r(t, st, switch (st) {
+    TestStatus.pass => 'Tunnels are steady.',
+    TestStatus.warn => 'Some latency / jitter - fine for browsing, noticeable in games.',
+    TestStatus.fail => 'Poor tunnel quality - try "Find best server".',
+    _ => 'No tunnel measurements available.',
+  }, [...lines, 'Measured by the router to the tunnel monitor IPs (US servers: ~150-220 ms from AU is normal).']);
+}
+
+/// Router round trip idle vs. while downloading. Needs to be at home (the
+/// router is the nearest fixed point to measure queueing delay against).
+Future<SecurityTestResult> _bufferbloat(TestEnv env) async {
+  final t = _t('bufferbloat');
+  final target = env.target;
+  if (!env.atHome || target == null) return _r(t, TestStatus.skip, 'Only at home (measures against the router).');
+
+  Future<double?> rtt() async {
+    final sw = Stopwatch()..start();
+    try {
+      final s = await Socket.connect(target.host, target.port, timeout: const Duration(seconds: 2));
+      sw.stop();
+      s.destroy();
+      return sw.elapsedMicroseconds / 1000;
+    } on Object {
+      return null;
+    }
+  }
+
+  double median(List<double> v) {
+    if (v.isEmpty) return double.nan;
+    final s = [...v]..sort();
+    return s[s.length ~/ 2];
+  }
+
+  final idle = <double>[];
+  for (var i = 0; i < 6; i++) {
+    final r = await rtt();
+    if (r != null) idle.add(r);
+    await Future<void>.delayed(const Duration(milliseconds: 150));
+  }
+  if (idle.isEmpty) return _r(t, TestStatus.skip, 'Could not reach the router to measure.');
+
+  final loaded = <double>[];
+  var bytes = 0;
+  final sw = Stopwatch()..start();
+  var done = false;
+  final download = () async {
+    final req = http.Request('GET', Uri.parse('https://speed.cloudflare.com/__down?bytes=50000000'));
+    final resp = await env.web.send(req).timeout(const Duration(seconds: 10));
+    await for (final chunk in resp.stream) {
+      bytes += chunk.length;
+      if (done || sw.elapsed > const Duration(seconds: 10)) break;
+    }
+  }();
+  final sampler = () async {
+    await Future<void>.delayed(const Duration(milliseconds: 800));
+    while (!done && sw.elapsed < const Duration(seconds: 10)) {
+      final r = await rtt();
+      if (r != null) loaded.add(r);
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+    }
+  }();
+  try {
+    await download.timeout(const Duration(seconds: 12));
+  } on Object {
+    // Partial download still gives a speed figure.
+  }
+  done = true;
+  await sampler;
+  sw.stop();
+  final secs = max(sw.elapsedMilliseconds / 1000, 0.5);
+  final mbps = bytes * 8 / secs / 1e6;
+  final base = median(idle);
+  final under = loaded.isEmpty ? base : median(loaded);
+  final added = max(0.0, under - base);
+  final lines = [
+    'Router RTT idle ${base.toStringAsFixed(1)} ms, under load ${under.toStringAsFixed(1)} ms (+${added.toStringAsFixed(1)} ms)',
+    'Download ~${mbps.toStringAsFixed(1)} Mbit/s (${(bytes / 1e6).toStringAsFixed(1)} MB in ${secs.toStringAsFixed(1)} s, via ${_expectWord(env.expected)} path)',
+    'Measured from this device to the router only, so Wi-Fi counts too.',
+  ];
+  final st = added > 200
+      ? TestStatus.fail
+      : added > 60
+          ? TestStatus.warn
+          : TestStatus.pass;
+  return _r(t, st, switch (st) {
+    TestStatus.pass => 'Low bufferbloat (+${added.toStringAsFixed(0)} ms under load) - good for gaming.',
+    TestStatus.warn => 'Some bufferbloat (+${added.toStringAsFixed(0)} ms) - an FQ-CoDel shaper would help.',
+    _ => 'Heavy bufferbloat (+${added.toStringAsFixed(0)} ms) - set up the FQ-CoDel shaper.',
+  }, lines);
+}
+
+// ---------------------------------------------------------------- history
+
+class TestRun {
+  const TestRun(this.at, this.score, this.results);
+
+  final DateTime at;
+  final int? score;
+  final List<SecurityTestResult> results;
+
+  Map<String, dynamic> toJson() =>
+      {'at': at.toUtc().toIso8601String(), 'score': score, 'results': [for (final r in results) r.toJson()]};
+
+  static TestRun? fromJson(Object? j) {
+    if (j is! Map) return null;
+    final at = DateTime.tryParse('${j['at']}');
+    if (at == null) return null;
+    final rs = j['results'];
+    return TestRun(at, j['score'] is num ? (j['score'] as num).toInt() : null, [
+      if (rs is List)
+        for (final r in rs) ?SecurityTestResult.fromJson(r, groupOfTest),
+    ]);
+  }
+}
+
+const testHistoryKey = 'security_test_history_v1';
+const testHistoryMax = 20;
+
+List<TestRun> decodeHistory(String? raw) {
+  if (raw == null || raw.isEmpty) return [];
+  try {
+    final j = jsonDecode(raw);
+    return [
+      if (j is List)
+        for (final r in j) ?TestRun.fromJson(r),
+    ];
+  } on FormatException {
+    return [];
+  }
+}
+
+String encodeHistory(List<TestRun> runs) =>
+    jsonEncode([for (final r in runs.take(testHistoryMax)) r.toJson()]);
+
+/// Plain-text report for copying into a chat or support request. Contains no
+/// secrets (no keys, no full router config).
+String testReport(TestRun run, {String? device}) {
+  final b = StringBuffer()
+    ..writeln('Cybervulcan security test - ${run.at.toLocal().toString().substring(0, 16)}')
+    ..writeln('Device: ${device ?? '?'}  Score: ${run.score ?? '-'}${run.score != null ? ' (${scoreGrade(run.score!)})' : ''}')
+    ..writeln();
+  for (final g in TestGroup.values) {
+    final rs = run.results.where((r) => r.group == g).toList();
+    if (rs.isEmpty) continue;
+    b.writeln('[${g.label}]');
+    for (final r in rs) {
+      b.writeln('${r.status.name.toUpperCase().padRight(5)} ${r.title}: ${r.summary}');
+      for (final d in r.details) {
+        if (d.isNotEmpty) b.writeln('        $d');
+      }
+    }
+    b.writeln();
+  }
+  return b.toString().trimRight();
+}

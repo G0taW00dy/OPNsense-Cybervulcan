@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 
@@ -10,6 +11,7 @@ import '../core/updater.dart';
 import '../net/router_link.dart';
 import 'bypass_dialog.dart';
 import 'format.dart';
+import 'servers_page.dart';
 import 'theme.dart';
 import 'update_widgets.dart';
 import 'widgets/volcano_art.dart';
@@ -93,6 +95,16 @@ class _StatusPageState extends State<StatusPage> {
                   ),
                 ),
               ],
+              if (c.backupOverdue) ...[
+                const SizedBox(height: 12),
+                _Banner(
+                  text: 'Router backup reminder: last confirmed backup ${c.daysSinceBackup} days ago. Save an '
+                      'encrypted config backup (System > Configuration > Backups) to Proton Drive.',
+                  color: OpnColors.amber,
+                  icon: Icons.backup_outlined,
+                  action: TextButton(onPressed: c.acknowledgeBackup, child: const Text('I saved a backup')),
+                ),
+              ],
               if (c.lastActionError != null) ...[
                 const SizedBox(height: 12),
                 _Banner(text: c.lastActionError!, color: OpnColors.red, icon: Icons.error_outline),
@@ -137,6 +149,10 @@ class _StatusPageState extends State<StatusPage> {
                 }),
                 const SizedBox(height: 16),
                 _KillSwitchCard(snapshot: s),
+                if (c.config.serverSwitcherEnabled) ...[
+                  const SizedBox(height: 16),
+                  ServersCard(key: ValueKey('servers-${c.config.mainWgInstance}-${c.config.backupWgInstance}'), controller: c),
+                ],
               ],
               const SizedBox(height: 12),
               Center(
@@ -242,12 +258,14 @@ class _HeaderCard extends StatelessWidget {
                 label: Text('Failover active'),
               ),
             ),
-          if (snapshot.reachable && (snapshot.link?.viaTunnel ?? false))
-            const Padding(
-              padding: EdgeInsets.only(top: 12),
+          if (snapshot.reachable && (snapshot.link?.remote ?? false))
+            Padding(
+              padding: const EdgeInsets.only(top: 12),
               child: Chip(
-                avatar: Icon(Icons.vpn_key, size: 18, color: OpnColors.glassCyan),
-                label: Text('Remote access (WireGuard)'),
+                avatar: const Icon(Icons.vpn_key, size: 18, color: OpnColors.glassCyan),
+                label: Text((snapshot.link?.viaTailscale ?? false)
+                    ? 'Away - via Tailscale'
+                    : 'Away - remote access (WireGuard)'),
               ),
             ),
         ],
@@ -455,7 +473,7 @@ class _PcModeCard extends StatelessWidget {
             Row(children: [
               const Icon(Icons.computer),
               const SizedBox(width: 8),
-              Expanded(child: Text('This PC', style: t.titleMedium)),
+              Expanded(child: Text(_deviceWord(), style: t.titleMedium)),
               SegmentedButton<bool>(
                 segments: const [
                   ButtonSegment(value: false, label: Text('VPN'), icon: Icon(Icons.vpn_lock)),
@@ -469,16 +487,21 @@ class _PcModeCard extends StatelessWidget {
             ]),
             const SizedBox(height: 6),
             Text(s.pcIp == null
-                ? 'Could not detect this PC\'s house IP - set it in Settings.'
+                ? (Platform.isAndroid
+                    ? 'Not on house Wi-Fi (or the phone\'s house IP is unknown) - CLEAR only works at home.'
+                    : 'Could not detect this PC\'s house IP - set it in Settings.')
                 : clear == null
                     ? 'IP ${s.pcIp}: mode unknown (alias not readable).'
-                    : 'IP ${s.pcIp} is ${clear ? 'CLEAR - direct internet, only this PC' : 'on the VPN'}.'),
+                    : 'IP ${s.pcIp} is ${clear ? 'CLEAR - direct internet, only this ${_deviceNoun()}' : 'on the VPN'}.'),
           ],
         ),
       ),
     );
   }
 }
+
+String _deviceWord() => Platform.isAndroid ? 'This phone' : 'This PC';
+String _deviceNoun() => Platform.isAndroid ? 'phone' : 'PC';
 
 class _KillSwitchCard extends StatelessWidget {
   const _KillSwitchCard({required this.snapshot});

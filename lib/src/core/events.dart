@@ -11,6 +11,10 @@ enum AlertKind {
   bypassEnded,
   bypassReminder,
   updateAvailable,
+  newDevice,
+  scheduledBypass,
+  backupReminder,
+  serverChanged,
 }
 
 class AlertEvent {

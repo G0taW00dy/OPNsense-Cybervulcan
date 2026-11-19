@@ -25,7 +25,7 @@ String normaliseRouterAddress(String input) {
 /// part of this object - see [SecretStore].
 class AppConfig {
   const AppConfig({
-    this.baseUrl = 'https://10.10.10.254',
+    this.baseUrl = 'https://router.example.com',
     this.certName = defaultCertName,
     this.pinnedCertSha256,
     this.mainGateway = 'WG_MAIN_GW',
@@ -57,6 +57,22 @@ class AppConfig {
     this.wgAddress = '',
     this.wgAllowedIps = '10.10.10.254/32',
     this.wgKeepalive = 25,
+    this.routerLanIp = '10.10.10.254',
+    this.tailscaleEnabled = false,
+    this.tailscaleAddress = '',
+    this.externalTests = true,
+    this.appLock = false,
+    this.alertNewDevices = false,
+    this.schedBypassEnabled = false,
+    this.schedDays = 0,
+    this.schedStart = '19:00',
+    this.schedMinutes = 180,
+    this.backupReminderDays = 0,
+    this.serverSwitcherEnabled = false,
+    this.mainWgInstance = 'Proton_VPN_Main',
+    this.backupWgInstance = 'Proton_VPN_Failover',
+    this.serverCities = 'San Jose, Los Angeles',
+    this.autoBestNightly = false,
   });
 
   /// Router address: `https://10.10.10.254` (scheme + IP/host + optional port).
@@ -132,6 +148,56 @@ class AppConfig {
   /// Persistent keepalive in seconds (0 = off).
   final int wgKeepalive;
 
+  // ---- v2.0
+
+  /// Router's LAN IPv4, used as the tunnel target when the router address is a name.
+  final String routerLanIp;
+
+  /// Try the router over Tailscale when it is not reachable directly.
+  final bool tailscaleEnabled;
+
+  /// Router's Tailscale address (100.x.y.z or MagicDNS name). Empty = rely on a subnet route.
+  final String tailscaleAddress;
+
+  /// Allow the Tests page to use outside services (exit IP, DNS leak, IPv6).
+  final bool externalTests;
+
+  /// Ask for fingerprint / face / device PIN before bypass, CLEAR, server changes and saving settings.
+  final bool appLock;
+
+  /// Notify when a device the app has not seen before gets a DHCP lease.
+  final bool alertNewDevices;
+
+  /// Scheduled whole-house bypass.
+  final bool schedBypassEnabled;
+
+  /// Days for the scheduled bypass: bit 0 = Monday ... bit 6 = Sunday.
+  final int schedDays;
+
+  /// Local start time HH:MM of the scheduled bypass.
+  final String schedStart;
+
+  /// Length of the scheduled bypass in minutes.
+  final int schedMinutes;
+
+  /// Remind to save a router config backup every N days (0 = off).
+  final int backupReminderDays;
+
+  /// Show the Proton server switcher (needs the "VPN: WireGuard" privilege).
+  final bool serverSwitcherEnabled;
+
+  /// WireGuard instance behind the main gateway.
+  final String mainWgInstance;
+
+  /// WireGuard instance behind the backup gateway (used to test candidates).
+  final String backupWgInstance;
+
+  /// Comma-separated cities the server switcher may pick from.
+  final String serverCities;
+
+  /// Run "find best server" once a night (between 3 and 5 am) while the app runs.
+  final bool autoBestNightly;
+
   Uri? get baseUri {
     final u = Uri.tryParse(normaliseRouterAddress(baseUrl));
     if (u == null || u.host.isEmpty || !(u.scheme == 'http' || u.scheme == 'https')) {
@@ -173,6 +239,28 @@ class AppConfig {
       certName: certName.trim().isEmpty ? defaultCertName : certName,
     );
   }
+
+  /// IPv4 address remote access must reach: the router address when it is
+  /// an IP, otherwise [routerLanIp] (router address given as a name such as
+  /// https://router.example.com). Null when neither is a valid IPv4.
+  String? get routerTunnelIp {
+    final h = routerHost;
+    if (h != null && ipv4ToInt(h) != null) return h;
+    final lan = routerLanIp.trim();
+    return ipv4ToInt(lan) != null ? lan : null;
+  }
+
+  /// True when the router address is a host name rather than an IP.
+  bool get routerAddressIsName {
+    final h = routerHost;
+    return h != null && ipv4ToInt(h) == null && !h.contains(':');
+  }
+
+  /// Cities the server switcher may choose from (trimmed, non-empty).
+  List<String> get serverCityList => [
+        for (final c in serverCities.split(','))
+          if (c.trim().isNotEmpty) c.trim(),
+      ];
 
   List<String> get wgAllowedIpList => [
         for (final p in wgAllowedIps.split(RegExp(r'[,\s]+')))
@@ -216,6 +304,22 @@ class AppConfig {
     String? wgAddress,
     String? wgAllowedIps,
     int? wgKeepalive,
+    String? routerLanIp,
+    bool? tailscaleEnabled,
+    String? tailscaleAddress,
+    bool? externalTests,
+    bool? appLock,
+    bool? alertNewDevices,
+    bool? schedBypassEnabled,
+    int? schedDays,
+    String? schedStart,
+    int? schedMinutes,
+    int? backupReminderDays,
+    bool? serverSwitcherEnabled,
+    String? mainWgInstance,
+    String? backupWgInstance,
+    String? serverCities,
+    bool? autoBestNightly,
   }) =>
       AppConfig(
         baseUrl: baseUrl ?? this.baseUrl,
@@ -254,6 +358,22 @@ class AppConfig {
         wgAddress: wgAddress ?? this.wgAddress,
         wgAllowedIps: wgAllowedIps ?? this.wgAllowedIps,
         wgKeepalive: wgKeepalive ?? this.wgKeepalive,
+        routerLanIp: routerLanIp ?? this.routerLanIp,
+        tailscaleEnabled: tailscaleEnabled ?? this.tailscaleEnabled,
+        tailscaleAddress: tailscaleAddress ?? this.tailscaleAddress,
+        externalTests: externalTests ?? this.externalTests,
+        appLock: appLock ?? this.appLock,
+        alertNewDevices: alertNewDevices ?? this.alertNewDevices,
+        schedBypassEnabled: schedBypassEnabled ?? this.schedBypassEnabled,
+        schedDays: schedDays ?? this.schedDays,
+        schedStart: schedStart ?? this.schedStart,
+        schedMinutes: schedMinutes ?? this.schedMinutes,
+        backupReminderDays: backupReminderDays ?? this.backupReminderDays,
+        serverSwitcherEnabled: serverSwitcherEnabled ?? this.serverSwitcherEnabled,
+        mainWgInstance: mainWgInstance ?? this.mainWgInstance,
+        backupWgInstance: backupWgInstance ?? this.backupWgInstance,
+        serverCities: serverCities ?? this.serverCities,
+        autoBestNightly: autoBestNightly ?? this.autoBestNightly,
       );
 
   Map<String, dynamic> toJson() => {
@@ -293,6 +413,22 @@ class AppConfig {
         'wgAddress': wgAddress,
         'wgAllowedIps': wgAllowedIps,
         'wgKeepalive': wgKeepalive,
+        'routerLanIp': routerLanIp,
+        'tailscaleEnabled': tailscaleEnabled,
+        'tailscaleAddress': tailscaleAddress,
+        'externalTests': externalTests,
+        'appLock': appLock,
+        'alertNewDevices': alertNewDevices,
+        'schedBypassEnabled': schedBypassEnabled,
+        'schedDays': schedDays,
+        'schedStart': schedStart,
+        'schedMinutes': schedMinutes,
+        'backupReminderDays': backupReminderDays,
+        'serverSwitcherEnabled': serverSwitcherEnabled,
+        'mainWgInstance': mainWgInstance,
+        'backupWgInstance': backupWgInstance,
+        'serverCities': serverCities,
+        'autoBestNightly': autoBestNightly,
       };
 
   factory AppConfig.fromJson(Map<String, dynamic> j) {
@@ -372,6 +508,22 @@ class AppConfig {
       wgAddress: o('wgAddress') ?? '',
       wgAllowedIps: s('wgAllowedIps', d.wgAllowedIps),
       wgKeepalive: keepalive > 65535 ? d.wgKeepalive : keepalive,
+      routerLanIp: s('routerLanIp', d.routerLanIp),
+      tailscaleEnabled: b('tailscaleEnabled', d.tailscaleEnabled),
+      tailscaleAddress: o('tailscaleAddress') ?? '',
+      externalTests: b('externalTests', d.externalTests),
+      appLock: b('appLock', d.appLock),
+      alertNewDevices: b('alertNewDevices', d.alertNewDevices),
+      schedBypassEnabled: b('schedBypassEnabled', d.schedBypassEnabled),
+      schedDays: i('schedDays', d.schedDays, min: 0),
+      schedStart: s('schedStart', d.schedStart),
+      schedMinutes: i('schedMinutes', d.schedMinutes),
+      backupReminderDays: i('backupReminderDays', d.backupReminderDays, min: 0),
+      serverSwitcherEnabled: b('serverSwitcherEnabled', d.serverSwitcherEnabled),
+      mainWgInstance: s('mainWgInstance', d.mainWgInstance),
+      backupWgInstance: s('backupWgInstance', d.backupWgInstance),
+      serverCities: s('serverCities', d.serverCities),
+      autoBestNightly: b('autoBestNightly', d.autoBestNightly),
     );
   }
 

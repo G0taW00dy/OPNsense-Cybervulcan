@@ -17,6 +17,17 @@ const _deviceOnly = {
   'notifyOnFailover',
   'checkUpdates',
   'configVersion',
+  // v2.0 personal preferences.
+  'appLock',
+  'alertNewDevices',
+  'schedBypassEnabled',
+  'schedDays',
+  'schedStart',
+  'schedMinutes',
+  'backupReminderDays',
+  'serverSwitcherEnabled',
+  'autoBestNightly',
+  'externalTests',
 };
 
 /// Every key that may be imported (the non-secret settings).
