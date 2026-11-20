@@ -226,6 +226,41 @@ Android runs one VPN app at a time: with Tailscale on, the Proton app on
 the phone is off. To keep the house VPN while away, set the router as the
 phone's Tailscale *exit node*.
 
+## 3c. Windows: home link ("Home devices" / "Everything") - v2.1
+
+On the Windows app, remote access modes other than "App only" use a network
+adapter named **Cybervulcan** (Wintun, the WireGuard project's signed driver
+DLL, shipped next to the app as `wintun.dll` with `wintun-LICENSE.txt`).
+
+* **Admin prompt.** Creating the adapter needs admin rights. When a mode is
+  turned on, Windows shows a UAC prompt for *Cybervulcan* (the app itself,
+  started with `--vpn-helper`). Say yes and a small helper does the network
+  changes; the tray app keeps running as you. Saying no leaves everything as
+  it was. Each new turn-on asks again.
+* **What changes on the PC** (only while the mode is on):
+  * *Home devices*: routes for the router and the "Home devices" addresses
+    (e.g. the NAS for mapped drives / Synology Drive) go into the adapter.
+    DNS and everything else are unchanged.
+  * *Everything*: all IPv4 traffic goes via the house (`0.0.0.0/1` +
+    `128.0.0.0/1`), DNS is the router, IPv6 is routed into the adapter and
+    dropped there (no IPv6 leak; apps use IPv4). The local network (printer,
+    hotel Wi-Fi login page) stays reachable. One host route keeps the
+    WireGuard connection itself on the real network (to the endpoint via
+    the normal gateway; it follows Wi-Fi changes).
+  * The router must let the PC's tunnel address reach those devices (or the
+    internet, for *Everything*): see the road-warrior firewall rules in
+    section 3 - by default they only allow the router itself.
+* **Turning it off** - mode back to "App only", remote access off, back
+  home, or closing the app - removes the adapter, its routes and DNS, and
+  ends the helper. If the app or PC crashed, Windows removes the adapter by
+  itself; the endpoint host route is removed the next time a mode is turned
+  on (it is recorded under `HKLM\SOFTWARE\Cybervulcan\VpnHelper` only while
+  a mode is on).
+* **Removing by hand** (should never be needed): close Cybervulcan; in an
+  admin prompt `route print` and `route delete <endpoint IP>` if a host
+  route to the endpoint is left, and `reg delete HKLM\SOFTWARE\Cybervulcan /f`.
+  Uninstalling the app removes `wintun.dll`; there is no Windows service.
+
 ## 4. Dynamic DNS (os-ddclient)
 
 `home.example.com` (the WireGuard endpoint) must point at the house's

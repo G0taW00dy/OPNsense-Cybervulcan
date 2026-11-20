@@ -19,15 +19,17 @@ const (
 )
 
 func saveHostRoutes(routes []HostRoute) {
+	if len(routes) == 0 {
+		// Nothing outstanding: leave no trace in the registry.
+		_ = registry.DeleteKey(registry.LOCAL_MACHINE, stateKey)
+		_ = registry.DeleteKey(registry.LOCAL_MACHINE, `SOFTWARE\Cybervulcan`) // only if empty
+		return
+	}
 	k, _, err := registry.CreateKey(registry.LOCAL_MACHINE, stateKey, registry.SET_VALUE)
 	if err != nil {
 		return
 	}
 	defer k.Close()
-	if len(routes) == 0 {
-		_ = k.DeleteValue(stateValue)
-		return
-	}
 	list := make([]string, len(routes))
 	for i, r := range routes {
 		list[i] = r.String()
