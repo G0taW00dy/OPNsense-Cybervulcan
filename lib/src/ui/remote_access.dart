@@ -58,6 +58,11 @@ Future<void> copyText(BuildContext context, String text, String done) async {
 }
 
 /// Lets the user paste text or open a file. Returns the text, or null.
+/// Wraps actions that open another app (file picker, browser, camera) so the
+/// app lock does not treat them as leaving the app. Set in main().
+Future<T> Function<T>(Future<T> Function() action) runExternal = _runDirect;
+Future<T> _runDirect<T>(Future<T> Function() action) => action();
+
 Future<String?> pasteOrOpenText(BuildContext context, {required String title, required String hint}) {
   final ctrl = TextEditingController();
   return showDialog<String>(
@@ -84,17 +89,21 @@ Future<String?> pasteOrOpenText(BuildContext context, {required String title, re
           label: const Text('Open file...'),
           onPressed: () async {
             try {
-              final f = await openFile(
-                acceptedTypeGroups: Platform.isWindows
-                    ? const [XTypeGroup(label: 'Settings / WireGuard', extensions: ['json', 'conf', 'txt'])]
-                    : const [],
-              );
-              if (f == null) return;
+              final f = await runExternal(() => openFile(
+                    acceptedTypeGroups: Platform.isWindows
+                        ? const [XTypeGroup(label: 'Settings / WireGuard', extensions: ['json', 'conf', 'txt'])]
+                        : const [],
+                  ));
+              if (f == null || !ctx.mounted) return;
+              if (await f.length() > 256 * 1024) throw const FormatException('That file is too big for a config.');
               final text = await f.readAsString();
+              if (!ctx.mounted) return;
               ctrl.text = text.length > 64 * 1024 ? text.substring(0, 64 * 1024) : text;
             } on Object catch (e) {
               if (ctx.mounted) {
-                ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text('Could not open the file: $e')));
+                ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
+                    content: Text('Could not open that file${e is FormatException ? ': ${e.message}' : ''}. '
+                        'You can paste the text into the box instead.')));
               }
             }
           },

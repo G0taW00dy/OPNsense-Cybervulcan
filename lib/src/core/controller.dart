@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show Platform;
 
 import 'package:flutter/foundation.dart';
 
@@ -82,7 +83,24 @@ class CybervulcanController extends ChangeNotifier {
   bool get locked => config.appLock && !_sessionValid;
 
   /// The window was hidden / the app went to the background.
-  void appBackgrounded() => _backgroundSince ??= clock();
+  void appBackgrounded() {
+    // A file picker / browser the app opened itself is not "leaving the app".
+    if (_externalUi > 0) return;
+    _backgroundSince ??= clock();
+  }
+
+  int _externalUi = 0;
+
+  /// Runs [action] (which opens another app: a file picker, the browser, the
+  /// camera) without the app lock counting that time as being away.
+  Future<T> whileExternal<T>(Future<T> Function() action) async {
+    _externalUi++;
+    try {
+      return await action();
+    } finally {
+      _externalUi--;
+    }
+  }
 
   /// Back in the foreground: locks if it was away long enough.
   void appForegrounded() {
@@ -381,9 +399,28 @@ class CybervulcanController extends ChangeNotifier {
     notifyListeners();
     final r = await _action((c) async {
       final (m, b) = await sw.peers();
-      await sw.apply(main ? m : b, server);
+      final peer = main ? m : b;
+      final old = ProtonServer(
+          name: '${main ? config.mainLabel : config.backupLabel} (${peer.serverAddress})',
+          entryIp: peer.serverAddress,
+          publicKey: peer.publicKey,
+          port: peer.serverPort);
+      try {
+        await sw.apply(peer, server, main: main);
+      } on ServerSwitchException catch (e) {
+        // Put the old server back so the tunnel keeps working.
+        try {
+          await sw.apply(peer, old, main: main);
+        } on Object {
+          throw ServerSwitchException('${e.message} Putting the old server back also failed - '
+              'check VPN > WireGuard on the router.');
+        }
+        throw ServerSwitchException('${e.message} The old server was put back.');
+      }
       return true;
-    }, done: '${main ? config.mainLabel : config.backupLabel} tunnel now uses ${server.name}');
+    },
+        done: '${main ? config.mainLabel : config.backupLabel} tunnel now uses ${server.name} (handshake confirmed)',
+        detail: (_) => sw.monitorWarning);
     serverBusy = false;
     notifyListeners();
     return r ?? false;
@@ -412,6 +449,10 @@ class CybervulcanController extends ChangeNotifier {
       return null;
     } on ArgumentError catch (e) {
       log('Stopped: ${e.message}');
+      return null;
+    } on ServerSwitchException catch (e) {
+      log('Stopped: ${e.message}');
+      lastActionError = 'Server switch failed: ${e.message}';
       return null;
     } finally {
       serverBusy = false;
@@ -625,6 +666,9 @@ class CybervulcanController extends ChangeNotifier {
     } on ArgumentError catch (e) {
       lastActionError = '${e.message}';
       return null;
+    } on ServerSwitchException catch (e) {
+      lastActionError = e.message;
+      return null;
     } finally {
       snapshot = snapshot.copyWith(busy: false);
       await _refreshAfterChange();
@@ -651,6 +695,9 @@ class CybervulcanController extends ChangeNotifier {
         done: 'Deadline stored on the router - it can now end the bypass by itself');
   }
 
+  /// "This phone" / "This PC" in messages (overridable in tests).
+  String deviceWord = Platform.isAndroid ? 'This phone' : 'This PC';
+
   Future<void> setPcClear(bool clear) async {
     if (!supportsPcMode) return;
     if (clear && !await authorize('Take this device off the VPN (CLEAR)')) return;
@@ -661,7 +708,7 @@ class CybervulcanController extends ChangeNotifier {
       return;
     }
     await _action((c) => setPcMode(client: c, cfg: config, pcIp: ip, clear: clear),
-        done: clear ? 'PC is now CLEAR (direct internet)' : 'PC is back on the VPN',
+        done: clear ? '$deviceWord is now CLEAR (direct internet)' : '$deviceWord is back on the VPN',
         detail: (r) => r.$2.describe());
   }
 

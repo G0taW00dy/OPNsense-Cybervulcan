@@ -15,6 +15,14 @@ import 'widgets/vulcan_logo.dart';
 
 final navigatorKey = GlobalKey<NavigatorState>();
 
+/// Navigator of the lock screen: the unlock PIN dialog must show there,
+/// because the app's own pages are hidden while locked.
+final lockNavigatorKey = GlobalKey<NavigatorState>();
+
+/// Context for dialogs the app lock shows (PIN entry).
+BuildContext? lockDialogContext(CybervulcanController c) =>
+    (c.locked ? lockNavigatorKey.currentContext : null) ?? navigatorKey.currentContext;
+
 class CybervulcanApp extends StatelessWidget {
   const CybervulcanApp({super.key, required this.controller, this.updates});
 
@@ -28,7 +36,11 @@ class CybervulcanApp extends StatelessWidget {
         debugShowCheckedModeBanner: false,
         theme: buildTheme(),
         themeMode: ThemeMode.dark,
-        home: LockGate(controller: controller, child: HomeShell(controller: controller, updates: updates)),
+        // The lock sits above the Navigator, so it also covers pushed pages
+        // and dialogs, and they survive being locked (v2.1 fix: the old lock
+        // replaced the whole page tree while a file picker was open).
+        builder: (context, child) => LockGate(controller: controller, child: child ?? const SizedBox.shrink()),
+        home: HomeShell(controller: controller, updates: updates),
       );
 }
 
@@ -192,39 +204,75 @@ class _LockGateState extends State<LockGate> with WidgetsBindingObserver {
     if (mounted) setState(() => _prompting = false);
   }
 
+  /// Phone: ask straight away when the lock appears - but only once the app
+  /// is really in front again. Asking for a fingerprint while Android is
+  /// still handing back from another app (file picker, browser) can crash.
+  void _autoPrompt() {
+    Future<void>.delayed(const Duration(milliseconds: 600), () {
+      if (!mounted || !c.locked || _prompting) return;
+      if (WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) {
+        _autoTried = false; // try again on the next resume
+        return;
+      }
+      _unlock();
+    });
+  }
+
+  Widget _lockScreen(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    return Material(
+      color: Theme.of(context).scaffoldBackgroundColor,
+      child: SafeArea(
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(32),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              const VulcanLogo(size: 72),
+              const SizedBox(height: 20),
+              Text('Cybervulcan is locked', style: t.headlineSmall),
+              const SizedBox(height: 8),
+              Text('The house stays protected and alerts keep coming while it is locked.',
+                  textAlign: TextAlign.center, style: t.bodyMedium?.copyWith(color: OpnColors.textSoft)),
+              const SizedBox(height: 24),
+              FilledButton.icon(
+                onPressed: _prompting ? null : _unlock,
+                icon: Icon(Platform.isWindows ? Icons.lock_open : Icons.fingerprint),
+                label: const Text('Unlock'),
+              ),
+            ]),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) => ListenableBuilder(
         listenable: c,
         builder: (context, _) {
-          if (!c.locked) return widget.child;
-          // Phone: ask straight away when the lock screen appears. PC: wait
-          // for a click (the tray app may start hidden at sign-in).
-          if (Platform.isAndroid && !_autoTried && !_prompting) {
+          final locked = c.locked;
+          // PC: wait for a click (the tray app may start hidden at sign-in).
+          if (locked && Platform.isAndroid && !_autoTried && !_prompting) {
             _autoTried = true;
-            WidgetsBinding.instance.addPostFrameCallback((_) => _unlock());
+            WidgetsBinding.instance.addPostFrameCallback((_) => _autoPrompt());
           }
-          final t = Theme.of(context).textTheme;
-          return Scaffold(
-            body: Center(
-              child: Padding(
-                padding: const EdgeInsets.all(32),
-                child: Column(mainAxisSize: MainAxisSize.min, children: [
-                  const VulcanLogo(size: 72),
-                  const SizedBox(height: 20),
-                  Text('Cybervulcan is locked', style: t.headlineSmall),
-                  const SizedBox(height: 8),
-                  Text('The house stays protected and alerts keep coming while it is locked.',
-                      textAlign: TextAlign.center, style: t.bodyMedium?.copyWith(color: OpnColors.textSoft)),
-                  const SizedBox(height: 24),
-                  FilledButton.icon(
-                    onPressed: _prompting ? null : _unlock,
-                    icon: Icon(Platform.isWindows ? Icons.lock_open : Icons.fingerprint),
-                    label: const Text('Unlock'),
+          return Stack(children: [
+            // Kept mounted (pages, dialogs and their state survive), but not
+            // painted, focusable or readable while locked.
+            Offstage(offstage: locked, child: TickerMode(enabled: !locked, child: widget.child)),
+            if (locked)
+              Positioned.fill(
+                child: Navigator(
+                  key: lockNavigatorKey,
+                  onGenerateRoute: (_) => PageRouteBuilder<void>(
+                    pageBuilder: (context, _, _) => ListenableBuilder(
+                      listenable: c,
+                      builder: (context, _) => _lockScreen(context),
+                    ),
                   ),
-                ]),
+                ),
               ),
-            ),
-          );
+          ]);
         },
       );
 }

@@ -308,7 +308,18 @@ class ServerSwitcher {
     this.settle = const Duration(seconds: 75),
     this.samples = 3,
     this.sampleGap = const Duration(seconds: 5),
+    this.verifyAttempts = 12,
+    this.verifyGap = const Duration(seconds: 5),
   }) : _sleep = sleep ?? Future<void>.delayed;
+
+  /// After a change: how often / how far apart to look for a fresh handshake
+  /// with the new server (default 12 x 5 s = 1 minute).
+  final int verifyAttempts;
+  final Duration verifyGap;
+
+  /// Set when the router would not let the app refresh the gateway monitor
+  /// (missing privileges); the tunnel works but its ping/loss may lag behind.
+  String? monitorWarning;
 
   final OpnsenseClient client;
   final AppConfig config;
@@ -333,10 +344,51 @@ class ServerSwitcher {
   ProtonServer _asServer(WgPeer p, String label) => ProtonServer(
       name: '$label (${p.serverAddress})', entryIp: p.serverAddress, publicKey: p.publicKey, port: p.serverPort);
 
-  /// Points one tunnel at [server] and applies it.
-  Future<void> apply(WgPeer peer, ProtonServer server) async {
-    await client.setWgPeerServer(peer.uuid, address: server.entryIp, port: server.port, publicKey: server.publicKey);
+  /// Points one tunnel at [server], applies it, refreshes the gateway
+  /// monitor and waits for a real WireGuard handshake with the new server.
+  /// Throws [ServerSwitchException] when the server never answers.
+  Future<void> apply(WgPeer peer, ProtonServer server, {required bool main}) async {
+    final instance = main ? config.mainWgInstance : config.backupWgInstance;
+    final gateway = main ? config.mainGateway : config.backupGateway;
+    await client.setWgPeerServer(peer.uuid,
+        address: server.entryIp, port: server.port, publicKey: server.publicKey, instance: instance);
+    // The peer must still belong to its instance, or the tunnel goes dark.
+    final after = (await client.wgPeers()).where((p) => p.uuid == peer.uuid);
+    if (after.isEmpty || !after.first.belongsTo(instance)) {
+      throw ServerSwitchException('The router lost the link between the peer and the "$instance" tunnel. '
+          'Open VPN > WireGuard > Peers on the router and tick the instance again.');
+    }
     await client.wgReconfigure();
+    // The monitor's host route goes through the tunnel; re-apply routes and
+    // restart the monitor so the readings really come from the new server.
+    final routes = await client.refreshRoutes();
+    final monitor = await client.restartGatewayMonitor(gateway);
+    monitorWarning = routes && monitor
+        ? null
+        : 'Could not refresh the gateway monitor (the API user needs "System: Static Routes" and '
+            '"Status: Services"). The tunnel works, but its ping/loss may be wrong until the router refreshes it.';
+    await verifyHandshake(server);
+  }
+
+  /// Waits until the router reports a fresh handshake and received data from
+  /// [server]. A server that refuses the router's key never completes one.
+  Future<void> verifyHandshake(ProtonServer server) async {
+    for (var i = 0; i < verifyAttempts; i++) {
+      if (i > 0) await _sleep(verifyGap);
+      List<WgRuntime> rows;
+      try {
+        rows = await client.wgShow();
+      } on OpnsenseException {
+        continue;
+      }
+      for (final r in rows) {
+        if (!r.isPeer || !endpointMatches(r.endpoint, server.entryIp, server.port)) continue;
+        final age = r.handshakeAgeSeconds;
+        if (age != null && age > 0 && age <= 180 && (r.rxBytes ?? 0) > 0) return;
+      }
+    }
+    throw ServerSwitchException('${server.name} did not answer (no WireGuard handshake within '
+        '${verifyAttempts * verifyGap.inSeconds} s). The provider may not accept this router key on that server.');
   }
 
   Future<ServerMeasurement> _measure(String gateway, ProtonServer server, void Function(String) log) async {
@@ -378,8 +430,14 @@ class ServerSwitcher {
           continue;
         }
         log('Testing ${c.label} on the backup tunnel ...');
-        await apply(backup, c);
         backupMoved = true;
+        try {
+          await apply(backup, c, main: false);
+        } on ServerSwitchException catch (e) {
+          log('  ${e.message}');
+          results.add(ServerMeasurement(c, error: 'no handshake'));
+          continue;
+        }
         await _sleep(settle);
         final m = await _measure(config.backupGateway, c, log);
         log('  ${m.describe()}');
@@ -397,11 +455,17 @@ class ServerSwitcher {
       log(plan.reason);
       if (plan.changeMain) {
         log('Moving main to ${plan.newMain.server.name} ...');
-        await apply(main, plan.newMain.server);
+        try {
+          await apply(main, plan.newMain.server, main: true);
+        } on ServerSwitchException catch (e) {
+          log('  ${e.message} Putting main back on ${main.serverAddress} ...');
+          await apply(main, current, main: true);
+          rethrow;
+        }
       }
       final nb = plan.newBackup?.server ?? originalBackup;
       log('Backup: ${nb.name}.');
-      await apply(backup, nb);
+      await apply(backup, nb, main: false);
       backupMoved = false;
       log('Done.');
       return plan;
@@ -409,11 +473,35 @@ class ServerSwitcher {
       if (backupMoved) {
         log('Putting the backup tunnel back on ${originalBackup.entryIp} ...');
         try {
-          await apply(backup, originalBackup);
+          await apply(backup, originalBackup, main: false);
         } on Object catch (e) {
           log('  could not restore the backup: $e');
         }
       }
     }
   }
+}
+
+/// A server change that did not work; [message] is shown to the user.
+class ServerSwitchException implements Exception {
+  ServerSwitchException(this.message);
+  final String message;
+  @override
+  String toString() => message;
+}
+
+/// Whether a `wg show` endpoint (`ip:port` or `[v6]:port`) is [ip]:[port].
+bool endpointMatches(String? endpoint, String ip, int port) {
+  if (endpoint == null) return false;
+  final e = endpoint.trim();
+  final colon = e.lastIndexOf(':');
+  if (colon <= 0) return false;
+  final host = e.substring(0, colon).replaceAll(RegExp(r'[\[\]]'), '');
+  return host == ip.trim() && int.tryParse(e.substring(colon + 1)) == port;
+}
+
+/// Region part of a provider server name (`US-CA#742` -> `US-CA`), or null.
+String? serverRegionHint(String name) {
+  final m = RegExp(r'^([A-Z]{2}(?:-[A-Z]{2,3})?)[#-]?\d').firstMatch(name.trim());
+  return m?.group(1);
 }

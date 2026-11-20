@@ -202,16 +202,37 @@ class _ServersPageState extends State<ServersPage> {
   }
 
   Future<String?> _askCity(ProtonServer s) async {
-    final ctl = TextEditingController(text: c.config.serverCityList.firstOrNull ?? '');
+    // No guess: a wrong pre-filled city mislabels the server (20 Nov bug).
+    final ctl = TextEditingController();
+    final region = serverRegionHint(s.name);
     final r = await showDialog<String>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('City of ${s.name}'),
-        content: TextField(controller: ctl, decoration: const InputDecoration(labelText: 'City, e.g. Chicago')),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Skip')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, ctl.text.trim()), child: const Text('OK')),
-        ],
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setD) => AlertDialog(
+          title: Text('Which city is ${s.name} in?'),
+          content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            if (region != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text('The name says region $region. The provider\'s server list shows the city.'),
+              ),
+            TextField(
+                controller: ctl,
+                autofocus: true,
+                decoration: const InputDecoration(labelText: 'City', hintText: 'e.g. Los Angeles')),
+            if (c.config.serverCityList.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Wrap(spacing: 6, children: [
+                for (final city in c.config.serverCityList)
+                  ActionChip(label: Text(city), onPressed: () => setD(() => ctl.text = city)),
+              ]),
+            ],
+          ]),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Skip')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, ctl.text.trim()), child: const Text('OK')),
+          ],
+        ),
       ),
     );
     ctl.dispose();
