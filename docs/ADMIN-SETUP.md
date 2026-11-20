@@ -196,6 +196,39 @@ The app only uses the tunnel when the router does not answer directly within
 3 minutes unused. If home is behind CGNAT (no public IPv4 on WAN), inbound
 WireGuard cannot work; see the CGNAT notes in the project docs.
 
+### Remote modes: home devices / everything (v2.1, phone)
+
+By default ("App only") nothing above changes. A user can set **Settings >
+Remote access > What it carries** to:
+
+* **Home devices only** - the phone runs a real VPN (it takes Android's one
+  VPN slot, so the provider's VPN app is off while connected) whose routes are
+  only the listed home devices (e.g. the NAS `10.10.10.5`) plus the router.
+  Synology apps (5001, 6690, 445 ...) then work from anywhere.
+* **Everything via home** - all of the phone's traffic goes to the house and
+  leaves through the house's VPN tunnels and kill switch. DNS = the router.
+  IPv6 is routed into the VPN and dropped so it cannot leak.
+
+Both switch on only while the phone is away and the WireGuard tunnel is
+connected, and off at home. The packets travel through the same `RW` tunnel
+as the app's API calls, from the phone's tunnel address (e.g. `10.10.99.3`).
+
+What the app does by itself: it adds the home devices (or `0.0.0.0/0`) to
+the tunnel's Allowed IPs while such a mode is chosen, so the user does not
+edit "Allowed IPs". The router peer stays `10.10.99.x/32`.
+
+What the router needs (per mode, on the **RW** interface rules, above the
+"nothing else"):
+
+* Home devices: pass TCP/UDP from that peer's address (or `RW net`) to the
+  listed devices, ideally only the ports needed (NAS: 5001, 6690, 445).
+* Everything: pass from the peer to any destination with the **gateway set
+  to the VPN gateway group** (policy route), tagged like the VPN network so
+  the kill switch applies, plus DNS to `10.10.10.254:53` (or the address the
+  user's "Router LAN IP" names). Outbound NAT for `10.10.99.0/24` on the
+  Proton WireGuard interfaces. Without these the phone has no internet while
+  connected - which is the safe failure.
+
 ## 3b. Tailscale (remote access behind CGNAT) - v2.0
 
 WireGuard (section 3) needs the router to be reachable from the internet.

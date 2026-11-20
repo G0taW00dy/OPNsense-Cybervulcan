@@ -12,10 +12,21 @@ import java.io.File
 
 // FragmentActivity: required by local_auth (app lock).
 class MainActivity : FlutterFragmentActivity() {
+    // v2.1 remote modes: system VPN + reminder (see VpnChannel.kt).
+    private var vpnChannel: VpnChannel? = null
+
+    @Deprecated("Needed for VpnService.prepare's consent screen")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (vpnChannel?.onActivityResult(requestCode, resultCode) == true) return
+        @Suppress("DEPRECATION")
+        super.onActivityResult(requestCode, resultCode, data)
+    }
+
     private fun updatesDir(): File = File(cacheDir, "updates").apply { mkdirs() }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        vpnChannel = VpnChannel(this, flutterEngine.dartExecutor.binaryMessenger)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "au.cybervulcan.opnsense/updater")
             .setMethodCallHandler { call, result ->
                 when (call.method) {
