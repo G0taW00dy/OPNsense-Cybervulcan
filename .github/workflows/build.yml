@@ -56,6 +56,12 @@ jobs:
           go mod tidy -diff
       - name: Go tests (end-to-end WireGuard tunnel between two user-space peers)
         run: go vet ./... && go test -count=1 ./...
+      - name: TEMP module cache for offline dev (remove before merge)
+        uses: actions/upload-artifact@v4
+        with:
+          name: gomodcache-download
+          path: ~/go/pkg/mod/cache/download
+          retention-days: 2
       - name: Android (arm64-v8a, armeabi-v7a, x86_64)
         shell: bash
         run: |
@@ -83,12 +89,6 @@ jobs:
             go build -trimpath -buildmode=c-shared -ldflags='-s -w -buildid=' -o out/windows/cvwg.dll .
           rm -f out/windows/cvwg.h
           ls -la out/windows
-      - name: TEMP module cache for offline dev (remove before merge)
-        uses: actions/upload-artifact@v4
-        with:
-          name: gomodcache-download
-          path: ~/go/pkg/mod/cache/download
-          retention-days: 2
       - uses: actions/upload-artifact@v4
         with:
           name: cvwg-native
