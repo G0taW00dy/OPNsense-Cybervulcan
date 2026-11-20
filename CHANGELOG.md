@@ -1,5 +1,47 @@
 # Changelog
 
+## 2.1.0 (unreleased)
+
+### Fixed (found testing 2.0.4)
+
+* Server switch: the router's `set_client` clears the peer's instance link
+  when it isn't sent, which took the tunnel down. The link is now read and
+  sent back (and restored if already lost); routes and the gateway monitor
+  are refreshed; the switch only counts once a real handshake with the new
+  server is seen, otherwise the old server is put back.
+* No more "status: null" after a WireGuard restart (`{"result":"ok"}` is OK).
+* App lock: the lock now sits above every page, so pages and dialogs survive
+  it and the PIN dialog shows on the lock screen; the fingerprint prompt
+  waits until the app is really back in front; time in a file picker or
+  browser opened by the app doesn't count as leaving it (fixes the crash
+  opening a config file from a cloud drive).
+* Imported servers: the city is asked, not guessed; "Set city" / "Remove".
+* "This phone is now CLEAR" on the phone.
+* Tests: Quad9 recognised under its Australian network names; "line
+  congestion" verdict when both tunnels slow down alike; bufferbloat also
+  reads the router's tunnel monitor under load.
+
+### Added
+
+* **Provider profiles**: Proton VPN, Mullvad (server list downloaded from
+  Mullvad), Other WireGuard providers. Proton closed its public server list
+  in 2025, so Proton servers are added from its config page.
+* **Scan QR** (phone) or paste a config to add a server; only the server
+  address and public key are kept. Decoding runs on the device (ZXing).
+* **Tunnel key expiry** dates with warnings 30/7/1 days before and on expiry.
+* **Shaper card and auto-tune**: shows the VPN limits; auto-tune lowers them
+  when lag rises under load and raises them when clear (within min/max),
+  starts again after a server switch; re-tune; restore original limits.
+* **Router safety net**: journal of every router change the app makes,
+  failed server switches undone, shaper limits restored if tuning keeps
+  failing.
+* **Setup checker** (Settings > Test): checks gateways, kill-switch rule,
+  tunnel links and shaper pipes with the fix in each line, and lists what
+  this API key can do.
+* **Copy diagnostics**: redacted bug-report text (no keys or secrets; public
+  IPs and domain names blanked) with recent router changes and app errors.
+* docs/ROUTER-REMOTE-MODES.md: router steps for the remote access modes.
+
 ## 2.0.4 (pre-release)
 
 ### Fixed
