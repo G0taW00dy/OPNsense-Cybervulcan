@@ -208,7 +208,7 @@ class WindowsSystemVpn implements SystemVpn {
       // endpoint route isn't re-pinned after an IP change - not shipped yet.
       throw SystemVpnException('"Everything via home" is not available on Windows yet - use "Home devices only".');
     }
-    if (!installedForAllUsers(Platform.resolvedExecutable)) {
+    if (Platform.isWindows && !installedForAllUsers(Platform.resolvedExecutable)) {
       // The elevated helper runs this exe and its DLLs; from a per-user
       // folder any program could swap a DLL and gain admin rights.
       throw SystemVpnException('The home link needs the app installed for all users (Program Files): run the '
