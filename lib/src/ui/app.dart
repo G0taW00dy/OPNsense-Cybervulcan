@@ -271,7 +271,12 @@ class _LockGateState extends State<LockGate> with WidgetsBindingObserver {
             ),
             if (locked)
               Positioned.fill(
-                child: Navigator(
+                // Its own Navigator must not share MaterialApp's HeroController:
+                // a second navigator on the same controller breaks every later
+                // page/dialog push ("Null check" in HeroController.didChangeTop,
+                // seen in 2.1.0 diagnostics).
+                child: HeroControllerScope.none(
+                  child: Navigator(
                   key: lockNavigatorKey,
                   onGenerateRoute: (_) => PageRouteBuilder<void>(
                     pageBuilder: (context, _, _) => ListenableBuilder(
@@ -279,6 +284,7 @@ class _LockGateState extends State<LockGate> with WidgetsBindingObserver {
                       builder: (context, _) => _lockScreen(context),
                     ),
                   ),
+                ),
                 ),
               ),
           ]);

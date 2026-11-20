@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.1.1 (pre-release, 21 Nov 2026)
+
+* Fix: after the app had been locked once, opening a dialog or page could
+  fail ("Null check operator" in HeroController) - the lock screen's own
+  navigator shared the app's hero controller.
+
 ## 2.1.0 (pre-release, 21 Nov 2026)
 
 ### Fixed (found testing 2.0.4)
