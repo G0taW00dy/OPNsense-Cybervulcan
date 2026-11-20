@@ -75,6 +75,25 @@
 * Native library: tsnet (Tailscale 1.104) next to wireguard-go in the same
   library; Go 1.27. Log upload to Tailscale is off.
 
+### Windows: home link (remote modes "Home devices" / "Everything")
+
+* The remote modes now work on Windows too, through a new **Cybervulcan**
+  network adapter (Wintun): *Home devices* routes the listed home devices
+  (e.g. the NAS) through the house; *Everything* sends all of the PC's
+  traffic via the house with DNS from the router and no IPv6 leak. *App
+  only* (the default) is unchanged and needs no admin rights.
+* Turning a mode on shows a Windows admin (UAC) prompt: a small helper (the
+  app's own exe with `--vpn-helper`) creates the adapter and sets routes /
+  DNS, and talks to the tray app over pipes only your Windows user can open
+  (start / stop / status with checked settings, and the adapter's packets).
+  The WireGuard tunnel and its keys stay in the tray app; packets run
+  through the same VPN core as on Android. Turning the mode off, or closing
+  the app, removes the adapter, routes and DNS.
+* The WireGuard endpoint and the router's own address stay on the real
+  network (host routes via the normal gateway, following Wi-Fi changes).
+* The installer ships the official signed `wintun.dll` (0.14.1, checksum
+  and signature checked in CI) and its licence (`wintun-LICENSE.txt`).
+
 ## 2.0.4 (pre-release)
 
 ### Fixed

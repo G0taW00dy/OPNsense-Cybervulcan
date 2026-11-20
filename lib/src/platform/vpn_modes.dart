@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import '../core/config.dart';
 import '../core/remote_modes.dart';
 import '../net/router_link.dart' show LinkStatus;
+import 'vpn_modes_windows.dart';
 
 /// What the platform VPN is asked to carry.
 class SystemVpnRequest {
@@ -16,6 +17,7 @@ class SystemVpnRequest {
     this.dns,
     this.mtu = 1280,
     this.transport = 'wireguard',
+    this.config,
   });
 
   /// From [AppConfig]: routes, allowed destinations and DNS for its mode.
@@ -25,7 +27,12 @@ class SystemVpnRequest {
         allowed: systemVpnAllowed(cfg),
         dns: systemVpnDns(cfg),
         transport: transport,
+        config: cfg,
       );
+
+  /// The settings this request came from (Windows needs the endpoint and
+  /// router address for its adapter routes). Not part of [toArgs].
+  final AppConfig? config;
 
   final String mode;
   final List<String> routes;
@@ -221,10 +228,13 @@ class AndroidSystemVpn implements SystemVpn {
   }
 }
 
-/// The platform's [SystemVpn]. Windows: plug the Wintun implementation in here.
+/// The platform's [SystemVpn]: Android VpnService, Windows Wintun adapter
+/// (vpn_modes_windows.dart).
 SystemVpn systemVpnForPlatform() => Platform.isAndroid
     ? AndroidSystemVpn()
-    : const UnsupportedSystemVpn('"Home devices" and "Everything" are not available on this platform yet.');
+    : Platform.isWindows
+        ? WindowsSystemVpn.load()
+        : const UnsupportedSystemVpn('"Home devices" and "Everything" are not available on this platform yet.');
 
 /// What the Status page shows about the system VPN.
 enum HomeLinkState { off, connecting, connected, waiting, error }

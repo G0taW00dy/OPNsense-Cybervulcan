@@ -4,9 +4,18 @@
 
 #include "flutter_window.h"
 #include "utils.h"
+#include "vpn_helper.h"
 
 int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
                       _In_ wchar_t *command_line, _In_ int show_command) {
+  // Cybervulcan: the elevated "home link" helper (--vpn-helper) runs from
+  // cvwg.dll without the UI. Checked before the single-instance mutex, which
+  // the running tray app holds.
+  int helper_exit = 0;
+  if (RunVpnHelperIfRequested(&helper_exit)) {
+    return helper_exit;
+  }
+
   // Cybervulcan: single instance. A second launch brings the existing window
   // to the front instead of creating a second tray icon.
   HANDLE instance_mutex =
