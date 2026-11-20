@@ -7,6 +7,7 @@ import '../api/models.dart';
 import '../api/opnsense_client.dart';
 import '../net/router_link.dart';
 import '../net/tunnel.dart';
+import '../platform/vpn_modes.dart';
 import 'bypass.dart';
 import 'client_factory.dart';
 import 'config.dart';
@@ -31,8 +32,10 @@ class CybervulcanController extends ChangeNotifier {
     required this.supportsPcMode,
     DateTime Function()? clock,
     RouterLink? link,
+    SystemVpn? systemVpn,
   })  : clock = clock ?? DateTime.now,
-        link = link ?? RouterLink(tunnel: NativeTunnel.load());
+        link = link ?? RouterLink(tunnel: NativeTunnel.load()),
+        homeLink = HomeLink(systemVpn ?? systemVpnForPlatform(), clock: clock);
 
   final PrefsStore prefs;
   final SecretStore secrets;
@@ -43,6 +46,10 @@ class CybervulcanController extends ChangeNotifier {
 
   /// Direct vs. remote (in-app WireGuard) connection to the router.
   final RouterLink link;
+
+  /// v2.1: system VPN for the "home devices" / "everything" remote modes,
+  /// and the phone's VPN-app reminder (lib/src/platform/vpn_modes.dart).
+  final HomeLink homeLink;
 
   AppConfig config = const AppConfig();
   ApiCredentials? _creds;
@@ -233,6 +240,13 @@ class CybervulcanController extends ChangeNotifier {
     notifyListeners();
     // After the poll has finished (actions below refresh again themselves).
     if (next.reachable) Timer.run(() => unawaited(_afterPoll()));
+    // v2.1 hook: system VPN on/off with remote access + VPN-app reminder.
+    unawaited(homeLink
+        .onLink(config, next.link,
+            notify: (title, body) => _events.add(AlertEvent(AlertKind.vpnReminder, title, body)))
+        .then((changed) {
+      if (changed && !_disposed) notifyListeners();
+    }));
   }
 
   // ------------------------------------------------- v2.0 background jobs
@@ -443,8 +457,10 @@ class CybervulcanController extends ChangeNotifier {
     // Reach the router directly, or through the in-app tunnel when away.
     // This is a TLS handshake only: if the certificate is wrong nothing -
     // in particular not the API key - is sent.
+    // (v2.1: a system-VPN mode keeps the tunnel up in the background.)
     final ls = await link.check(
-        _foreground ? config : config.copyWith(remoteEnabled: false), _wg);
+        _foreground || homeLink.keepTunnelInBackground(config) ? config : config.copyWith(remoteEnabled: false),
+        _wg);
     if (!ls.connected) {
       return HouseSnapshot(
         fetchedAt: now,
@@ -714,6 +730,7 @@ class CybervulcanController extends ChangeNotifier {
     if (_foreground == foreground) return;
     _foreground = foreground;
     if (!foreground) {
+      if (homeLink.keepTunnelInBackground(config)) return; // v2.1: the VPN needs the tunnel
       unawaited(link.close());
     } else {
       unawaited(refresh());

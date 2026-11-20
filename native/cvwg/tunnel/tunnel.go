@@ -310,7 +310,8 @@ var ErrNotAllowed = errors.New("destination is outside the tunnel's allowed IPs"
 // the system-VPN modes ("home devices", "everything"); the loopback
 // forwarder is not involved and keeps working as before. The destination
 // must be inside AllowedIPs, so the app config must list the home devices
-// (or 0.0.0.0/0 for "everything") there - see docs/remote-modes.md.
+// (or 0.0.0.0/0 for "everything") there; the app adds them itself (lib/src/core/remote_modes.dart
+// tunnelAllowedIps, docs/ADMIN-SETUP.md "Remote modes").
 func (t *Tunnel) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
 	t.mu.Lock()
 	closed := t.closed

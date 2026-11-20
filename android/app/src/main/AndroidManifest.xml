@@ -7,6 +7,11 @@
     <!-- In-app updates: hand the downloaded, checksum-verified APK to Android's installer.
          The user still confirms every install on the system screen. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
+    <!-- v2.1 remote modes "Home devices only" / "Everything via home": system VPN
+         (CybervulcanVpnService) as a foreground service. VPN apps may use the
+         systemExempted type (Android 14+). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED"/>
 
     <!-- usesCleartextTraffic: the router may still be on http://10.10.10.254 (VM
          phase) and the DNS resolver test endpoint (edns.ip-api.com) is HTTP-only.
@@ -82,6 +87,21 @@
             </intent-filter>
             <meta-data
                 android:name="android.service.quicksettings.TOGGLEABLE_TILE"
+                android:value="true"/>
+        </service>
+
+        <!-- System VPN for the remote modes. Only Android itself can bind it
+             (BIND_VPN_SERVICE); supports Settings > VPN > Always-on. -->
+        <service
+            android:name=".CybervulcanVpnService"
+            android:permission="android.permission.BIND_VPN_SERVICE"
+            android:foregroundServiceType="systemExempted"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.net.VpnService"/>
+            </intent-filter>
+            <meta-data
+                android:name="android.net.VpnService.SUPPORTS_ALWAYS_ON"
                 android:value="true"/>
         </service>
 

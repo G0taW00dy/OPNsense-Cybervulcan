@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.1.0 (unreleased)
+
+### Remote modes and VPN-app reminder (phone)
+
+* **Remote access can carry more than the app** (Settings > Remote access >
+  What it carries): *App only* (default, unchanged), *Home devices only*
+  (a real Android VPN that routes just the listed home devices - e.g. the NAS -
+  plus the router through the WireGuard tunnel) and *Everything via home*
+  (all traffic exits through the house and its VPN tunnels; DNS = router,
+  IPv6 blocked). On only while away with remote access connected; uses the
+  phone's VPN slot. Persistent notification with Disconnect; supports
+  Android's Always-on VPN. Status page shows "Home link: ... - connected".
+* **VPN-app reminder** (Alerts & reminders, off by default): "You're home -
+  you can turn your VPN app off" / "You've left home - turn your VPN app back
+  on", only on changes and at most every 20 minutes.
+* Native library: new platform-neutral `vpn` package (gVisor netstack on the
+  VPN interface, every TCP/UDP flow re-dialled through the tunnel) and
+  `cvvpn_*` exports; the tunnel's Allowed IPs follow the chosen mode.
+
 ## 2.0.4 (pre-release)
 
 ### Fixed

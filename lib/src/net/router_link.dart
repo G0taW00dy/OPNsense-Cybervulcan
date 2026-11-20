@@ -6,6 +6,7 @@ import 'dart:math';
 import '../api/tls.dart';
 import '../core/config.dart';
 import '../core/network_map.dart';
+import '../core/remote_modes.dart' show tunnelAllowedIps;
 import '../core/storage.dart';
 import '../core/wg_keys.dart';
 import 'tunnel.dart';
@@ -402,7 +403,8 @@ class RouterLink {
   Future<String?> _ensureTunnel(AppConfig cfg, WireGuardSecrets secrets, RouterTarget target) async {
     final sig = [
       cfg.wgEndpointHost, cfg.wgEndpointPort, cfg.wgServerPublicKey, cfg.wgAddress,
-      cfg.wgAllowedIps, cfg.wgKeepalive, cfg.routerTunnelIp, target.port,
+      // v2.1: AllowedIPs include what the remote mode needs (home devices / everything).
+      tunnelAllowedIps(cfg).join(','), cfg.wgKeepalive, cfg.routerTunnelIp, target.port,
       // Not the keys themselves: just whether they changed.
       secrets.privateKey.hashCode, secrets.presharedKey.hashCode,
     ].join('|');
@@ -421,7 +423,7 @@ class RouterLink {
         presharedKey: secrets.presharedKey,
         endpoint: endpoint,
         address: cfg.wgAddress.trim(),
-        allowedIps: cfg.wgAllowedIpList,
+        allowedIps: tunnelAllowedIps(cfg),
         keepalive: cfg.wgKeepalive,
         target: '${cfg.routerTunnelIp}:${target.port}',
         token: base64.encode(token),
