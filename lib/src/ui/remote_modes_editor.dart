@@ -87,7 +87,8 @@ class _RemoteModesEditorState extends State<RemoteModesEditor> {
       const SizedBox(height: 4),
       SegmentedButton<String>(
         segments: [
-          for (final e in remoteModeLabels.entries) ButtonSegment(value: e.key, label: Text(e.value)),
+          for (final e in remoteModeLabels.entries)
+            ButtonSegment(value: e.key, label: Text(e.value), enabled: modeUnavailable(cfg, e.key) == null || e.key == mode),
         ],
         selected: {mode},
         onSelectionChanged: (v) => unawaited(_pick(v.first)),
@@ -120,6 +121,7 @@ class _RemoteModesEditorState extends State<RemoteModesEditor> {
           const InfoLine('The router must allow this device\'s tunnel address out to the internet through the '
               'house VPN gateway (and its kill switch) - see the guide.'),
         for (final p in remoteModeProblems(cfg)) WarningLine(p),
+        if (modeUnavailable(cfg, mode) case final why?) WarningLine(why),
         if (status != null)
           Row(children: [
             Expanded(child: InfoLine(status)),
@@ -135,4 +137,17 @@ class _RemoteModesEditorState extends State<RemoteModesEditor> {
       ],
     ]);
   }
+}
+
+/// Why [mode] can't run with these settings on this platform (v2.1.2: the
+/// review fenced these off; the UI now says so up front), or null.
+String? modeUnavailable(AppConfig cfg, String mode, {bool? windows}) {
+  final win = windows ?? Platform.isWindows;
+  if (mode == 'app') return null;
+  if (win && mode == 'everything') return '"Everything via home" is not available on Windows yet.';
+  if (win && cfg.transport == 'tailscale') return 'On Windows the home link works over WireGuard only for now.';
+  if (mode == 'everything' && cfg.transport == 'tailscale') {
+    return '"Everything via home" needs the WireGuard engine for now (Tailscale exit node not supported yet).';
+  }
+  return null;
 }

@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.1.2 (pre-release, 21 Nov 2026)
+
+Found testing 2.1.0 on the PC:
+
+* "This PC" card said "on the VPN" for a device on another network (e.g.
+  MGMT); it now names the network and disables VPN/CLEAR there.
+* Bufferbloat advice knows when a shaper is already set up and names the
+  limit that is above what the line delivers (with a suggested value).
+* Shaper card reads and shows the current limits when Settings opens.
+* Remote modes that can't run on this device/engine are disabled with the
+  reason (Windows: no "Everything"; Tailscale: no "Everything").
+* Key-expiry date error says "Use a real date".
+
 ## 2.1.1 (pre-release, 21 Nov 2026)
 
 * Fix: after the app had been locked once, opening a dialog or page could

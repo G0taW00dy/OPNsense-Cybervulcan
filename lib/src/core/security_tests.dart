@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 
 import '../api/models.dart';
 import '../api/opnsense_client.dart';
+import '../api/shaper_models.dart';
 import '../net/router_link.dart';
 import 'config.dart';
 import 'house_state.dart';
@@ -686,6 +687,18 @@ Future<SecurityTestResult> _bufferbloat(TestEnv env) async {
     ]);
   }
   final grade = bufferbloatGrade(worstAdd);
+  // v2.1.2: if the router already has a shaper, say which limit is too high
+  // instead of "set up a shaper".
+  List<ShaperPipe>? pipes;
+  if (c != null) {
+    try {
+      pipes = await c.shaperPipes();
+    } on Object {
+      pipes = null; // no privilege / no shaper: generic advice
+    }
+  }
+  final fix = shaperAdvice(pipes, env.expected,
+      downMbps: downMbps, upMbps: upMbps, lagDown: addDown > addUp);
   final st = switch (grade) {
     'A+' || 'A' => TestStatus.pass,
     'B' || 'C' => TestStatus.warn,
@@ -693,11 +706,36 @@ Future<SecurityTestResult> _bufferbloat(TestEnv env) async {
   };
   return _r(t, st, switch (st) {
     TestStatus.pass => 'Grade $grade: +${worstAdd.toStringAsFixed(0)} ms under load - good for gaming.',
-    TestStatus.warn => 'Grade $grade: +${worstAdd.toStringAsFixed(0)} ms under load - lag spikes when the line is busy. '
-        'An FQ-CoDel shaper on the router fixes this.',
-    _ => 'Grade $grade: +${worstAdd.toStringAsFixed(0)} ms under load - heavy lag when the line is busy. '
-        'Set up the FQ-CoDel shaper on the router.',
+    TestStatus.warn => 'Grade $grade: +${worstAdd.toStringAsFixed(0)} ms under load - lag spikes when the line is busy. $fix',
+    _ => 'Grade $grade: +${worstAdd.toStringAsFixed(0)} ms under load - heavy lag when the line is busy. $fix',
   }, lines);
+}
+
+/// What to do about bufferbloat, given the router's shaper pipes (null =
+/// unknown). With a shaper in place the usual cause is a limit above what
+/// the line delivers right now, so the queue still builds at the provider.
+String shaperAdvice(List<ShaperPipe>? pipes, ExpectedPath path,
+    {required double downMbps, required double upMbps, required bool lagDown}) {
+  final active = pipes?.where((p) => p.enabled).toList() ?? const <ShaperPipe>[];
+  if (pipes == null) return 'An FQ-CoDel shaper on the router fixes this (Settings > VPN tunnels > Shaper).';
+  if (active.isEmpty) return 'Set up the FQ-CoDel shaper on the router (Firewall > Shaper).';
+  bool isVpn(ShaperPipe p) => p.description.toLowerCase().contains('vpn');
+  bool isDown(ShaperPipe p) => p.description.toLowerCase().contains('down');
+  final candidates = active.where((p) => switch (path) {
+        ExpectedPath.vpn => isVpn(p),
+        ExpectedPath.direct => !isVpn(p),
+        ExpectedPath.unknown => true,
+      });
+  final dir = candidates.where((p) => isDown(p) == lagDown).toList();
+  final measured = lagDown ? downMbps : upMbps;
+  final suggest = (measured * 0.85).floor().clamp(1, 100000);
+  if (dir.isEmpty) {
+    return 'The shaper is on, but no ${lagDown ? 'download' : 'upload'} limit covers this path.';
+  }
+  final names = dir.map((p) => '"${p.description}" (${p.mbit.round()} Mbit/s)').join(' or ');
+  return 'The shaper is on, but the ${lagDown ? 'download' : 'upload'} limit $names is above what the line gave just now '
+      '(~${measured.toStringAsFixed(1)} Mbit/s), so the queue still builds at the provider. Try about $suggest Mbit/s, '
+      'or let auto-tune adjust the VPN limits.';
 }
 
 double median(List<double> v) {

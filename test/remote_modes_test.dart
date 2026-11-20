@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:opnsense_cybervulcan/src/ui/remote_modes_editor.dart' show modeUnavailable;
 import 'package:opnsense_cybervulcan/src/core/config.dart';
 import 'package:opnsense_cybervulcan/src/core/remote_modes.dart';
 import 'package:opnsense_cybervulcan/src/core/storage.dart';
@@ -377,5 +378,15 @@ void main() {
       expect(t2, 'You\'ve left home - turn your VPN app back on');
       expect(b2, contains('your VPN'));
     });
+  });
+
+  test('modes that cannot run are named up front', () {
+    expect(modeUnavailable(cfgFor('everything'), 'everything', windows: true), contains('Windows'));
+    expect(modeUnavailable(cfgFor('home'), 'home', windows: true), isNull);
+    final ts = cfgFor('everything').copyWith(remoteTransport: 'tailscale');
+    expect(modeUnavailable(ts, 'everything', windows: false), contains('WireGuard'));
+    expect(modeUnavailable(ts, 'home', windows: false), isNull);
+    expect(modeUnavailable(ts, 'home', windows: true), contains('WireGuard'));
+    expect(modeUnavailable(ts, 'app', windows: true), isNull);
   });
 }

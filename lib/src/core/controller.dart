@@ -817,6 +817,30 @@ class CybervulcanController extends ChangeNotifier {
     }
   }
 
+  /// All enabled shaper pipes as last read (Settings shows them), or null.
+  List<ShaperPipe>? shaperPipes;
+
+  /// Reads the shaper limits for the Settings card (needs "Firewall: Shaper").
+  Future<void> refreshShaperInfo() async {
+    final c = _client;
+    if (c == null) return;
+    try {
+      final pipes = (await c.shaperPipes()).where((p) => p.enabled).toList();
+      shaperPipes = pipes;
+      final vpn = findVpnPipes(pipes);
+      if (vpn != null) {
+        tuner.currentDown = vpn.down.mbit.round();
+        tuner.currentUp = vpn.up.mbit.round();
+      }
+    } on OpnsenseException catch (e) {
+      shaperPipes = null;
+      tuner.lastReason = e.kind == ApiErrorKind.forbidden
+          ? 'Can\'t read the shaper - the app user needs "Firewall: Shaper".'
+          : 'Router: ${e.message}';
+    }
+    notifyListeners();
+  }
+
   /// Puts the limits from before auto-tune back on the router.
   Future<bool> restoreShaperOriginal({String reason = 'restored by you'}) async {
     final c = _client;

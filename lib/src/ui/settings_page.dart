@@ -190,6 +190,9 @@ class _SettingsPageState extends State<SettingsPage> {
       });
     }
     unawaited(_refreshPin());
+    unawaited(c.refreshShaperInfo().then((_) {
+      if (mounted) setState(() {});
+    }));
     tailscaleActiveOnDevice().then((v) {
       if (mounted) setState(() => _tailscaleHere = v);
     });
@@ -549,7 +552,7 @@ class _SettingsPageState extends State<SettingsPage> {
   String? _dateOrEmpty(String? v) {
     final s = v?.trim() ?? '';
     if (s.isEmpty) return null;
-    return parseIsoDate(s) == null ? 'Use yyyy-mm-dd' : null;
+    return parseIsoDate(s) == null ? 'Use a real date as yyyy-mm-dd' : null;
   }
 
   String? _required(String? v) => (v == null || v.trim().isEmpty) ? 'Required' : null;
@@ -775,11 +778,12 @@ class _SettingsPageState extends State<SettingsPage> {
                     'clearly better (at least 10 %). Takes about 5 minutes. You get a notification with the result.'),
           ],
           SubSection(title: 'Shaper (lag control)', children: [
-            InfoLine(c.tuner.currentDown == null
-                ? 'The router\'s FQ-CoDel shaper keeps lag low while the line is busy. Limits shown here once '
-                    'auto-tune or a re-tune has read them.'
-                : 'VPN limits now: ${c.tuner.currentDown} Mbit/s down, ${c.tuner.currentUp} Mbit/s up.'
-                    '${c.tuner.lastReason == null ? '' : ' Last check: ${c.tuner.lastReason}'}'),
+            InfoLine(c.shaperPipes == null
+                ? (c.tuner.lastReason ?? 'Reading the router\'s shaper limits ...')
+                : c.shaperPipes!.isEmpty
+                    ? 'The router has no shaper limits set up (Firewall > Shaper).'
+                    : 'Limits now: ${c.shaperPipes!.map((p) => '${p.description} ${p.mbit.round()}').join(' · ')} Mbit/s.'
+                        '${c.tuner.lastReason == null ? '' : ' Last check: ${c.tuner.lastReason}'}'),
             _switch('Auto-tune the shaper', _cfg.shaperAutoTune, (v) => _set(_cfg.copyWith(shaperAutoTune: v)),
                 subtitle: 'Lower the VPN limits when lag rises under load, raise them when it\'s clear.',
                 help: 'Mobile lines change speed all the time, so a fixed shaper limit is either too high (lag) or '
@@ -804,10 +808,20 @@ class _SettingsPageState extends State<SettingsPage> {
             ],
             Wrap(spacing: 8, runSpacing: 8, children: [
               OutlinedButton.icon(
-                  onPressed: c.retuneShaper, icon: const Icon(Icons.tune), label: const Text('Re-tune now')),
+                  onPressed: () async {
+                    await c.retuneShaper();
+                    await c.refreshShaperInfo();
+                    if (mounted) setState(() {});
+                  },
+                  icon: const Icon(Icons.tune),
+                  label: const Text('Re-tune now')),
               if (c.shaperOriginal != null)
                 OutlinedButton.icon(
-                    onPressed: () => c.restoreShaperOriginal(),
+                    onPressed: () async {
+                      await c.restoreShaperOriginal();
+                      await c.refreshShaperInfo();
+                      if (mounted) setState(() {});
+                    },
                     icon: const Icon(Icons.undo),
                     label: Text('Restore original limits (${c.shaperOriginal!.values.join(' / ')})')),
             ]),
