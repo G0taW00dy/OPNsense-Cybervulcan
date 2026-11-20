@@ -103,7 +103,7 @@ bool wantsSystemVpn(AppConfig cfg, LinkStatus? link) =>
     remoteModeProblems(cfg).isEmpty &&
     link != null &&
     link.connected &&
-    link.viaTunnel;
+    (link.viaTunnel || link.builtInTailscale);
 
 // ---------------------------------------------------------------- reminder
 

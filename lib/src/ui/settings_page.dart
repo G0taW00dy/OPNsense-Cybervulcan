@@ -23,6 +23,7 @@ import '../platform/autostart.dart';
 import 'format.dart';
 import 'help_page.dart';
 import 'remote_access.dart';
+import 'remote_engine_settings.dart';
 import 'remote_modes_editor.dart';
 import 'theme.dart';
 import 'update_widgets.dart';
@@ -162,8 +163,6 @@ class SettingsPage extends StatefulWidget {
   @override
   State<SettingsPage> createState() => _SettingsPageState();
 }
-
-enum _Remote { off, wireguard, tailscale }
 
 class _SettingsPageState extends State<SettingsPage> {
   final _form = GlobalKey<FormState>();
@@ -558,12 +557,6 @@ class _SettingsPageState extends State<SettingsPage> {
   String? _alias(String? v) =>
       RegExp(r'^[A-Za-z0-9_]{1,32}$').hasMatch(v?.trim() ?? '') ? null : 'Letters, digits, _ only';
 
-  _Remote get _remote => _cfg.tailscaleEnabled
-      ? _Remote.tailscale
-      : _cfg.remoteEnabled
-          ? _Remote.wireguard
-          : _Remote.off;
-
   @override
   Widget build(BuildContext context) {
     final t = Theme.of(context).textTheme;
@@ -904,33 +897,18 @@ class _SettingsPageState extends State<SettingsPage> {
       SettingsSection(
         icon: Icons.travel_explore,
         title: 'Remote access',
-        summary: switch (_remote) {
-          _Remote.off => 'Off - home only',
-          _Remote.wireguard => 'WireGuard (needs a public IP at home)',
-          _Remote.tailscale => 'Tailscale${_tailscaleHere == true ? ' - active on this $deviceNoun' : ''}',
-        },
+        // v2.1: on/off + engine + built-in Tailscale live in RemoteEngineSettings.
+        summary: remoteAccessSummary(_cfg, tailscaleHere: _tailscaleHere, deviceNoun: deviceNoun),
         children: [
-          Text('Use the app away from home.', style: t.bodySmall),
-          const SizedBox(height: 8),
-          SegmentedButton<_Remote>(
-            segments: const [
-              ButtonSegment(value: _Remote.off, label: Text('Off')),
-              ButtonSegment(value: _Remote.wireguard, label: Text('WireGuard')),
-              ButtonSegment(value: _Remote.tailscale, label: Text('Tailscale')),
-            ],
-            selected: {_remote},
-            onSelectionChanged: (v) => _set(_cfg.copyWith(
-              remoteEnabled: v.first == _Remote.wireguard,
-              tailscaleEnabled: v.first == _Remote.tailscale,
-            )),
-          ),
-          const SizedBox(height: 12),
-          if (_remote == _Remote.tailscale) ...[
-            InfoLine(_tailscaleHere == null
-                ? 'Checking for Tailscale on this $deviceNoun...'
-                : _tailscaleHere!
-                    ? 'Tailscale is connected on this $deviceNoun.'
-                    : 'Tailscale is not connected on this $deviceNoun right now (fine at home).'),
+          RemoteEngineSettings(controller: c, config: _cfg, onChanged: _set),
+          const SizedBox(height: 4),
+          if (remoteSteps(_cfg).any((s) => s != RemoteStep.wireguard)) ...[
+            if (remoteSteps(_cfg).contains(RemoteStep.tailscaleDevice))
+              InfoLine(_tailscaleHere == null
+                  ? 'Checking for Tailscale on this $deviceNoun...'
+                  : _tailscaleHere!
+                      ? 'Tailscale is connected on this $deviceNoun.'
+                      : 'Tailscale is not connected on this $deviceNoun right now (fine at home).'),
             const SizedBox(height: 8),
             _field('tailscaleAddress', 'Router\'s Tailscale address (optional)',
                 hint: '100.x.y.z or opnsense.tailnet.ts.net',
@@ -944,9 +922,9 @@ class _SettingsPageState extends State<SettingsPage> {
                   if (s.isEmpty) return null;
                   return RegExp(r'^[A-Za-z0-9.:-]+$').hasMatch(s) ? null : 'An IP or host name';
                 }),
-            if (isPhone)
-              const InfoLine('Android allows one VPN app at a time: while Tailscale is on, the Proton app on the '
-                  'phone is off. Use Tailscale\'s "exit node" = home router if you want the house VPN while away.'),
+            if (isPhone && remoteSteps(_cfg).contains(RemoteStep.tailscaleDevice))
+              InfoLine('Android allows one VPN app at a time: while the Tailscale app is on, the ${_cfg.vpnName} app '
+                  'on the phone is off. The built-in Tailscale engine doesn\'t use that slot.'),
             Align(
               alignment: Alignment.centerLeft,
               child: TextButton.icon(
@@ -956,7 +934,7 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
             ),
           ],
-          if (_remote == _Remote.wireguard)
+          if (remoteSteps(_cfg).contains(RemoteStep.wireguard))
             RemoteAccessEditor(
               key: ValueKey('remote-$_remoteGen'),
               controller: c,
@@ -965,7 +943,7 @@ class _SettingsPageState extends State<SettingsPage> {
               onChanged: _set,
             ),
           // v2.1: what remote access carries (app only / home devices / everything).
-          if (_remote == _Remote.wireguard)
+          if (_cfg.remoteEnabled)
             RemoteModesEditor(key: ValueKey('modes-$_remoteGen'), controller: c, config: _cfg, onChanged: _set),
         ],
       ),

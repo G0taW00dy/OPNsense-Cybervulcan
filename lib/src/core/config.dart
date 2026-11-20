@@ -634,7 +634,10 @@ class AppConfig {
       vpnName: s('vpnName', d.vpnName),
       directLabel: s('directLabel', d.directLabel),
       directNetworkName: s('directNetworkName', d.directNetworkName),
-      remoteEnabled: b('remoteEnabled', d.remoteEnabled),
+      // v2.1 (tailscale agent): remoteEnabled is now the master switch; a v2.0
+      // "Tailscale" choice (its own switch) turns it on.
+      remoteEnabled: b('remoteEnabled', d.remoteEnabled) ||
+          (!j.containsKey('remoteTransport') && b('tailscaleEnabled', false)),
       wgEndpointHost: s('wgEndpointHost', d.wgEndpointHost),
       wgEndpointPort: port > 65535 ? d.wgEndpointPort : port,
       wgServerPublicKey: o('wgServerPublicKey'),
@@ -659,11 +662,17 @@ class AppConfig {
       autoBestNightly: b('autoBestNightly', d.autoBestNightly),
       lockAfterMinutes: i('lockAfterMinutes', d.lockAfterMinutes),
       // v2.0 stored Tailscale as its own switch; carry that choice over.
+      // (v2.0 with both WireGuard and Tailscale on: Auto. v2.0 Tailscale meant
+      // the device's Tailscale app, so built-in stays off for those users.)
       remoteTransport: j.containsKey('remoteTransport')
           ? s('remoteTransport', d.remoteTransport)
-          : (b('tailscaleEnabled', false) ? 'tailscale' : d.remoteTransport),
+          : (b('tailscaleEnabled', false)
+              ? (b('remoteEnabled', false) ? 'auto' : 'tailscale')
+              : d.remoteTransport),
       remoteMode: s('remoteMode', d.remoteMode),
-      tailscaleBuiltIn: b('tailscaleBuiltIn', d.tailscaleBuiltIn),
+      tailscaleBuiltIn: j.containsKey('tailscaleBuiltIn')
+          ? b('tailscaleBuiltIn', d.tailscaleBuiltIn)
+          : !(b('tailscaleEnabled', false) && !j.containsKey('remoteTransport')) && d.tailscaleBuiltIn,
       homeDevices: s('homeDevices', d.homeDevices),
       vpnProvider: s('vpnProvider', d.vpnProvider),
       mainKeyExpiry: s('mainKeyExpiry', d.mainKeyExpiry),
