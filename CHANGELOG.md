@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.1.0 (unreleased)
+## 2.1.0 (pre-release, 21 Nov 2026)
 
 ### Fixed (found testing 2.0.4)
 
