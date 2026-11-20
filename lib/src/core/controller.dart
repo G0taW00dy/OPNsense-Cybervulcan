@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 
 import '../api/models.dart';
 import '../api/opnsense_client.dart';
+import '../api/shaper_models.dart';
 import '../net/router_link.dart';
 import '../net/tunnel.dart';
 import 'bypass.dart';
@@ -16,6 +17,10 @@ import 'house_state.dart';
 import 'network_map.dart';
 import 'pc_mode.dart';
 import 'schedule.dart';
+import 'shaper_tuner.dart';
+import 'change_journal.dart';
+import 'diagnostics.dart';
+import 'updater.dart' show appVersion;
 import 'server_switcher.dart';
 import 'storage.dart';
 import 'wg_keys.dart' as wg;
@@ -306,9 +311,9 @@ class CybervulcanController extends ChangeNotifier {
         final exp = parseIsoDate(date);
         if (exp == null) continue;
         final key = 'key_expiry_warned_$which:$date';
-        final stage = keyExpiryStage(exp, now.toLocal(), prefs.getInt(key));
+        final stage = keyExpiryStage(exp, now.toLocal(), int.tryParse(prefs.getString(key) ?? ''));
         if (stage == null) continue;
-        await prefs.setInt(key, stage);
+        await prefs.setString(key, '$stage');
         _events.add(AlertEvent(
             AlertKind.keyExpiry,
             stage == 0 ? 'VPN key for $label has expired' : 'VPN key for $label expires in $stage day${stage == 1 ? '' : 's'}',
@@ -319,6 +324,9 @@ class CybervulcanController extends ChangeNotifier {
                     '(VPN > WireGuard). If both tunnels expire, the kill switch blocks the VPN network.'));
         notifyListeners();
       }
+
+      // Shaper auto-tune (this device only; best on the always-on PC).
+      if (config.shaperAutoTune) await _tuneShaper();
 
       // Nightly "find best server".
       final lastBest = DateTime.tryParse(prefs.getString(_bestRunKey) ?? '');
@@ -430,15 +438,22 @@ class CybervulcanController extends ChangeNotifier {
       try {
         await sw.apply(peer, server, main: main);
       } on ServerSwitchException catch (e) {
-        // Put the old server back so the tunnel keeps working.
+        await journal.add('${main ? 'Main' : 'Backup'} tunnel -> ${server.name}', ok: false, detail: e.message);
+        if (!config.routerSafetyNet) rethrow;
+        // Safety net: put the old server back so the tunnel keeps working.
         try {
           await sw.apply(peer, old, main: main);
         } on Object {
           throw ServerSwitchException('${e.message} Putting the old server back also failed - '
               'check VPN > WireGuard on the router.');
         }
+        await journal.add('${main ? 'Main' : 'Backup'} tunnel back on ${peer.serverAddress}', ok: true,
+            detail: 'Safety net: restored after the failed switch');
         throw ServerSwitchException('${e.message} The old server was put back.');
       }
+      await journal.add('${main ? 'Main' : 'Backup'} tunnel -> ${server.name}', ok: true,
+          detail: 'Handshake confirmed${sw.monitorWarning == null ? '' : '; monitor not refreshed'}');
+      tuner.pathChanged();
       return true;
     },
         done: '${main ? config.mainLabel : config.backupLabel} tunnel now uses ${server.name} (handshake confirmed)',
@@ -459,6 +474,10 @@ class CybervulcanController extends ChangeNotifier {
     notifyListeners();
     try {
       final plan = await sw.findBest(candidates, log);
+      if (plan != null) {
+        await journal.add('Find best server', ok: true, detail: plan.reason);
+        tuner.pathChanged();
+      }
       if (plan != null && config.notifyOnFailover) {
         _events.add(AlertEvent(AlertKind.serverChanged,
             plan.changeMain ? 'VPN moved to ${plan.newMain.server.name}' : 'VPN server check done',
@@ -715,6 +734,113 @@ class CybervulcanController extends ChangeNotifier {
     final bm = _bypass();
     return _action((c) => bm!.addRouterDeadline(),
         done: 'Deadline stored on the router - it can now end the bypass by itself');
+  }
+
+  // ----------------------------------------------------- v2.1 shaper
+
+  late final ChangeJournal journal = ChangeJournal(prefs);
+  late final ErrorLog errorLog = ErrorLog(prefs);
+
+  /// Redacted diagnostics text for bug reports (Settings > App).
+  String diagnostics() => buildDiagnostics(
+        appVersion: appVersion,
+        config: config,
+        snapshot: snapshot,
+        changes: journal.entries,
+        errors: errorLog.entries,
+        linkStatus: '${link.status.state.name}${link.status.viaTunnel ? ' via WireGuard' : ''}'
+            '${link.status.viaTailscale ? ' via Tailscale' : ''}${link.status.detail == null ? '' : ' (${link.status.detail})'}',
+        lastError: lastActionError,
+      );
+  late final ShaperTuner tuner = ShaperTuner(clock: clock);
+  static const shaperOriginalKey = 'shaper_original_v1';
+  int _tuneErrors = 0;
+
+  /// Original VPN limits saved before the first auto-tune change, or null.
+  Map<String, int>? get shaperOriginal {
+    try {
+      final m = jsonDecode(prefs.getString(shaperOriginalKey) ?? '');
+      return m is Map ? {for (final e in m.entries) '${e.key}': (e.value as num).toInt()} : null;
+    } on Object {
+      return null;
+    }
+  }
+
+  Future<void> _tuneShaper() async {
+    final c = _client;
+    final gw = snapshot.activeGateway;
+    if (c == null || gw == null) return;
+    try {
+      if (shaperOriginal == null) {
+        final p = findVpnPipes(await c.shaperPipes());
+        if (p == null) {
+          tuner.lastReason = 'No VPN shaper pipes found on the router.';
+          return;
+        }
+        await prefs.setString(shaperOriginalKey, jsonEncode({p.down.uuid: p.down.mbit.round(), p.up.uuid: p.up.mbit.round()}));
+      }
+      final d = await tuner.tick(c, config, gw.delayMs);
+      _tuneErrors = 0;
+      if (d != null) {
+        await journal.add('Shaper ${tuner.currentDown}/${tuner.currentUp} Mbit/s', ok: true, detail: d.reason);
+        notifyListeners();
+      }
+    } on OpnsenseException catch (e) {
+      tuner.lastReason = e.kind == ApiErrorKind.forbidden
+          ? 'Needs the router privilege "Firewall: Shaper" on this app user.'
+          : 'Router: ${e.message}';
+      // Safety net: three failures in a row -> put the original limits back.
+      if (++_tuneErrors == 3 && config.routerSafetyNet) await restoreShaperOriginal(reason: 'auto-tune kept failing');
+    }
+  }
+
+  /// Puts the limits from before auto-tune back on the router.
+  Future<bool> restoreShaperOriginal({String reason = 'restored by you'}) async {
+    final c = _client;
+    final orig = shaperOriginal;
+    if (c == null || orig == null) return false;
+    try {
+      for (final e in orig.entries) {
+        await c.setPipeBandwidth(e.key, e.value);
+      }
+      await c.shaperReconfigure();
+      await prefs.remove(shaperOriginalKey);
+      tuner.pathChanged();
+      tuner.currentDown = null;
+      tuner.currentUp = null;
+      await journal.add('Shaper back to the original limits', ok: true, detail: reason);
+      lastActionInfo = 'Shaper limits restored (${orig.values.join(' / ')} Mbit/s).';
+      notifyListeners();
+      return true;
+    } on OpnsenseException catch (e) {
+      lastActionError = 'Could not restore the shaper limits: ${e.message}';
+      notifyListeners();
+      return false;
+    }
+  }
+
+  /// Starts tuning afresh: new baseline, limits to the middle of the range.
+  Future<void> retuneShaper() async {
+    final c = _client;
+    if (c == null) return;
+    if (!await authorize('Re-tune the router shaper')) return;
+    await _action((c) async {
+      final p = findVpnPipes(await c.shaperPipes());
+      if (p == null) throw OpnsenseException(ApiErrorKind.notFound, 'No VPN shaper pipes found on the router');
+      if (shaperOriginal == null) {
+        await prefs.setString(shaperOriginalKey, jsonEncode({p.down.uuid: p.down.mbit.round(), p.up.uuid: p.up.mbit.round()}));
+      }
+      final down = ((config.shaperMinDown + config.shaperMaxDown) / 2).round();
+      final up = ((config.shaperMinUp + config.shaperMaxUp) / 2).round();
+      await c.setPipeBandwidth(p.down.uuid, down);
+      await c.setPipeBandwidth(p.up.uuid, up);
+      await c.shaperReconfigure();
+      tuner.pathChanged();
+      tuner.currentDown = down;
+      tuner.currentUp = up;
+      await journal.add('Shaper re-tune from $down/$up Mbit/s', ok: true);
+      return true;
+    }, done: 'Shaper re-tune started - auto-tune adjusts it under load');
   }
 
   /// Key-expiry lines for the Status banner (within 30 days or expired).
