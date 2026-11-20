@@ -14,6 +14,7 @@ import 'src/platform/notifications.dart';
 import 'src/platform/tray.dart';
 import 'src/ui/app.dart';
 import 'src/ui/bypass_dialog.dart';
+import 'src/ui/remote_access.dart';
 
 AppLifecycleListener? appLifecycle;
 
@@ -44,7 +45,8 @@ Future<void> main(List<String> args) async {
     supportsPcMode: Platform.isWindows || Platform.isAndroid,
   );
 
-  final appLock = AppLock(store: controller.secrets, context: () => navigatorKey.currentContext);
+  final appLock = AppLock(store: controller.secrets, context: () => lockDialogContext(controller));
+  runExternal = controller.whileExternal;
   controller.authorizer = appLock.authorize;
 
   final notifier = Notifier();
