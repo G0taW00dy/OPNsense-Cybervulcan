@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:opnsense_cybervulcan/src/api/models.dart';
 import 'package:opnsense_cybervulcan/src/core/config.dart';
+import 'package:opnsense_cybervulcan/src/core/quick_tests.dart';
 import 'package:opnsense_cybervulcan/src/core/security_tests.dart';
 import 'package:opnsense_cybervulcan/src/core/server_switcher.dart';
 

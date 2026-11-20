@@ -99,11 +99,15 @@ class _StatusPageState extends State<StatusPage> {
                 const SizedBox(height: 12),
                 _Banner(
                   text: 'Router backup reminder: last confirmed backup ${c.daysSinceBackup} days ago. Save an '
-                      'encrypted config backup (System > Configuration > Backups) to Proton Drive.',
+                      'encrypted config backup (System > Configuration > Backups) somewhere safe off the router.',
                   color: OpnColors.amber,
                   icon: Icons.backup_outlined,
                   action: TextButton(onPressed: c.acknowledgeBackup, child: const Text('I saved a backup')),
                 ),
+              ],
+              for (final w in c.keyExpiryWarnings) ...[
+                const SizedBox(height: 12),
+                _Banner(text: w, color: OpnColors.amber, icon: Icons.key_off_outlined),
               ],
               if (c.lastActionError != null) ...[
                 const SizedBox(height: 12),

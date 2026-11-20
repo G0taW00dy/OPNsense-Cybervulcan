@@ -15,6 +15,8 @@ enum AlertKind {
   scheduledBypass,
   backupReminder,
   serverChanged,
+  keyExpiry,
+  safetyNet,
 }
 
 class AlertEvent {

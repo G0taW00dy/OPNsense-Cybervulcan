@@ -121,7 +121,7 @@ class HelpPage extends StatelessWidget {
                   'red = problem (router unreachable, kill switch tripped or not armed), '
                   'purple = whole-house bypass on, grey = not set up.',
               'This PC / This phone: VPN or CLEAR for this device only (phone: at home on Wi-Fi, with the '
-                  'Proton app on the phone off). CLEAR resets to VPN if the router restarts.',
+                  'VPN app on the phone off). CLEAR resets to VPN if the router restarts.',
               'Whole-house bypass: takes everyone on the VPN network off the VPN, for a set time or '
                   'until you turn it off (reminder every 4 hours).',
               'The bypass ends on time while any copy of the app is running. To make the router end '

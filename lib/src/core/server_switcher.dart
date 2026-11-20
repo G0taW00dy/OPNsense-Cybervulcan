@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:http/http.dart' as http;
 
 import '../api/models.dart';
 import '../api/opnsense_client.dart';
@@ -265,35 +264,6 @@ BestServerPlan? planBest(ServerMeasurement current, List<ServerMeasurement> cand
           : 'The current main is not working - switching to ${best.server.name}.')
       : 'The current main (${current.server.name}) is within ${(minGain * 100).round()} % of the best - keeping it.';
   return BestServerPlan(newMain: main, newBackup: backup, changeMain: change, reason: reason);
-}
-
-/// Downloads Proton's public server list. Proton has no official public API
-/// for this, so it may change or need sign-in; then use "Add from .conf".
-Future<List<ProtonServer>> fetchProtonServers(http.Client client, {String? country}) async {
-  const urls = [
-    'https://api.protonvpn.ch/vpn/logicals',
-    'https://vpn-api.proton.me/vpn/logicals',
-  ];
-  Object? lastError;
-  for (final u in urls) {
-    try {
-      final r = await client.get(Uri.parse(u), headers: const {
-        'Accept': 'application/json',
-        'x-pm-appversion': 'linux-vpn-cli@4.0.0',
-      }).timeout(const Duration(seconds: 15));
-      if (r.statusCode != 200) {
-        lastError = 'HTTP ${r.statusCode} from ${Uri.parse(u).host}';
-        continue;
-      }
-      final list = parseProtonLogicals(jsonDecode(r.body), country: country);
-      if (list.isNotEmpty) return list;
-      lastError = 'empty server list from ${Uri.parse(u).host}';
-    } on Object catch (e) {
-      lastError = e;
-    }
-  }
-  throw Exception('Could not download the Proton server list ($lastError). '
-      'Add servers from Proton WireGuard .conf files instead.');
 }
 
 typedef Sleep = Future<void> Function(Duration d);

@@ -67,6 +67,39 @@ bool backupReminderDue(AppConfig cfg, DateTime now, DateTime? lastBackup, DateTi
   return lastReminded == null || now.difference(lastReminded) >= const Duration(hours: 24);
 }
 
+/// `yyyy-mm-dd` -> a local date (midnight), or null.
+DateTime? parseIsoDate(String s) {
+  final m = RegExp(r'^(\d{4})-(\d{2})-(\d{2})$').firstMatch(s.trim());
+  if (m == null) return null;
+  final y = int.parse(m.group(1)!), mo = int.parse(m.group(2)!), d = int.parse(m.group(3)!);
+  final dt = DateTime(y, mo, d);
+  return dt.year == y && dt.month == mo && dt.day == d ? dt : null; // rejects 2026-02-31
+}
+
+/// Warning stages for a provider key's expiry: 30, 7 and 1 day(s) before,
+/// and 0 = expired. Returns the stage to warn about now, or null when there
+/// is nothing new (each stage warns once; [lastWarnedStage] is the last one sent).
+int? keyExpiryStage(DateTime expiry, DateTime nowLocal, int? lastWarnedStage) {
+  final today = DateTime(nowLocal.year, nowLocal.month, nowLocal.day);
+  final days = expiry.difference(today).inDays;
+  final stage = days <= 0
+      ? 0
+      : days <= 1
+          ? 1
+          : days <= 7
+              ? 7
+              : days <= 30
+                  ? 30
+                  : null;
+  if (stage == null) return null;
+  if (lastWarnedStage != null && lastWarnedStage <= stage) return null;
+  return stage;
+}
+
+/// Days until [expiry] (negative when past).
+int daysUntil(DateTime expiry, DateTime nowLocal) =>
+    expiry.difference(DateTime(nowLocal.year, nowLocal.month, nowLocal.day)).inDays;
+
 /// Nightly "find best server" window: 03:00-05:00 local, at most every 20 h.
 bool nightlyBestDue(AppConfig cfg, DateTime nowLocal, DateTime? lastRun) {
   if (!cfg.autoBestNightly || !cfg.serverSwitcherEnabled) return false;

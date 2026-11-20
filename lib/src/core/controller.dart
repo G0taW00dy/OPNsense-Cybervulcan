@@ -293,9 +293,31 @@ class CybervulcanController extends ChangeNotifier {
           await prefs.setString(_backupRemindedKey, now.toUtc().toIso8601String());
           _events.add(AlertEvent(AlertKind.backupReminder, 'Time for a router backup',
               'Last confirmed backup ${now.difference(ack).inDays} days ago. Save an encrypted config '
-              'backup (System > Configuration > Backups) to Proton Drive, then tap "I saved a backup".'));
+              'backup (System > Configuration > Backups) somewhere safe off the router, then tap "I saved a backup".'));
           notifyListeners();
         }
+      }
+
+      // Provider key expiry (30 / 7 / 1 day(s) before, and when expired).
+      for (final (which, label, date) in [
+        ('main', config.mainLabel, config.mainKeyExpiry),
+        ('backup', config.backupLabel, config.backupKeyExpiry),
+      ]) {
+        final exp = parseIsoDate(date);
+        if (exp == null) continue;
+        final key = 'key_expiry_warned_$which:$date';
+        final stage = keyExpiryStage(exp, now.toLocal(), prefs.getInt(key));
+        if (stage == null) continue;
+        await prefs.setInt(key, stage);
+        _events.add(AlertEvent(
+            AlertKind.keyExpiry,
+            stage == 0 ? 'VPN key for $label has expired' : 'VPN key for $label expires in $stage day${stage == 1 ? '' : 's'}',
+            stage == 0
+                ? 'That tunnel stops working. Make a new router config at your VPN provider, put its key on the '
+                    'router (VPN > WireGuard), then update the date in Settings.'
+                : 'Make a new router config at your VPN provider before $date and put its key on the router '
+                    '(VPN > WireGuard). If both tunnels expire, the kill switch blocks the VPN network.'));
+        notifyListeners();
       }
 
       // Nightly "find best server".
@@ -693,6 +715,19 @@ class CybervulcanController extends ChangeNotifier {
     final bm = _bypass();
     return _action((c) => bm!.addRouterDeadline(),
         done: 'Deadline stored on the router - it can now end the bypass by itself');
+  }
+
+  /// Key-expiry lines for the Status banner (within 30 days or expired).
+  List<String> get keyExpiryWarnings {
+    final now = clock().toLocal();
+    return [
+      for (final (label, date) in [(config.mainLabel, config.mainKeyExpiry), (config.backupLabel, config.backupKeyExpiry)])
+        if (parseIsoDate(date) case final exp?)
+          if (daysUntil(exp, now) <= 30)
+            daysUntil(exp, now) <= 0
+                ? '$label tunnel key expired on $date - renew it at your VPN provider.'
+                : '$label tunnel key expires in ${daysUntil(exp, now)} days ($date).',
+    ];
   }
 
   /// "This phone" / "This PC" in messages (overridable in tests).
