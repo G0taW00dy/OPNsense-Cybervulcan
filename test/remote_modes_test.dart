@@ -213,9 +213,42 @@ void main() {
       expect(vpn.starts, hasLength(2), reason: 'new routes: restart');
 
       await hl.onLink(cfg, home);
+      expect(vpn.stops, 0, reason: 'one home sighting is not enough (Wi-Fi edge)');
+      await hl.onLink(cfg, home);
       expect(vpn.stops, 1);
       expect(hl.state, HomeLinkState.off);
       expect(hl.describe(), isNull);
+    });
+
+    test('a failed router check never drops a running VPN (no leak in Everything)', () async {
+      final vpn = FakeSystemVpn();
+      final hl = HomeLink(vpn);
+      final cfg = cfgFor('everything');
+      await hl.onLink(cfg, away);
+      expect(vpn.running, isTrue);
+      await hl.onLink(cfg, const LinkStatus(LinkState.wrongCertificate));
+      await hl.onLink(cfg, notHome);
+      await hl.onLink(cfg, null);
+      expect(vpn.stops, 0);
+      expect(vpn.running, isTrue);
+    });
+
+    test('a VPN still running after an app restart is taken over and stopped at home', () async {
+      final vpn = FakeSystemVpn()..running = true;
+      final hl = HomeLink(vpn);
+      final cfg = cfgFor('everything');
+      await hl.onLink(cfg, home);
+      await hl.onLink(cfg, home);
+      expect(vpn.stops, 1);
+    });
+
+    test('Everything over built-in Tailscale is refused with a reason', () async {
+      final vpn = FakeSystemVpn();
+      final hl = HomeLink(vpn);
+      await hl.onLink(cfgFor('everything'),
+          const LinkStatus(LinkState.connected, viaTailscale: true, builtInTailscale: true));
+      expect(vpn.starts, isEmpty);
+      expect(hl.error, contains('WireGuard'));
     });
 
     test('app mode never starts it', () async {
