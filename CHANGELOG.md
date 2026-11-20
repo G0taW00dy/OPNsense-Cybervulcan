@@ -19,22 +19,24 @@
   VPN interface, every TCP/UDP flow re-dialled through the tunnel) and
   `cvvpn_*` exports; the tunnel's Allowed IPs follow the chosen mode.
 
-### Windows: home link (remote access modes "Home devices" / "Everything")
+### Windows: home link (remote modes "Home devices" / "Everything")
 
-* New **Cybervulcan** network adapter (Wintun) for the Windows app's remote
-  access modes: *Home devices* routes the router and the listed home devices
+* The remote modes now work on Windows too, through a new **Cybervulcan**
+  network adapter (Wintun): *Home devices* routes the listed home devices
   (e.g. the NAS) through the house; *Everything* sends all of the PC's
-  traffic via the house with the router as DNS and no IPv6 leak. *App only*
-  (the default) is unchanged and needs no admin rights.
-* Turning a mode on shows one Windows admin (UAC) prompt: a small helper
-  (the app's own exe with `--vpn-helper`) makes the network changes and
-  talks to the tray app over a pipe only your Windows user can open; it
-  accepts nothing but start / stop / status with checked settings. Turning
-  the mode off, or closing the app, removes the adapter, routes and DNS.
-* The WireGuard connection itself is kept on the real network (host route
-  to the endpoint via the normal gateway, follows Wi-Fi changes).
+  traffic via the house with DNS from the router and no IPv6 leak. *App
+  only* (the default) is unchanged and needs no admin rights.
+* Turning a mode on shows a Windows admin (UAC) prompt: a small helper (the
+  app's own exe with `--vpn-helper`) creates the adapter and sets routes /
+  DNS, and talks to the tray app over pipes only your Windows user can open
+  (start / stop / status with checked settings, and the adapter's packets).
+  The WireGuard tunnel and its keys stay in the tray app; packets run
+  through the same VPN core as on Android. Turning the mode off, or closing
+  the app, removes the adapter, routes and DNS.
+* The WireGuard endpoint and the router's own address stay on the real
+  network (host routes via the normal gateway, following Wi-Fi changes).
 * The installer ships the official signed `wintun.dll` (0.14.1, checksum
-  pinned in CI) and its licence (`wintun-LICENSE.txt`).
+  and signature checked in CI) and its licence (`wintun-LICENSE.txt`).
 
 ## 2.0.4 (pre-release)
 

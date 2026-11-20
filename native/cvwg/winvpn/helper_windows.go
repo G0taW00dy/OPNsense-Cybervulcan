@@ -15,8 +15,9 @@ import (
 	"golang.zx2c4.com/wireguard/ipc/namedpipe"
 )
 
-// How long the helper waits for the tray app to connect after the UAC
-// prompt, and for each request on an idle connection (status polls arrive
+// How long the helper waits for the tray app to connect (after the UAC
+// prompt; after a start reply for the packet pipe), and for each request on
+// an idle control connection (status polls arrive
 // every few seconds while a mode is on; the tray app never goes silent for
 // this long unless it hung).
 const (
@@ -37,6 +38,7 @@ func RunHelper(args []string) int {
 		return 3
 	}
 	pipe, _ := PipeName(nonce)
+	pktPipe, _ := PacketPipeName(nonce)
 	sddl, _ := PipeSDDL(userSID)
 	sd, err := windows.SecurityDescriptorFromString(sddl)
 	if err != nil {
@@ -64,7 +66,14 @@ func RunHelper(args []string) int {
 	}
 	defer conn.Close()
 
-	m := &manager{}
+	m := &manager{listenPackets: func() (func() (net.Conn, error), func(), error) {
+		pl, err := (&namedpipe.ListenConfig{SecurityDescriptor: sd}).Listen(pktPipe)
+		if err != nil {
+			return nil, nil, err
+		}
+		accept := func() (net.Conn, error) { return acceptVerified(pl, wantSID, self) }
+		return accept, func() { pl.Close() }, nil
+	}}
 	defer m.Stop()
 	serve(conn, m)
 	return 0

@@ -163,7 +163,7 @@ func TestParseStartJSON(t *testing.T) {
 	r := baseRequest(t, ModeEverything)
 	b, _ := json.Marshal(r)
 	got, err := ParseStartJSON(b)
-	if err != nil || got.Mode != ModeEverything || got.PrivateKey != r.PrivateKey {
+	if err != nil || got.Mode != ModeEverything || got.Endpoint != r.Endpoint {
 		t.Fatal(err)
 	}
 	for _, bad := range []string{`{}`, `{"mode":"home","x":1}`, `not json`, string(b) + `{}`} {
@@ -185,7 +185,7 @@ func TestDartContractFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	p, err := BuildPlan(r)
-	if err != nil || len(p.Routes) != 3 || r.PresharedKey == "" || r.MTU != 1280 {
+	if err != nil || len(p.Routes) != 2 || r.MTU != 1280 {
 		t.Fatalf("%+v %v", p, err)
 	}
 }

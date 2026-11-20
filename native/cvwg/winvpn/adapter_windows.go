@@ -5,17 +5,16 @@ package winvpn
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wireguard/tun"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 )
-
-// AdapterName is the network adapter users see in Windows' settings.
-const AdapterName = "Cybervulcan"
 
 // adapterGUID is fixed so a re-created adapter reuses Windows' per-adapter
 // settings (no "Cybervulcan 2", no pile of stale interface profiles).
@@ -30,23 +29,34 @@ var adapterGUID = windows.GUID{
 type manager struct {
 	mu   sync.Mutex
 	sess *session
-	last Status // shown when no session runs (last error)
+	last Status // shown when no session runs (last error / off)
+
+	// listenPackets opens the packet pipe for a new session and returns a
+	// function that waits for the verified tray app (helper_windows.go).
+	listenPackets func() (accept func() (net.Conn, error), stop func(), err error)
 }
 
 type session struct {
 	plan Plan
 	dev  tun.Device
 	luid winipcfg.LUID
-	core coreSession
 
-	mu        sync.Mutex
-	closed    bool
-	hostRoute *HostRoute
-	monitor   *winipcfg.RouteChangeCallback
-	repin     *time.Timer
+	attached atomic.Bool // packet pipe connected
+	dead     atomic.Bool // packet pump ended
+	pumpErr  atomic.Value
+
+	mu         sync.Mutex
+	closed     bool
+	pkt        net.Conn
+	stopListen func()
+	hostRoutes map[netip.Addr]HostRoute
+	monitor    *winipcfg.RouteChangeCallback
+	repin      *time.Timer
 }
 
-// Start replaces any running session with a new one for r.
+// Start replaces any running session with a new one for r: adapter,
+// addresses, routes, DNS, bypass host routes, then (in the background) the
+// packet pipe to the tray app.
 func (m *manager) Start(r StartRequest) error {
 	plan, err := BuildPlan(r)
 	if err != nil {
@@ -58,14 +68,20 @@ func (m *manager) Start(r StartRequest) error {
 		m.sess.close()
 		m.sess = nil
 	}
-	m.last = Status{State: StateStarting, Mode: plan.Mode}
-	s, err := startSession(plan, r)
+	s, err := startSession(plan)
 	if err != nil {
 		m.last = Status{State: StateError, Mode: plan.Mode, Error: FriendlyError(err)}
 		return errors.New(m.last.Error)
 	}
+	accept, stop, err := m.listenPackets()
+	if err != nil {
+		s.close()
+		m.last = Status{State: StateError, Mode: plan.Mode, Error: "could not open the packet pipe"}
+		return errors.New(m.last.Error)
+	}
+	s.stopListen = stop
 	m.sess = s
-	m.last = Status{}
+	go s.attach(accept)
 	return nil
 }
 
@@ -83,21 +99,30 @@ func (m *manager) Stop() {
 func (m *manager) Status() Status {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.sess == nil {
+	s := m.sess
+	if s == nil {
 		if m.last.State == "" {
 			return Status{State: StateOff}
 		}
 		return m.last
 	}
-	st := Status{State: StateOn, Mode: m.sess.plan.Mode}
-	if m.sess.core != nil {
-		cs := m.sess.core.Stats()
-		st.LastHandshake, st.RxBytes, st.TxBytes = cs.LastHandshake, cs.RxBytes, cs.TxBytes
+	if s.dead.Load() {
+		msg, _ := s.pumpErr.Load().(string)
+		if msg == "" {
+			msg = "The home link stopped."
+		}
+		s.close()
+		m.sess = nil
+		m.last = Status{State: StateError, Mode: s.plan.Mode, Error: msg}
+		return m.last
 	}
-	return st
+	if !s.attached.Load() {
+		return Status{State: StateStarting, Mode: s.plan.Mode}
+	}
+	return Status{State: StateOn, Mode: s.plan.Mode}
 }
 
-func startSession(plan Plan, r StartRequest) (s *session, err error) {
+func startSession(plan Plan) (s *session, err error) {
 	dev, err := tun.CreateTUNWithRequestedGUID(AdapterName, &adapterGUID, plan.MTU)
 	if err != nil {
 		return nil, fmt.Errorf("could not create the %s network adapter: %w", AdapterName, err)
@@ -107,16 +132,17 @@ func startSession(plan Plan, r StartRequest) (s *session, err error) {
 		dev.Close()
 		return nil, errors.New("unexpected adapter type")
 	}
-	s = &session{plan: plan, dev: dev, luid: winipcfg.LUID(nt.LUID())}
+	s = &session{plan: plan, dev: dev, luid: winipcfg.LUID(nt.LUID()), hostRoutes: map[netip.Addr]HostRoute{}}
 	defer func() {
 		if err != nil {
 			s.close()
 		}
 	}()
 
-	// 1. Keep the tunnel's own UDP packets on the real network.
-	if plan.EndpointRoute {
-		if err = s.pinEndpoint(); err != nil {
+	// 1. Keep the tunnel's own UDP packets (and the router) on the real
+	//    network.
+	if len(plan.Bypass) > 0 {
+		if err = s.pinBypass(); err != nil {
 			return nil, err
 		}
 		mon, merr := winipcfg.RegisterRouteChangeCallback(s.onRouteChange)
@@ -131,11 +157,85 @@ func startSession(plan Plan, r StartRequest) (s *session, err error) {
 	if err = configureAdapter(s.luid, plan); err != nil {
 		return nil, err
 	}
-	// 3. Carry the packets to the house.
-	if s.core, err = startCore(dev, plan, r); err != nil {
-		return nil, err
-	}
 	return s, nil
+}
+
+// attach waits for the tray app on the packet pipe, then relays packets
+// between the adapter and the pipe until either side ends.
+func (s *session) attach(accept func() (net.Conn, error)) {
+	conn, err := accept()
+	s.mu.Lock()
+	if s.stopListen != nil {
+		s.stopListen()
+		s.stopListen = nil
+	}
+	if err != nil || s.closed {
+		s.mu.Unlock()
+		if conn != nil {
+			conn.Close()
+		}
+		s.pumpErr.Store("The app did not connect to the home link.")
+		s.dead.Store(true)
+		return
+	}
+	s.pkt = conn
+	s.mu.Unlock()
+	s.attached.Store(true)
+
+	done := make(chan string, 2)
+	go func() { done <- s.adapterToPipe(conn) }()
+	go func() { done <- s.pipeToAdapter(conn) }()
+	msg := <-done
+	if !s.isClosed() {
+		s.pumpErr.Store(msg)
+		s.dead.Store(true)
+	}
+	conn.Close()
+}
+
+func (s *session) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
+}
+
+func (s *session) adapterToPipe(conn net.Conn) string {
+	batch := s.dev.BatchSize()
+	if batch < 1 {
+		batch = 1
+	}
+	bufs := make([][]byte, batch)
+	for i := range bufs {
+		bufs[i] = make([]byte, MaxFrame)
+	}
+	sizes := make([]int, batch)
+	for {
+		n, err := s.dev.Read(bufs, sizes, 0)
+		for i := 0; i < n; i++ {
+			if werr := WriteFrame(conn, bufs[i][:sizes[i]]); werr != nil && !errors.Is(werr, errFrame) {
+				return "The app closed the home link."
+			}
+		}
+		if err != nil {
+			if errors.Is(err, tun.ErrTooManySegments) {
+				continue
+			}
+			return "The Cybervulcan adapter went away."
+		}
+	}
+}
+
+func (s *session) pipeToAdapter(conn net.Conn) string {
+	buf := make([]byte, MaxFrame)
+	for {
+		n, err := ReadFrame(conn, buf)
+		if err != nil {
+			return "The app closed the home link."
+		}
+		if _, err := s.dev.Write([][]byte{buf[:n]}, 0); err != nil {
+			return "The Cybervulcan adapter went away."
+		}
+	}
 }
 
 func configureAdapter(luid winipcfg.LUID, plan Plan) error {
@@ -157,17 +257,16 @@ func configureAdapter(luid winipcfg.LUID, plan Plan) error {
 	// IPv6 is turned off on this PC these fail, and nothing can leak anyway.
 	_ = luid.SetIPAddressesForFamily(windows.AF_INET6, plan.Addresses)
 	_ = luid.SetRoutesForFamily(windows.AF_INET6, routes)
+
 	for _, fam := range []winipcfg.AddressFamily{windows.AF_INET, windows.AF_INET6} {
 		iface, err := luid.IPInterface(fam)
 		if err != nil {
 			if fam == windows.AF_INET6 {
-				continue // IPv6 disabled on this PC: nothing can leak
+				continue
 			}
 			return fmt.Errorf("adapter settings: %w", err)
 		}
-		if fam == windows.AF_INET {
-			iface.NLMTU = uint32(plan.MTU)
-		} else if plan.MTU >= 1280 {
+		if fam == windows.AF_INET || plan.MTU >= 1280 {
 			iface.NLMTU = uint32(plan.MTU)
 		}
 		// Set both ways: a fixed GUID means Windows remembers the last
@@ -191,13 +290,9 @@ func configureAdapter(luid winipcfg.LUID, plan Plan) error {
 	return nil
 }
 
-// defaultRoute finds the PC's current default route for the endpoint's
-// address family, ignoring our adapter.
-func (s *session) defaultRoute() (RouteCandidate, error) {
-	fam := winipcfg.AddressFamily(windows.AF_INET)
-	if s.plan.Endpoint.Addr().Is6() {
-		fam = windows.AF_INET6
-	}
+// defaultRoute finds the PC's current default route for family, ignoring
+// our adapter.
+func (s *session) defaultRoute(fam winipcfg.AddressFamily) (RouteCandidate, error) {
 	rows, err := winipcfg.GetIPForwardTable2(fam)
 	if err != nil {
 		return RouteCandidate{}, err
@@ -225,29 +320,49 @@ func (s *session) defaultRoute() (RouteCandidate, error) {
 	return best, nil
 }
 
-// pinEndpoint (re)creates the endpoint's host route via the current default
-// gateway. Called at start and when the PC's network changes.
-func (s *session) pinEndpoint() error {
-	best, err := s.defaultRoute()
-	if err != nil {
-		return err
-	}
-	want := HostRoute{Dest: s.plan.EndpointHostRoute(), NextHop: best.NextHop, LUID: best.LUID}
+// pinBypass (re)creates a host route via the current default gateway for
+// every bypass address. Called at start and when the PC's network changes.
+func (s *session) pinBypass() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed || (s.hostRoute != nil && *s.hostRoute == want) {
+	if s.closed {
 		return nil
 	}
-	if err := winipcfg.LUID(want.LUID).AddRoute(want.Dest, want.NextHop, 0); err != nil &&
-		!errors.Is(err, windows.ERROR_OBJECT_ALREADY_EXISTS) {
-		return fmt.Errorf("route to the WireGuard endpoint: %w", err)
+	var firstErr error
+	for _, a := range s.plan.Bypass {
+		fam := winipcfg.AddressFamily(windows.AF_INET)
+		if a.Is6() {
+			fam = windows.AF_INET6
+		}
+		best, err := s.defaultRoute(fam)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		want := HostRoute{Dest: HostPrefix(a), NextHop: best.NextHop, LUID: best.LUID}
+		if old, ok := s.hostRoutes[a]; ok && old == want {
+			continue
+		}
+		if err := winipcfg.LUID(want.LUID).AddRoute(want.Dest, want.NextHop, 0); err != nil &&
+			!errors.Is(err, windows.ERROR_OBJECT_ALREADY_EXISTS) {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("route to %s via the normal network: %w", a, err)
+			}
+			continue
+		}
+		if old, ok := s.hostRoutes[a]; ok {
+			_ = winipcfg.LUID(old.LUID).DeleteRoute(old.Dest, old.NextHop)
+		}
+		s.hostRoutes[a] = want
 	}
-	if old := s.hostRoute; old != nil {
-		_ = winipcfg.LUID(old.LUID).DeleteRoute(old.Dest, old.NextHop)
+	list := make([]HostRoute, 0, len(s.hostRoutes))
+	for _, h := range s.hostRoutes {
+		list = append(list, h)
 	}
-	s.hostRoute = &want
-	saveHostRoutes([]HostRoute{want})
-	return nil
+	saveHostRoutes(list)
+	return firstErr
 }
 
 func (s *session) onRouteChange(_ winipcfg.MibNotificationType, r *winipcfg.MibIPforwardRow2) {
@@ -263,38 +378,43 @@ func (s *session) onRouteChange(_ winipcfg.MibNotificationType, r *winipcfg.MibI
 	if s.repin != nil {
 		s.repin.Stop()
 	}
-	s.repin = time.AfterFunc(2*time.Second, func() { _ = s.pinEndpoint() })
+	s.repin = time.AfterFunc(2*time.Second, func() { _ = s.pinBypass() })
 }
 
 func (s *session) close() {
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
 	s.closed = true
 	mon := s.monitor
 	s.monitor = nil
-	s.mu.Unlock()
-	if mon != nil {
-		_ = mon.Unregister()
-	}
-	s.mu.Lock()
 	if s.repin != nil {
 		s.repin.Stop()
 		s.repin = nil
 	}
-	hr := s.hostRoute
-	s.hostRoute = nil
+	if s.stopListen != nil {
+		s.stopListen()
+		s.stopListen = nil
+	}
+	pkt := s.pkt
+	routes := s.hostRoutes
+	s.hostRoutes = map[netip.Addr]HostRoute{}
 	s.mu.Unlock()
 
-	if s.core != nil {
-		s.core.Close()
-		s.core = nil
+	if mon != nil {
+		_ = mon.Unregister()
+	}
+	if pkt != nil {
+		_ = pkt.Close()
 	}
 	// Closing a Wintun adapter that this process created deletes it, and
 	// with it its addresses, routes and DNS servers.
 	if s.dev != nil {
 		_ = s.dev.Close()
-		s.dev = nil
 	}
-	if hr != nil {
+	for _, hr := range routes {
 		_ = winipcfg.LUID(hr.LUID).DeleteRoute(hr.Dest, hr.NextHop)
 	}
 	saveHostRoutes(nil)
