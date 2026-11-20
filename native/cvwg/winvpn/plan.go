@@ -3,23 +3,30 @@
 // to the house by the platform-neutral VPN core.
 //
 // Creating the adapter and changing routes / DNS needs admin rights, while
-// the tray app runs as the normal user. The work is therefore done by a small
+// the tray app runs as the normal user. That part is done by a small
 // elevated helper (the app's own exe started with --vpn-helper through the
-// UAC prompt) that talks to the tray app over a named pipe which only the
-// signed-in user can open. The pipe protocol accepts exactly three requests
-// (start / stop / status) with validated parameters; see protocol.go.
+// UAC prompt) that talks to the tray app over named pipes which only the
+// signed-in user can open: a control pipe that accepts exactly three
+// requests (start / stop / status) with validated parameters (protocol.go),
+// and a packet pipe that carries the adapter's raw IP packets (frame.go).
+//
+// The packets are handled in the tray app, by the same VPN core and
+// remote-access tunnel as on Android (package vpn, vpn_glue.go): one
+// WireGuard session per device, and no key ever reaches the helper.
 //
 // This file and protocol.go are plain Go (no Windows APIs) so the route and
 // DNS plan and the protocol validation are unit-tested on any OS.
 package winvpn
 
 import (
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/netip"
 	"strings"
 )
+
+// AdapterName is the network adapter users see in Windows' settings.
+const AdapterName = "Cybervulcan"
 
 // Modes that need the adapter. "app" (the default) never reaches this code:
 // it is the user-space tunnel of package tunnel, without admin rights.
@@ -35,7 +42,6 @@ const (
 	defaultMTU    = 1280
 	minMTU        = 576
 	maxMTU        = 1500
-	maxKeepalive  = 65535
 	maxFieldBytes = 128
 )
 
@@ -46,34 +52,36 @@ const (
 // around the tunnel.
 var blockV6Addr = netip.MustParsePrefix("fd63:7676:7076::2/128")
 
+// VirtualDNS is the adapter's DNS server in "everything" mode (198.18.0.0/15
+// is reserved for benchmarking and never routed on the internet).
+var VirtualDNS = netip.MustParseAddr("198.18.0.53")
+
 // StartRequest is what the tray app asks the helper for. Every field is
-// validated by Validate (and again by BuildPlan) before anything changes on
-// the PC. Keys are WireGuard keys (base64); never logged.
+// validated by BuildPlan before anything changes on the PC. No keys: the
+// WireGuard tunnel runs in the tray app.
 type StartRequest struct {
 	Mode string `json:"mode"`
 
-	PrivateKey    string `json:"privateKey"`
-	PeerPublicKey string `json:"peerPublicKey"`
-	PresharedKey  string `json:"presharedKey,omitempty"`
-
 	// Endpoint of the router's WireGuard port, already resolved: "ip:port".
+	// Kept on the real network (host route) when the routes would cover it.
 	Endpoint string `json:"endpoint"`
 
-	// Address is this PC's tunnel address, e.g. "10.10.99.2/32".
+	// Address is this PC's tunnel address, e.g. "10.10.99.2/32" (the
+	// adapter's own address).
 	Address string `json:"address"`
 
-	// RouterIP is the router's LAN IPv4 (always routed into the adapter;
-	// it is the DNS server in "everything" mode).
+	// RouterIP is the router's LAN IPv4. It is kept OFF the adapter (the
+	// app reaches the router through its own tunnel, and "is the router
+	// answering directly?" must still mean "at home").
 	RouterIP string `json:"routerIp"`
 
 	// HomeCIDRs are the home devices for "home" mode (e.g. the NAS).
 	HomeCIDRs []string `json:"homeCidrs,omitempty"`
 
-	Keepalive int `json:"keepalive"`
-	MTU       int `json:"mtu,omitempty"`
+	MTU int `json:"mtu,omitempty"`
 }
 
-// String is safe for logs: no keys.
+// String is safe for logs.
 func (r StartRequest) String() string {
 	return fmt.Sprintf("StartRequest(%s, %s via %s)", r.Mode, r.Address, r.Endpoint)
 }
@@ -88,41 +96,23 @@ type Plan struct {
 	// Routes sent into the adapter (on-link, metric 0).
 	Routes []netip.Prefix
 
-	// AllowedIPs the WireGuard peer may carry (IPv4 only).
-	AllowedIPs []netip.Prefix
-
 	// DNS servers for the adapter; empty = DNS is not changed.
 	DNS []netip.Addr
 
-	// Endpoint is the WireGuard server. When EndpointRoute is true it lies
-	// inside Routes, so a host route via the PC's original default gateway
-	// keeps the tunnel's own UDP packets out of the adapter.
-	Endpoint      netip.AddrPort
-	EndpointRoute bool
+	// Bypass addresses lie inside Routes but must stay on the real network:
+	// the WireGuard endpoint (else the tunnel's own packets would loop into
+	// the adapter) and the router. Each gets a host route via the PC's
+	// current default gateway.
+	Bypass []netip.Addr
+
+	// Endpoint is the WireGuard server.
+	Endpoint netip.AddrPort
 
 	// LowMetric makes the adapter the preferred interface (everything mode:
 	// its DNS server is asked first).
 	LowMetric bool
 
 	MTU int
-}
-
-func checkKey(name, b64 string, optional bool) error {
-	b64 = strings.TrimSpace(b64)
-	if b64 == "" {
-		if optional {
-			return nil
-		}
-		return fmt.Errorf("%s is missing", name)
-	}
-	if len(b64) > maxFieldBytes {
-		return fmt.Errorf("%s is not a WireGuard key", name)
-	}
-	raw, err := base64.StdEncoding.DecodeString(b64)
-	if err != nil || len(raw) != 32 {
-		return fmt.Errorf("%s is not a WireGuard key", name)
-	}
-	return nil
 }
 
 // parseHostPrefix accepts "a.b.c.d" (as /32) or "a.b.c.d/n" (IPv4 only),
@@ -173,15 +163,6 @@ func BuildPlan(r StartRequest) (Plan, error) {
 	default:
 		return p, fmt.Errorf("unknown mode %q (home or everything)", r.Mode)
 	}
-	if err := checkKey("this PC's private key", r.PrivateKey, false); err != nil {
-		return p, err
-	}
-	if err := checkKey("router public key", r.PeerPublicKey, false); err != nil {
-		return p, err
-	}
-	if err := checkKey("pre-shared key", r.PresharedKey, true); err != nil {
-		return p, err
-	}
 	if len(r.Endpoint) > maxFieldBytes {
 		return p, errors.New("endpoint is too long")
 	}
@@ -202,9 +183,6 @@ func BuildPlan(r StartRequest) (Plan, error) {
 	if err != nil || router.Bits() != 32 || !usableUnicast(router.Addr()) {
 		return p, fmt.Errorf("router LAN IP %q is not a valid IPv4 address", r.RouterIP)
 	}
-	if r.Keepalive < 0 || r.Keepalive > maxKeepalive {
-		return p, errors.New("keepalive must be 0-65535 seconds")
-	}
 	p.MTU = r.MTU
 	if p.MTU == 0 {
 		p.MTU = defaultMTU
@@ -218,7 +196,7 @@ func BuildPlan(r StartRequest) (Plan, error) {
 		if len(r.HomeCIDRs) > maxHomeCIDRs {
 			return p, fmt.Errorf("at most %d home devices", maxHomeCIDRs)
 		}
-		routes := []netip.Prefix{router}
+		var routes []netip.Prefix
 		for _, s := range r.HomeCIDRs {
 			h, err := parseHostPrefix(s)
 			if err != nil || (h.Bits() == 32 && !usableUnicast(h.Addr())) {
@@ -230,10 +208,15 @@ func BuildPlan(r StartRequest) (Plan, error) {
 			if h.Addr().IsLoopback() || h.Addr().IsMulticast() || h.Addr().IsLinkLocalUnicast() {
 				return p, fmt.Errorf("home device %s cannot be reached through the house", h)
 			}
+			if h == router {
+				continue // the router itself stays off the adapter
+			}
 			routes = appendUnique(routes, h)
 		}
+		if len(routes) == 0 {
+			return p, errors.New("list at least one home device (IP or range) other than the router")
+		}
 		p.Routes = routes
-		p.AllowedIPs = routes
 	case ModeEverything:
 		// Two halves instead of 0.0.0.0/0: more specific than the PC's own
 		// default route, which stays in place for a clean fallback.
@@ -245,14 +228,19 @@ func BuildPlan(r StartRequest) (Plan, error) {
 			netip.MustParsePrefix("8000::/1"),
 		}
 		p.Addresses = append(p.Addresses, blockV6Addr)
-		p.AllowedIPs = []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0")}
-		p.DNS = []netip.Addr{router.Addr()}
+		// Not the router's address (that one bypasses the adapter): a
+		// virtual resolver inside the routes. The VPN core answers every
+		// DNS query entering the adapter from the router, through the
+		// tunnel, whatever server it was sent to.
+		p.DNS = []netip.Addr{VirtualDNS}
 		p.LowMetric = true
 	}
-	for _, rt := range p.Routes {
-		if rt.Contains(p.Endpoint.Addr()) {
-			p.EndpointRoute = true
-			break
+	for _, a := range []netip.Addr{p.Endpoint.Addr(), router.Addr()} {
+		for _, rt := range p.Routes {
+			if rt.Contains(a) {
+				p.Bypass = append(p.Bypass, a)
+				break
+			}
 		}
 	}
 	return p, nil
@@ -267,8 +255,5 @@ func appendUnique(list []netip.Prefix, p netip.Prefix) []netip.Prefix {
 	return append(list, p)
 }
 
-// EndpointHostRoute is the host route (/32 or /128) for the endpoint.
-func (p Plan) EndpointHostRoute() netip.Prefix {
-	a := p.Endpoint.Addr()
-	return netip.PrefixFrom(a, a.BitLen())
-}
+// HostPrefix is the single-host prefix (/32 or /128) for a.
+func HostPrefix(a netip.Addr) netip.Prefix { return netip.PrefixFrom(a, a.BitLen()) }

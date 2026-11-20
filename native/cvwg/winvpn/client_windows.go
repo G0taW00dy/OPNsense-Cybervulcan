@@ -22,6 +22,15 @@ import (
 // asynchronous because the UAC prompt can take as long as the user wants;
 // callers poll Status.
 type Client struct {
+	// OnPackets is called with the packet pipe once the adapter is up; it
+	// runs the VPN core on NewPipeTun(conn, mtu) (exports_vpn_windows.go:
+	// vpn_glue's vpnStart). It owns conn from then on.
+	OnPackets func(conn net.Conn, mtu int) error
+	// OnStop ends the VPN core (and with it the packet pipe).
+	OnStop func()
+
+	nonce string
+
 	mu      sync.Mutex
 	conn    net.Conn
 	rd      *bufio.Reader
@@ -86,15 +95,40 @@ func (c *Client) startSync(r StartRequest) (Status, error) {
 	if !resp.OK {
 		return Status{}, errors.New(resp.Error)
 	}
-	if resp.Status == nil {
-		return Status{State: StateOn, Mode: r.Mode}, nil
+	plan, _ := BuildPlan(r)
+	if err := c.attachPackets(plan.MTU); err != nil {
+		_, _ = c.roundTrip(Request{Op: OpStop}, 15*time.Second)
+		return Status{}, err
 	}
-	return *resp.Status, nil
+	return Status{State: StateOn, Mode: r.Mode}, nil
+}
+
+// attachPackets connects the packet pipe and hands it to the VPN core.
+func (c *Client) attachPackets(mtu int) error {
+	c.mu.Lock()
+	nonce := c.nonce
+	c.mu.Unlock()
+	name, err := PacketPipeName(nonce)
+	if err != nil {
+		return err
+	}
+	conn, err := dialHelperPipe(name)
+	if err != nil {
+		return err
+	}
+	if c.OnPackets == nil {
+		conn.Close()
+		return errors.New("the home link is not available in this build")
+	}
+	return c.OnPackets(conn, mtu)
 }
 
 // Stop removes the adapter and lets the helper exit (the next Start shows
 // the UAC prompt again).
 func (c *Client) Stop() {
+	if c.OnStop != nil {
+		c.OnStop()
+	}
 	c.mu.Lock()
 	connected := c.conn != nil && !c.busy
 	c.mu.Unlock()
@@ -211,27 +245,34 @@ func (c *Client) ensureHelper() error {
 		return fmt.Errorf("could not start the admin helper: %w", err)
 	}
 
-	admins, err := windows.CreateWellKnownSid(windows.WinBuiltinAdministratorsSid)
+	conn, err := dialHelperPipe(pipe)
 	if err != nil {
 		return err
 	}
+	c.mu.Lock()
+	c.conn, c.rd, c.nonce = conn, bufio.NewReaderSize(conn, 4096), nonce
+	c.mu.Unlock()
+	return nil
+}
+
+// dialHelperPipe connects to one of the helper's pipes, retrying while the
+// helper starts up. The pipe must be owned by Administrators: a pipe
+// squatted by a normal process under this name is refused.
+func dialHelperPipe(name string) (net.Conn, error) {
+	admins, err := windows.CreateWellKnownSid(windows.WinBuiltinAdministratorsSid)
+	if err != nil {
+		return nil, err
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), dialWait)
 	defer cancel()
-	var conn net.Conn
 	for {
-		// The pipe must be owned by Administrators: a pipe squatted by a
-		// normal process under this name is refused.
-		conn, err = (&namedpipe.DialConfig{ExpectedOwner: admins}).DialContext(ctx, pipe)
+		conn, err := (&namedpipe.DialConfig{ExpectedOwner: admins}).DialContext(ctx, name)
 		if err == nil {
-			break
+			return conn, nil
 		}
 		if ctx.Err() != nil {
-			return errors.New("the admin helper did not answer")
+			return nil, errors.New("the admin helper did not answer")
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	c.mu.Lock()
-	c.conn, c.rd = conn, bufio.NewReaderSize(conn, 4096)
-	c.mu.Unlock()
-	return nil
 }

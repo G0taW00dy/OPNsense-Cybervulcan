@@ -155,12 +155,21 @@ func ValidNonce(s string) bool { return nonceRe.MatchString(s) }
 // group, service or well-known SID).
 func ValidUserSID(s string) bool { return userSIDRe.MatchString(s) }
 
-// PipeName is the helper's pipe for nonce.
+// PipeName is the helper's control pipe for nonce.
 func PipeName(nonce string) (string, error) {
 	if !ValidNonce(nonce) {
 		return "", errors.New("invalid pipe nonce")
 	}
 	return pipePrefix + nonce, nil
+}
+
+// PacketPipeName is the helper's packet pipe for nonce (frame.go).
+func PacketPipeName(nonce string) (string, error) {
+	n, err := PipeName(nonce)
+	if err != nil {
+		return "", err
+	}
+	return n + "-pkt", nil
 }
 
 // PipeSDDL is the pipe's security descriptor: owned by Administrators (the

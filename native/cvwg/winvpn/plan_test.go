@@ -1,33 +1,19 @@
 package winvpn
 
 import (
-	"crypto/rand"
-	"encoding/base64"
 	"net/netip"
 	"reflect"
 	"strings"
 	"testing"
 )
 
-// testKey is a freshly generated 32-byte value (not a real key).
-func testKey(t *testing.T) string {
-	t.Helper()
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		t.Fatal(err)
-	}
-	return base64.StdEncoding.EncodeToString(b)
-}
-
 func baseRequest(t *testing.T, mode string) StartRequest {
 	return StartRequest{
-		Mode:          mode,
-		PrivateKey:    testKey(t),
-		PeerPublicKey: testKey(t),
-		Endpoint:      "203.0.113.7:51830",
-		Address:       "10.10.99.2/32",
-		RouterIP:      "10.10.10.254",
-		Keepalive:     25,
+		Mode:      mode,
+		Endpoint:  "203.0.113.7:51830",
+		Address:   "10.10.99.2/32",
+		RouterIP:  "10.10.10.254",
+		HomeCIDRs: []string{"10.10.10.20"},
 	}
 }
 
@@ -46,18 +32,16 @@ func TestPlanHome(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := prefixes("10.10.10.254/32", "10.10.10.20/32", "192.168.50.0/24")
+	// The router itself stays off the adapter.
+	want := prefixes("10.10.10.20/32", "192.168.50.0/24")
 	if !reflect.DeepEqual(p.Routes, want) {
 		t.Errorf("routes = %v, want %v", p.Routes, want)
-	}
-	if !reflect.DeepEqual(p.AllowedIPs, want) {
-		t.Errorf("allowed = %v", p.AllowedIPs)
 	}
 	if len(p.DNS) != 0 || p.LowMetric {
 		t.Errorf("home mode must not touch DNS / metric: %+v", p)
 	}
-	if p.EndpointRoute {
-		t.Error("endpoint is outside the home routes: no host route needed")
+	if len(p.Bypass) != 0 {
+		t.Errorf("nothing to bypass: %v", p.Bypass)
 	}
 	if !reflect.DeepEqual(p.Addresses, prefixes("10.10.99.2/32")) {
 		t.Errorf("addresses = %v", p.Addresses)
@@ -67,26 +51,27 @@ func TestPlanHome(t *testing.T) {
 	}
 }
 
-func TestPlanHomeRouterOnly(t *testing.T) {
-	p, err := BuildPlan(baseRequest(t, ModeHome))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(p.Routes, prefixes("10.10.10.254/32")) {
-		t.Errorf("routes = %v", p.Routes)
+func TestPlanHomeNeedsDevices(t *testing.T) {
+	for _, devs := range [][]string{nil, {"10.10.10.254"}} {
+		r := baseRequest(t, ModeHome)
+		r.HomeCIDRs = devs
+		if _, err := BuildPlan(r); err == nil {
+			t.Errorf("home mode with %v accepted", devs)
+		}
 	}
 }
 
-func TestPlanHomeEndpointInsideRoutes(t *testing.T) {
+func TestPlanHomeRangeWithRouterAndEndpoint(t *testing.T) {
 	r := baseRequest(t, ModeHome)
-	r.Endpoint = "192.168.50.1:51830"
-	r.HomeCIDRs = []string{"192.168.50.0/24"}
+	r.Endpoint = "10.10.10.1:51830"
+	r.HomeCIDRs = []string{"10.10.10.0/24"}
 	p, err := BuildPlan(r)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !p.EndpointRoute || p.EndpointHostRoute() != netip.MustParsePrefix("192.168.50.1/32") {
-		t.Errorf("want a host route for the endpoint, got %v %v", p.EndpointRoute, p.EndpointHostRoute())
+	want := []netip.Addr{netip.MustParseAddr("10.10.10.1"), netip.MustParseAddr("10.10.10.254")}
+	if !reflect.DeepEqual(p.Bypass, want) {
+		t.Errorf("bypass = %v, want endpoint + router", p.Bypass)
 	}
 }
 
@@ -98,17 +83,17 @@ func TestPlanEverything(t *testing.T) {
 	if !reflect.DeepEqual(p.Routes, prefixes("0.0.0.0/1", "128.0.0.0/1", "::/1", "8000::/1")) {
 		t.Errorf("routes = %v", p.Routes)
 	}
-	if !reflect.DeepEqual(p.DNS, []netip.Addr{netip.MustParseAddr("10.10.10.254")}) {
+	// DNS: a virtual resolver inside the routes (answered from the router by
+	// the VPN core); the router itself bypasses the adapter.
+	if !reflect.DeepEqual(p.DNS, []netip.Addr{VirtualDNS}) || !p.Routes[1].Contains(VirtualDNS) {
 		t.Errorf("dns = %v", p.DNS)
 	}
-	if !p.LowMetric || !p.EndpointRoute {
-		t.Errorf("everything needs low metric + endpoint host route: %+v", p)
+	want := []netip.Addr{netip.MustParseAddr("203.0.113.7"), netip.MustParseAddr("10.10.10.254")}
+	if !p.LowMetric || !reflect.DeepEqual(p.Bypass, want) {
+		t.Errorf("everything needs low metric + endpoint/router bypass: %+v", p)
 	}
-	if p.EndpointHostRoute() != netip.MustParsePrefix("203.0.113.7/32") {
-		t.Errorf("host route = %v", p.EndpointHostRoute())
-	}
-	if !reflect.DeepEqual(p.AllowedIPs, prefixes("0.0.0.0/0")) {
-		t.Errorf("allowed = %v", p.AllowedIPs)
+	if HostPrefix(p.Bypass[0]) != netip.MustParsePrefix("203.0.113.7/32") {
+		t.Errorf("host route = %v", HostPrefix(p.Bypass[0]))
 	}
 	// An IPv6 address so the v6 catch-all routes work (no v6 leak).
 	if len(p.Addresses) != 2 || !p.Addresses[1].Addr().Is6() {
@@ -123,8 +108,8 @@ func TestPlanEverythingIPv6Endpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !p.EndpointRoute || p.EndpointHostRoute() != netip.MustParsePrefix("2001:db8::7/128") {
-		t.Errorf("v6 endpoint host route: %v %v", p.EndpointRoute, p.EndpointHostRoute())
+	if len(p.Bypass) == 0 || HostPrefix(p.Bypass[0]) != netip.MustParsePrefix("2001:db8::7/128") {
+		t.Errorf("v6 endpoint host route: %v", p.Bypass)
 	}
 }
 
@@ -132,9 +117,6 @@ func TestPlanRejects(t *testing.T) {
 	cases := map[string]func(r *StartRequest){
 		"mode app":         func(r *StartRequest) { r.Mode = "app" },
 		"mode empty":       func(r *StartRequest) { r.Mode = "" },
-		"no private key":   func(r *StartRequest) { r.PrivateKey = "" },
-		"short key":        func(r *StartRequest) { r.PeerPublicKey = base64.StdEncoding.EncodeToString([]byte("short")) },
-		"bad psk":          func(r *StartRequest) { r.PresharedKey = "not base64!" },
 		"endpoint no port": func(r *StartRequest) { r.Endpoint = "203.0.113.7" },
 		"endpoint name":    func(r *StartRequest) { r.Endpoint = "router.example.com:51830" },
 		"endpoint port 0":  func(r *StartRequest) { r.Endpoint = "203.0.113.7:0" },
@@ -143,7 +125,6 @@ func TestPlanRejects(t *testing.T) {
 		"address junk":     func(r *StartRequest) { r.Address = "C:\\Windows" },
 		"router range":     func(r *StartRequest) { r.RouterIP = "10.10.10.0/24" },
 		"router missing":   func(r *StartRequest) { r.RouterIP = "" },
-		"keepalive":        func(r *StartRequest) { r.Keepalive = -1 },
 		"mtu low":          func(r *StartRequest) { r.MTU = 100 },
 		"mtu high":         func(r *StartRequest) { r.MTU = 9000 },
 		"home too wide":    func(r *StartRequest) { r.HomeCIDRs = []string{"10.0.0.0/7"} },
@@ -168,16 +149,5 @@ func TestPlanRejects(t *testing.T) {
 				t.Errorf("accepted %s", r)
 			}
 		})
-	}
-}
-
-func TestRequestStringHasNoKeys(t *testing.T) {
-	r := baseRequest(t, ModeEverything)
-	r.PresharedKey = testKey(t)
-	s := r.String()
-	for _, k := range []string{r.PrivateKey, r.PeerPublicKey, r.PresharedKey} {
-		if strings.Contains(s, k) {
-			t.Fatal("String() leaks a key")
-		}
 	}
 }

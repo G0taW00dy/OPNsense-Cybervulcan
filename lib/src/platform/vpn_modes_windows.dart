@@ -1,163 +1,129 @@
-import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi';
-import 'dart:io';
 
 import 'package:ffi/ffi.dart';
 
 import '../core/config.dart';
-import '../core/storage.dart';
+import '../net/router_link.dart' show EndpointResolver, resolveEndpoint;
+import 'vpn_modes.dart';
 
-// Windows "home link": the remote access modes `home` (home devices such as
-// the NAS) and `everything` (all PC traffic via the house) through a Wintun
+// Windows "home link": the remote modes `home` (home devices such as the
+// NAS) and `everything` (all PC traffic via the house) through a Wintun
 // network adapter named "Cybervulcan".
 //
 // The adapter needs admin rights, so cvwg.dll starts a small elevated helper
-// (this app's exe with --vpn-helper) through the UAC prompt the first time a
-// mode is turned on, and talks to it over a named pipe only this Windows
-// user can open. Turning the mode off removes the adapter, its routes and
-// DNS and ends the helper; the next turn-on asks again. Mode `app` (the
-// default) never comes here: it is the user-space tunnel in net/tunnel.dart.
+// (this app's exe with --vpn-helper) through the UAC prompt when a mode is
+// turned on. The helper only creates the adapter and sets its routes / DNS;
+// it talks to this process over two named pipes that only this Windows user
+// can open (start / stop / status, and the adapter's packets). The packets
+// are handled here by the same VPN core and remote-access tunnel as on
+// Android, so no key ever reaches the helper. Turning the mode off (or
+// closing the app) removes the adapter, routes and DNS and ends the helper;
+// the next turn-on asks again.
 
-/// Modes that use the adapter.
-const homeLinkModes = {'home', 'everything'};
-
-/// What cvvpn_start receives. Field names match winvpn.StartRequest (Go);
+/// What the elevated helper gets (winvpn.StartRequest in Go).
 /// test/fixtures/home_link_request.json pins the contract on both sides.
-class HomeLinkRequest {
-  const HomeLinkRequest({
+class HomeLinkHelperRequest {
+  const HomeLinkHelperRequest({
     required this.mode,
-    required this.privateKey,
-    required this.peerPublicKey,
-    this.presharedKey,
     required this.endpoint,
     required this.address,
     required this.routerIp,
     this.homeCidrs = const [],
-    required this.keepalive,
     this.mtu = 1280,
   });
 
   /// `home` or `everything`.
   final String mode;
-  final String privateKey;
-  final String peerPublicKey;
-  final String? presharedKey;
 
-  /// Resolved `ip:port` (`[v6]:port`) of the router's WireGuard port.
+  /// Resolved `ip:port` (`[v6]:port`) of the router's WireGuard port: kept
+  /// on the real network when the adapter's routes would cover it.
   final String endpoint;
 
-  /// This PC's tunnel address, e.g. 10.10.99.2/32.
+  /// This PC's tunnel address (the adapter's own address), e.g. 10.10.99.2/32.
   final String address;
 
-  /// Router LAN IPv4: always reachable; the DNS server in `everything`.
+  /// Router LAN IPv4: kept off the adapter (the app reaches the router
+  /// through its own tunnel).
   final String routerIp;
 
   /// Home devices for `home` mode (canonical CIDRs).
   final List<String> homeCidrs;
-  final int keepalive;
   final int mtu;
 
-  /// Builds the request from the settings, or null when [AppConfig.mode] is
-  /// `app` (no adapter). [endpoint] is the resolved `ip:port`.
-  static HomeLinkRequest? fromConfig(AppConfig cfg, WireGuardSecrets secrets, String endpoint) {
-    final mode = cfg.mode;
-    if (!homeLinkModes.contains(mode)) return null;
-    return HomeLinkRequest(
-      mode: mode,
-      privateKey: secrets.privateKey ?? '',
-      peerPublicKey: (cfg.wgServerPublicKey ?? '').trim(),
-      presharedKey: secrets.presharedKey,
-      endpoint: endpoint,
-      address: cfg.wgAddress.trim(),
-      routerIp: cfg.routerTunnelIp ?? '',
-      homeCidrs: mode == 'home' ? cfg.homeDeviceCidrs : const [],
-      keepalive: cfg.wgKeepalive,
-    );
-  }
+  static HomeLinkHelperRequest fromConfig(AppConfig cfg, String mode, String endpoint, {int mtu = 1280}) =>
+      HomeLinkHelperRequest(
+        mode: mode,
+        endpoint: endpoint,
+        address: cfg.wgAddress.trim(),
+        routerIp: cfg.routerTunnelIp ?? '',
+        homeCidrs: mode == 'home' ? cfg.homeDeviceCidrs : const [],
+        mtu: mtu,
+      );
 
   Map<String, Object?> toJson() => {
         'mode': mode,
-        'privateKey': privateKey,
-        'peerPublicKey': peerPublicKey,
-        if (presharedKey != null && presharedKey!.isNotEmpty) 'presharedKey': presharedKey,
         'endpoint': endpoint,
         'address': address,
         'routerIp': routerIp,
         if (homeCidrs.isNotEmpty) 'homeCidrs': homeCidrs,
-        'keepalive': keepalive,
         'mtu': mtu,
       };
-
-  /// For logs and errors: no keys.
-  @override
-  String toString() => 'HomeLinkRequest($mode, $address via $endpoint)';
 }
 
-/// State of the adapter session (winvpn.Status).
-enum HomeLinkState { off, starting, on, error }
-
-class HomeLinkStatus {
-  const HomeLinkStatus({
-    this.state = HomeLinkState.off,
-    this.mode,
-    this.lastHandshake,
-    this.rxBytes = 0,
-    this.txBytes = 0,
-    this.error,
-  });
-
-  final HomeLinkState state;
-  final String? mode;
-  final DateTime? lastHandshake;
-  final int rxBytes;
-  final int txBytes;
-
-  /// Plain English, set when [state] is [HomeLinkState.error].
-  final String? error;
-
-  bool get on => state == HomeLinkState.on;
-
-  static const off = HomeLinkStatus();
-
-  factory HomeLinkStatus.fromJson(Map<String, dynamic> j) {
-    int n(String k) => (j[k] is num) ? (j[k] as num).toInt() : 0;
-    final hs = n('lastHandshake');
-    final s = j['state'];
-    final err = j['error'];
-    return HomeLinkStatus(
-      state: switch (s) {
-        'starting' => HomeLinkState.starting,
-        'on' => HomeLinkState.on,
-        'error' => HomeLinkState.error,
-        _ => HomeLinkState.off,
+/// The JSON for cvvpn_start: the helper's part and the VPN core's part
+/// (vpn_glue.go vpnStartConfig, same fields as on Android).
+String homeLinkStartJson(SystemVpnRequest req, HomeLinkHelperRequest helper) => jsonEncode({
+      'helper': helper.toJson(),
+      'vpn': {
+        'mode': req.mode,
+        'transport': req.transport,
+        'mtu': req.mtu,
+        if (req.dns != null && req.dns!.isNotEmpty) 'dns': req.dns,
+        'allowed': req.allowed,
       },
-      mode: j['mode'] is String && (j['mode'] as String).isNotEmpty ? j['mode'] as String : null,
-      lastHandshake: hs > 0 ? DateTime.fromMillisecondsSinceEpoch(hs * 1000, isUtc: true) : null,
-      rxBytes: n('rx'),
-      txBytes: n('tx'),
-      error: err is String && err.isNotEmpty ? err : null,
-    );
-  }
+    });
 
-  /// One line for Settings / the status card.
-  String describe() => switch (state) {
-        HomeLinkState.off => 'Off',
-        HomeLinkState.starting => 'Waiting for the admin prompt...',
-        HomeLinkState.on => mode == 'everything'
-            ? 'On - all of this PC\'s traffic goes via the house'
-            : 'On - home devices reachable',
-        HomeLinkState.error => error ?? 'The home link could not be turned on.',
-      };
+/// Parses cvvpn_status: `{"helper": winvpn.Status, "vpn": vpnStatus}`.
+SystemVpnStatus homeLinkStatusFromJson(String s) {
+  Map<String, dynamic> obj(Object? o) => o is Map<String, dynamic> ? o : const {};
+  Map<String, dynamic> j;
+  try {
+    j = obj(jsonDecode(s));
+  } on FormatException {
+    j = const {};
+  }
+  final h = obj(j['helper']);
+  final v = obj(j['vpn']);
+  int i(String k) => v[k] is num ? (v[k] as num).toInt() : 0;
+  String? str(Object? o) => o is String && o.isNotEmpty ? o : null;
+  final helperState = str(h['state']) ?? 'off';
+  final running = v['up'] == true && helperState == 'on';
+  return SystemVpnStatus(
+    running: running,
+    mode: str(v['mode']) ?? str(h['mode']) ?? '',
+    transportUp: v['transportUp'] == true,
+    lastError: running ? null : friendlyHomeLinkError(str(h['error']) ?? str(v['error']), quietWhenEmpty: true),
+    tcpActive: i('tcpActive'),
+    udpActive: i('udpActive'),
+    rxBytes: i('rx'),
+    txBytes: i('tx'),
+  );
 }
 
-class HomeLinkException implements Exception {
-  HomeLinkException(this.message);
-
-  /// Plain English.
-  final String message;
-  @override
-  String toString() => message;
+/// Plain-English text for errors from the native side (which are already
+/// worded for users; this covers missing / unexpected ones).
+String? friendlyHomeLinkError(String? raw, {bool quietWhenEmpty = false}) {
+  final s = (raw ?? '').trim();
+  if (s.isEmpty) return quietWhenEmpty ? null : 'The home link could not be turned on.';
+  final low = s.toLowerCase();
+  if (low.contains('canceled by the user') || low.contains('cancelled by the user')) {
+    return 'The admin prompt was cancelled, so the home link was not turned on.';
+  }
+  if (low.contains('exception') || low.contains('panic') || low.contains('0x')) {
+    return 'The home link could not be turned on (Windows reported an unexpected error).';
+  }
+  return s;
 }
 
 /// The three C functions of cvwg.dll (exports_vpn_windows.go). An interface
@@ -169,96 +135,105 @@ abstract class HomeLinkNative {
   void stop();
 }
 
-/// Windows implementation of the remote access modes `home` / `everything`.
-///
-/// Merge note: implements the platform-neutral vpn-modes interface
-/// (lib/src/platform/vpn_modes.dart, agent/android-vpn) once that lands;
-/// the controller calls [start] when remote access is on, the mode is not
-/// `app` and the PC is away from home, and [stop] when back home, when the
-/// mode goes back to `app` or when remote access is turned off.
-class WindowsVpnModes {
-  WindowsVpnModes(this._native, {this.pollInterval = const Duration(milliseconds: 300)});
+/// Windows [SystemVpn]: the Cybervulcan Wintun adapter.
+class WindowsSystemVpn implements SystemVpn {
+  WindowsSystemVpn(this._native,
+      {EndpointResolver? resolver, this.pollInterval = const Duration(milliseconds: 300), this.startTimeout = const Duration(minutes: 3)})
+      : _resolve = resolver ?? resolveEndpoint;
 
   final HomeLinkNative? _native;
+  final EndpointResolver _resolve;
   final Duration pollInterval;
 
-  /// Loads cvwg.dll's home link functions (Windows only).
-  static WindowsVpnModes load() {
-    if (!Platform.isWindows) return WindowsVpnModes(null);
+  /// The UAC prompt waits for the user; give up after this long.
+  final Duration startTimeout;
+
+  /// Loads cvwg.dll's home link functions.
+  static WindowsSystemVpn load() {
     try {
-      return WindowsVpnModes(_FfiHomeLink(DynamicLibrary.open('cvwg.dll')));
+      return WindowsSystemVpn(_FfiHomeLink(DynamicLibrary.open('cvwg.dll')));
     } on Object {
-      return WindowsVpnModes(null);
+      return WindowsSystemVpn(null);
     }
   }
 
-  bool get isAvailable => _native != null;
+  @override
+  bool get isSupported => _native != null;
 
-  /// Why [isAvailable] is false (for Settings).
-  String? get unavailableReason => isAvailable
-      ? null
-      : Platform.isWindows
-          ? 'This build has no home link library (cvwg.dll) - reinstall Cybervulcan.'
-          : '"Home devices" and "Everything" on this device are handled by the phone app.';
+  @override
+  String? get unsupportedReason =>
+      isSupported ? null : 'This build has no home link library (cvwg.dll) - reinstall Cybervulcan.';
 
-  /// Turns the adapter on for [r]: shows the UAC prompt (first time), then
-  /// waits until the helper reports on / error, at most [timeout] (the
-  /// prompt waits for the user). Throws [HomeLinkException] with a
-  /// plain-English message.
-  Future<HomeLinkStatus> start(HomeLinkRequest r, {Duration timeout = const Duration(minutes: 3)}) async {
+  /// Nothing to ask up front: the admin prompt comes with [start].
+  @override
+  Future<bool> prepare() async => isSupported;
+
+  /// Shows the UAC prompt (each turn-on), then waits until the adapter is
+  /// up. Throws [SystemVpnException] with a plain-English message.
+  @override
+  Future<void> start(SystemVpnRequest request) async {
     final native = _native;
-    if (native == null) throw HomeLinkException(unavailableReason!);
-    final out = native.start(jsonEncode(r.toJson()));
-    final j = _decode(out);
-    if (j['ok'] != true) {
-      throw HomeLinkException(friendlyHomeLinkError(j['error'] is String ? j['error'] as String : null));
+    if (native == null) throw SystemVpnException(unsupportedReason!);
+    final cfg = request.config;
+    if (cfg == null) throw SystemVpnException('The home link needs the remote access settings.');
+    final String endpoint;
+    try {
+      endpoint = await _resolve(cfg.wgEndpointHost, cfg.wgEndpointPort);
+    } on Object {
+      throw SystemVpnException('Cannot look up ${cfg.wgEndpointHost} (the WireGuard endpoint).');
     }
-    final deadline = DateTime.now().add(timeout);
+    final helper = HomeLinkHelperRequest.fromConfig(cfg, request.mode, endpoint, mtu: request.mtu);
+    Map<String, dynamic> reply;
+    try {
+      final j = jsonDecode(native.start(homeLinkStartJson(request, helper)));
+      reply = j is Map<String, dynamic> ? j : const {};
+    } on FormatException {
+      reply = const {};
+    }
+    if (reply['ok'] != true) {
+      throw SystemVpnException(friendlyHomeLinkError(reply['error'] is String ? reply['error'] as String : null)!);
+    }
+    final deadline = DateTime.now().add(startTimeout);
     while (true) {
-      final s = status();
-      if (s.state == HomeLinkState.on) return s;
-      if (s.state == HomeLinkState.error) throw HomeLinkException(friendlyHomeLinkError(s.error));
-      if (s.state == HomeLinkState.off) throw HomeLinkException(friendlyHomeLinkError(null));
+      final raw = native.status();
+      final h = _helperState(raw);
+      if (h == 'on') return;
+      if (h == 'error' || h == 'off') {
+        throw SystemVpnException(
+            homeLinkStatusFromJson(raw).lastError ?? friendlyHomeLinkError(null)!);
+      }
       if (DateTime.now().isAfter(deadline)) {
         native.stop();
-        throw HomeLinkException('The admin prompt was not answered in time.');
+        throw SystemVpnException('The admin prompt was not answered in time.');
       }
       await Future<void>.delayed(pollInterval);
     }
   }
 
-  /// Removes the adapter, routes and DNS; ends the helper.
-  Future<void> stop() async => _native?.stop();
-
-  HomeLinkStatus status() {
-    final native = _native;
-    if (native == null) return HomeLinkStatus.off;
-    return HomeLinkStatus.fromJson(_decode(native.status()));
-  }
-
-  static Map<String, dynamic> _decode(String s) {
+  static String _helperState(String raw) {
     try {
-      final j = jsonDecode(s);
-      return j is Map<String, dynamic> ? j : const {};
+      final j = jsonDecode(raw);
+      final h = j is Map ? j['helper'] : null;
+      final s = h is Map ? h['state'] : null;
+      return s is String ? s : 'off';
     } on FormatException {
-      return const {};
+      return 'off';
     }
   }
-}
 
-/// Plain-English text for errors from the native side (which are already
-/// worded for users; this covers missing / unexpected ones).
-String friendlyHomeLinkError(String? raw) {
-  final s = (raw ?? '').trim();
-  if (s.isEmpty) return 'The home link could not be turned on.';
-  final low = s.toLowerCase();
-  if (low.contains('canceled by the user') || low.contains('cancelled by the user')) {
-    return 'The admin prompt was cancelled, so the home link was not turned on.';
+  /// Removes the adapter, routes and DNS; ends the helper.
+  @override
+  Future<void> stop() async => _native?.stop();
+
+  @override
+  Future<SystemVpnStatus> status() async {
+    final native = _native;
+    return native == null ? SystemVpnStatus.off : homeLinkStatusFromJson(native.status());
   }
-  if (low.contains('exception') || low.contains('panic') || low.contains('0x')) {
-    return 'The home link could not be turned on (Windows reported an unexpected error).';
-  }
-  return s;
+
+  /// Windows cannot tell cheaply whether a provider's VPN app is on.
+  @override
+  Future<bool> otherVpnActive() async => false;
 }
 
 typedef _StrFn = Pointer<Utf8> Function();
@@ -297,12 +272,6 @@ class _FfiHomeLink implements HomeLinkNative {
     try {
       return _take(_start(arg));
     } finally {
-      // The JSON holds the private key: wipe it before freeing.
-      final bytes = arg.cast<Uint8>();
-      var i = 0;
-      while (bytes[i] != 0) {
-        bytes[i++] = 0;
-      }
       malloc.free(arg);
     }
   }

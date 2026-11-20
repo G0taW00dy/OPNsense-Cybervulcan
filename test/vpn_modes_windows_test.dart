@@ -3,13 +3,8 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:opnsense_cybervulcan/src/core/config.dart';
-import 'package:opnsense_cybervulcan/src/core/storage.dart';
+import 'package:opnsense_cybervulcan/src/platform/vpn_modes.dart';
 import 'package:opnsense_cybervulcan/src/platform/vpn_modes_windows.dart';
-
-// "Keys" are fixed byte sequences, not real WireGuard keys.
-final _priv = base64.encode(List<int>.generate(32, (i) => i + 1));
-final _pub = base64.encode(List<int>.generate(32, (i) => i + 33));
-final _psk = base64.encode(List<int>.generate(32, (i) => i + 65));
 
 AppConfig _cfg(String mode, {String homeDevices = ''}) => AppConfig(
       baseUrl: 'https://10.10.10.254',
@@ -17,15 +12,20 @@ AppConfig _cfg(String mode, {String homeDevices = ''}) => AppConfig(
       remoteMode: mode,
       homeDevices: homeDevices,
       wgEndpointHost: 'router.example.com',
-      wgServerPublicKey: _pub,
+      wgEndpointPort: 51830,
       wgAddress: '10.10.99.2/32',
-      wgKeepalive: 25,
     );
+
+Future<String> _resolver(String host, int port) async => '203.0.113.7:$port';
 
 /// Scripted cvwg.dll.
 class FakeHomeLink implements HomeLinkNative {
   FakeHomeLink({this.startReply = '{"ok":true}', List<String>? statuses})
-      : statuses = statuses ?? ['{"state":"starting","mode":"home"}', '{"state":"on","mode":"home","rx":10,"tx":20}'];
+      : statuses = statuses ??
+            [
+              '{"helper":{"state":"starting","mode":"home"},"vpn":{"up":false}}',
+              '{"helper":{"state":"on","mode":"home"},"vpn":{"up":true,"mode":"home","transportUp":true,"rx":10,"tx":20}}',
+            ];
 
   final String startReply;
   final List<String> statuses;
@@ -45,128 +45,129 @@ class FakeHomeLink implements HomeLinkNative {
   void stop() => stops++;
 }
 
+WindowsSystemVpn _vpn(FakeHomeLink? fake, {Duration timeout = const Duration(minutes: 1)}) =>
+    WindowsSystemVpn(fake, resolver: _resolver, pollInterval: Duration.zero, startTimeout: timeout);
+
 void main() {
-  const secrets = WireGuardSecrets(privateKey: 'x', presharedKey: null);
-
-  group('HomeLinkRequest', () {
-    test('app mode needs no adapter', () {
-      expect(HomeLinkRequest.fromConfig(_cfg('app'), secrets, '203.0.113.7:51830'), isNull);
-    });
-
-    test('home mode carries the home devices and the router', () {
-      final r = HomeLinkRequest.fromConfig(
-          _cfg('home', homeDevices: '10.10.10.20, 192.168.50.0/24'),
-          WireGuardSecrets(privateKey: _priv, presharedKey: _psk),
-          '203.0.113.7:51830')!;
-      expect(r.mode, 'home');
+  group('helper request', () {
+    test('home mode: home devices, router and endpoint', () {
+      final cfg = _cfg('home', homeDevices: '10.10.10.20, 192.168.50.0/24');
+      final r = HomeLinkHelperRequest.fromConfig(cfg, 'home', '203.0.113.7:51830');
       expect(r.routerIp, '10.10.10.254');
       expect(r.homeCidrs, ['10.10.10.20/32', '192.168.50.0/24']);
-      expect(r.endpoint, '203.0.113.7:51830');
-      expect(r.peerPublicKey, _pub);
+      expect(r.address, '10.10.99.2/32');
     });
 
     test('everything mode sends no home devices', () {
-      final r = HomeLinkRequest.fromConfig(
-          _cfg('everything', homeDevices: '10.10.10.20'), secrets, '203.0.113.7:51830')!;
-      expect(r.mode, 'everything');
+      final r = HomeLinkHelperRequest.fromConfig(_cfg('everything', homeDevices: '10.10.10.20'), 'everything', '203.0.113.7:51830');
       expect(r.toJson().containsKey('homeCidrs'), isFalse);
     });
 
     test('JSON matches the Go contract fixture', () {
-      final fixture = jsonDecode(File('test/fixtures/home_link_request.json').readAsStringSync())
-          as Map<String, dynamic>;
-      final r = HomeLinkRequest.fromConfig(
-          _cfg('home', homeDevices: '10.10.10.20 192.168.50.0/24'),
-          WireGuardSecrets(privateKey: _priv, presharedKey: _psk),
-          '203.0.113.7:51830')!;
+      final fixture =
+          jsonDecode(File('test/fixtures/home_link_request.json').readAsStringSync()) as Map<String, dynamic>;
+      final r = HomeLinkHelperRequest.fromConfig(
+          _cfg('home', homeDevices: '10.10.10.20 192.168.50.0/24'), 'home', '203.0.113.7:51830');
       expect(r.toJson(), fixture);
     });
 
-    test('toString has no keys', () {
-      final r = HomeLinkRequest.fromConfig(
-          _cfg('everything'), WireGuardSecrets(privateKey: _priv, presharedKey: _psk), '203.0.113.7:51830')!;
-      final s = r.toString();
-      expect(s.contains(_priv), isFalse);
-      expect(s.contains(_pub), isFalse);
-      expect(s.contains(_psk), isFalse);
+    test('start JSON carries the VPN core part like Android', () {
+      final cfg = _cfg('everything');
+      final req = SystemVpnRequest.fromConfig(cfg);
+      final j = jsonDecode(homeLinkStartJson(req, HomeLinkHelperRequest.fromConfig(cfg, 'everything', '203.0.113.7:51830')))
+          as Map<String, dynamic>;
+      expect((j['helper'] as Map)['mode'], 'everything');
+      final v = j['vpn'] as Map;
+      expect(v['allowed'], ['0.0.0.0/0']);
+      expect(v['dns'], '10.10.10.254');
+      expect(v['transport'], 'wireguard');
+      expect(v['mtu'], 1280);
+      // No keys anywhere: the tunnel runs in the app, not in the helper.
+      expect(jsonEncode(j).toLowerCase().contains('key'), isFalse);
     });
   });
 
-  group('HomeLinkStatus', () {
-    test('parses helper status', () {
-      final s = HomeLinkStatus.fromJson(
-          jsonDecode('{"state":"on","mode":"everything","lastHandshake":1700000000,"rx":5,"tx":7}')
-              as Map<String, dynamic>);
-      expect(s.on, isTrue);
-      expect(s.mode, 'everything');
+  group('status', () {
+    test('running needs both the adapter and the VPN core', () {
+      final s = homeLinkStatusFromJson(
+          '{"helper":{"state":"on","mode":"home"},"vpn":{"up":true,"mode":"home","transportUp":true,"tcpActive":2,"rx":5,"tx":7}}');
+      expect(s.running, isTrue);
+      expect(s.transportUp, isTrue);
+      expect(s.mode, 'home');
+      expect(s.tcpActive, 2);
       expect(s.rxBytes, 5);
       expect(s.txBytes, 7);
-      expect(s.lastHandshake, DateTime.fromMillisecondsSinceEpoch(1700000000000, isUtc: true));
-      expect(s.describe(), contains('all of this PC'));
+      expect(s.lastError, isNull);
+      expect(homeLinkStatusFromJson('{"helper":{"state":"starting"},"vpn":{"up":true}}').running, isFalse);
     });
 
-    test('unknown or missing state is off', () {
-      expect(HomeLinkStatus.fromJson(const {}).state, HomeLinkState.off);
-      expect(HomeLinkStatus.fromJson(const {'state': 'weird'}).state, HomeLinkState.off);
+    test('errors from either side are shown', () {
+      expect(homeLinkStatusFromJson('{"helper":{"state":"error","error":"No internet."},"vpn":{}}').lastError,
+          'No internet.');
+      expect(homeLinkStatusFromJson('{"helper":{"state":"off"},"vpn":{"error":"remote access is not connected"}}').lastError,
+          'remote access is not connected');
+      expect(homeLinkStatusFromJson('{"helper":{"state":"off"},"vpn":{}}').lastError, isNull);
     });
 
-    test('error state keeps the message', () {
-      final s = HomeLinkStatus.fromJson(const {'state': 'error', 'error': 'No internet.'});
-      expect(s.describe(), 'No internet.');
+    test('garbage is off', () {
+      expect(homeLinkStatusFromJson('not json').running, isFalse);
+      expect(homeLinkStatusFromJson('[]').running, isFalse);
     });
   });
 
-  group('WindowsVpnModes', () {
-    final req = HomeLinkRequest.fromConfig(
-        _cfg('home'), WireGuardSecrets(privateKey: _priv), '203.0.113.7:51830')!;
+  group('WindowsSystemVpn', () {
+    final req = SystemVpnRequest.fromConfig(_cfg('home', homeDevices: '10.10.10.20'));
 
     test('start waits through the admin prompt until on', () async {
       final fake = FakeHomeLink();
-      final m = WindowsVpnModes(fake, pollInterval: Duration.zero);
-      final s = await m.start(req);
-      expect(s.on, isTrue);
-      expect(s.txBytes, 20);
-      expect(jsonDecode(fake.started.single), req.toJson());
+      final vpn = _vpn(fake);
+      expect(await vpn.prepare(), isTrue);
+      await vpn.start(req);
+      final sent = jsonDecode(fake.started.single) as Map<String, dynamic>;
+      expect((sent['helper'] as Map)['endpoint'], '203.0.113.7:51830');
+      expect((sent['helper'] as Map)['homeCidrs'], ['10.10.10.20/32']);
+      final st = await vpn.status();
+      expect(st.running, isTrue);
+      expect(st.txBytes, 20);
     });
 
     test('cancelled admin prompt is explained', () async {
       final fake = FakeHomeLink(statuses: [
-        '{"state":"starting"}',
-        '{"state":"error","error":"operation was canceled by the user"}',
+        '{"helper":{"state":"starting"},"vpn":{}}',
+        '{"helper":{"state":"error","error":"operation was canceled by the user"},"vpn":{}}',
       ]);
-      final m = WindowsVpnModes(fake, pollInterval: Duration.zero);
       await expectLater(
-          m.start(req),
-          throwsA(isA<HomeLinkException>()
+          _vpn(fake).start(req),
+          throwsA(isA<SystemVpnException>()
               .having((e) => e.message, 'message', contains('admin prompt was cancelled'))));
     });
 
     test('refused request is a plain error', () async {
       final fake = FakeHomeLink(startReply: '{"error":"router LAN IP \\"\\" is not a valid IPv4 address"}');
-      final m = WindowsVpnModes(fake, pollInterval: Duration.zero);
-      await expectLater(
-          m.start(req),
-          throwsA(isA<HomeLinkException>().having((e) => e.message, 'message', contains('router LAN IP'))));
+      await expectLater(_vpn(fake).start(req),
+          throwsA(isA<SystemVpnException>().having((e) => e.message, 'message', contains('router LAN IP'))));
     });
 
     test('unanswered prompt times out and stops', () async {
-      final fake = FakeHomeLink(statuses: ['{"state":"starting"}']);
-      final m = WindowsVpnModes(fake, pollInterval: Duration.zero);
-      await expectLater(m.start(req, timeout: Duration.zero), throwsA(isA<HomeLinkException>()));
+      final fake = FakeHomeLink(statuses: ['{"helper":{"state":"starting"},"vpn":{}}']);
+      await expectLater(_vpn(fake, timeout: Duration.zero).start(req), throwsA(isA<SystemVpnException>()));
       expect(fake.stops, 1);
     });
 
-    test('garbage from the library does not crash', () {
-      final m = WindowsVpnModes(FakeHomeLink(statuses: ['not json']));
-      expect(m.status().state, HomeLinkState.off);
+    test('endpoint that cannot be resolved', () async {
+      final vpn = WindowsSystemVpn(FakeHomeLink(),
+          resolver: (h, p) async => throw const SocketException('no'), pollInterval: Duration.zero);
+      await expectLater(vpn.start(req),
+          throwsA(isA<SystemVpnException>().having((e) => e.message, 'message', contains('router.example.com'))));
     });
 
     test('unavailable without the library', () async {
-      final m = WindowsVpnModes(null);
-      expect(m.isAvailable, isFalse);
-      expect(m.unavailableReason, isNotNull);
-      expect(m.status(), HomeLinkStatus.off);
-      await expectLater(m.start(req), throwsA(isA<HomeLinkException>()));
+      final vpn = _vpn(null);
+      expect(vpn.isSupported, isFalse);
+      expect(vpn.unsupportedReason, isNotNull);
+      expect(await vpn.prepare(), isFalse);
+      expect((await vpn.status()).running, isFalse);
+      await expectLater(vpn.start(req), throwsA(isA<SystemVpnException>()));
     });
   });
 
