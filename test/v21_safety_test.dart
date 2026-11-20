@@ -45,7 +45,7 @@ void main() {
       b.add(t0.add(const Duration(minutes: 1)), 248);
       b.add(t0.add(const Duration(minutes: 2)), 270);
       expect(b.value, 248);
-      b.add(t0.add(const Duration(minutes: 12)), 300); // the old ones fall out
+      b.add(t0.add(const Duration(minutes: 13)), 300); // the old ones fall out
       expect(b.value, 300);
       b.reset();
       expect(b.value, isNull);
