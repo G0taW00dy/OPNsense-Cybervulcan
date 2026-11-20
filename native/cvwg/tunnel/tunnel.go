@@ -86,6 +86,8 @@ type Tunnel struct {
 	ln     net.Listener
 	target netip.AddrPort
 	token  []byte
+	// allowed are the AllowedIPs: the only destinations DialContext reaches.
+	allowed []netip.Prefix
 
 	mu      sync.Mutex
 	lastErr string
@@ -114,6 +116,24 @@ func parseAddr(s string) (netip.Addr, error) {
 		return p.Addr(), nil
 	}
 	return netip.ParseAddr(s)
+}
+
+// parseAllowed parses AllowedIPs ("a.b.c.d/nn" or a bare address).
+func parseAllowed(list []string) ([]netip.Prefix, error) {
+	var out []netip.Prefix
+	for _, a := range list {
+		a = strings.TrimSpace(a)
+		p, err := netip.ParsePrefix(a)
+		if err != nil {
+			addr, err2 := netip.ParseAddr(a)
+			if err2 != nil {
+				return nil, fmt.Errorf("allowed IP %q is not an address or CIDR", a)
+			}
+			p = netip.PrefixFrom(addr, addr.BitLen())
+		}
+		out = append(out, p.Masked())
+	}
+	return out, nil
 }
 
 // uapiConfig builds the wireguard-go IPC configuration for c.
@@ -150,16 +170,12 @@ func uapiConfig(c *Config) (string, error) {
 	fmt.Fprintf(&b, "endpoint=%s\n", ep.String())
 	fmt.Fprintf(&b, "persistent_keepalive_interval=%d\n", c.PersistentKeepalive)
 	b.WriteString("replace_allowed_ips=true\n")
-	for _, a := range c.AllowedIPs {
-		p, err := netip.ParsePrefix(strings.TrimSpace(a))
-		if err != nil {
-			addr, err2 := netip.ParseAddr(strings.TrimSpace(a))
-			if err2 != nil {
-				return "", fmt.Errorf("allowed IP %q is not an address or CIDR", a)
-			}
-			p = netip.PrefixFrom(addr, addr.BitLen())
-		}
-		fmt.Fprintf(&b, "allowed_ip=%s\n", p.Masked().String())
+	allowed, err := parseAllowed(c.AllowedIPs)
+	if err != nil {
+		return "", err
+	}
+	for _, p := range allowed {
+		fmt.Fprintf(&b, "allowed_ip=%s\n", p.String())
 	}
 	return b.String(), nil
 }
@@ -188,7 +204,11 @@ func Start(c Config) (*Tunnel, error) {
 		mtu = 1280
 	}
 
-	t := &Tunnel{target: target, token: token}
+	allowed, err := parseAllowed(c.AllowedIPs)
+	if err != nil {
+		return nil, err
+	}
+	t := &Tunnel{target: target, token: token, allowed: allowed}
 	logger := &device.Logger{
 		Verbosef: device.DiscardLogf,
 		Errorf: func(format string, args ...any) {
@@ -279,6 +299,52 @@ func (t *Tunnel) forward(c net.Conn) {
 	}()
 	<-done
 	<-done
+}
+
+// ErrNotAllowed is returned by DialContext for a destination outside the
+// tunnel's AllowedIPs (WireGuard would silently drop its packets).
+var ErrNotAllowed = errors.New("destination is outside the tunnel's allowed IPs")
+
+// DialContext opens a TCP or UDP connection through the tunnel to address
+// ("ip:port", no host names). It makes the tunnel usable as a vpn.Dialer for
+// the system-VPN modes ("home devices", "everything"); the loopback
+// forwarder is not involved and keeps working as before. The destination
+// must be inside AllowedIPs, so the app config must list the home devices
+// (or 0.0.0.0/0 for "everything") there; the app adds them itself (lib/src/core/remote_modes.dart
+// tunnelAllowedIps, docs/ADMIN-SETUP.md "Remote modes").
+func (t *Tunnel) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	t.mu.Lock()
+	closed := t.closed
+	t.mu.Unlock()
+	if closed {
+		return nil, net.ErrClosed
+	}
+	switch network {
+	case "tcp", "tcp4", "tcp6", "udp", "udp4", "udp6":
+	default:
+		return nil, fmt.Errorf("network %q is not supported through the tunnel", network)
+	}
+	ap, err := netip.ParseAddrPort(address)
+	if err != nil {
+		return nil, fmt.Errorf("address %q must be ip:port", address)
+	}
+	if !t.allows(ap.Addr()) {
+		return nil, ErrNotAllowed
+	}
+	if network[:3] == "udp" {
+		return t.tnet.DialUDPAddrPort(netip.AddrPort{}, ap)
+	}
+	return t.tnet.DialContextTCPAddrPort(ctx, ap)
+}
+
+func (t *Tunnel) allows(a netip.Addr) bool {
+	a = a.Unmap()
+	for _, p := range t.allowed {
+		if p.Contains(a) {
+			return true
+		}
+	}
+	return false
 }
 
 // Status reads handshake time and byte counters from wireguard-go.

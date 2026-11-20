@@ -20,6 +20,7 @@ import '../platform/autostart.dart';
 import 'format.dart';
 import 'help_page.dart';
 import 'remote_access.dart';
+import 'remote_modes_editor.dart';
 import 'theme.dart';
 import 'update_widgets.dart';
 
@@ -819,6 +820,9 @@ class _SettingsPageState extends State<SettingsPage> {
               showToggle: false,
               onChanged: _set,
             ),
+          // v2.1: what remote access carries (app only / home devices / everything).
+          if (_remote == _Remote.wireguard)
+            RemoteModesEditor(key: ValueKey('modes-$_remoteGen'), controller: c, config: _cfg, onChanged: _set),
         ],
       ),
 
@@ -831,6 +835,7 @@ class _SettingsPageState extends State<SettingsPage> {
           if (_cfg.notifyOnBypass) 'bypass',
           if (_cfg.alertNewDevices) 'new devices',
           if (_cfg.backupReminderDays > 0) 'backup every ${_cfg.backupReminderDays} d',
+          if (isPhone && _cfg.protonReminder) 'VPN app reminder',
         ].join(', ').let((s) => s.isEmpty ? 'All off' : s),
         children: [
           _switch('Failover, failback, both tunnels down', _cfg.notifyOnFailover,
@@ -854,6 +859,16 @@ class _SettingsPageState extends State<SettingsPage> {
                 child: const Text('Forget known devices'),
               ),
             ),
+          // v2.1: phone reminder to turn the VPN app off at home / on when away.
+          if (isPhone)
+            _switch('Remind me about my VPN app', _cfg.protonReminder, (v) => _set(_cfg.copyWith(protonReminder: v)),
+                help: 'At home the router already sends everything through '
+                    '${_cfg.vpnName.trim().isEmpty ? 'the VPN' : _cfg.vpnName.trim()}, so the VPN app on the phone '
+                    'is not needed there. With this on you get a notification when you arrive home with the VPN '
+                    'app still on ("you can turn it off"), and when you leave with it off ("turn it back on"). '
+                    'Only on changes, at most every 20 minutes.\n\n'
+                    'Works while Cybervulcan is running (open or in the background). "Home" means the router '
+                    'answers directly, so if your VPN app blocks the local network, allow LAN connections in it.'),
           Row(children: [
             const Expanded(child: Text('Router backup reminder')),
             const HelpButton(
