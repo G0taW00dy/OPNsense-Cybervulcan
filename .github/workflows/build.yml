@@ -103,6 +103,9 @@ jobs:
             -ldflags='-s -w -buildid=' -o out/windows/cvwg.dll .
           rm -f out/windows/cvwg.h
           ls -la out/windows
+          # Windows-only code (home link helper) is not covered by the Linux vet above.
+          CGO_ENABLED=1 GOOS=windows GOARCH=amd64 CC=x86_64-w64-mingw32-gcc \
+            go vet -tags "$(echo $CVWG_TAGS | tr -d ' ')" ./...
       - uses: actions/upload-artifact@v4
         with:
           name: cvwg-native
@@ -248,11 +251,37 @@ jobs:
         with:
           name: cvwg-native
           path: native-out
-      - name: Bundle the VC++ runtime and the remote-access DLL next to the exe
+      # Home link (remote access modes "home" / "everything"): the official,
+      # signed Wintun prebuilt from wintun.net, redistributable unmodified
+      # under its licence (shipped as wintun-LICENSE.txt). Never committed;
+      # the download must match the pinned checksum.
+      - name: Fetch Wintun (pinned SHA-256)
+        shell: pwsh
+        env:
+          WINTUN_URL: https://www.wintun.net/builds/wintun-0.14.1.zip
+          WINTUN_SHA256: 07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51
+        run: |
+          $zip = Join-Path $env:RUNNER_TEMP "wintun.zip"
+          Invoke-WebRequest -Uri $env:WINTUN_URL -OutFile $zip -ErrorAction Stop
+          $got = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
+          if ($got -ne $env:WINTUN_SHA256) {
+            Write-Error "wintun zip checksum mismatch: got $got"; exit 1
+          }
+          $out = Join-Path $env:RUNNER_TEMP "wintun"
+          Expand-Archive $zip -DestinationPath $out -Force
+          $dll = Join-Path $out "wintun\bin\amd64\wintun.dll"
+          $sig = Get-AuthenticodeSignature $dll
+          if ($sig.Status -ne 'Valid') { Write-Error "wintun.dll signature: $($sig.Status)"; exit 1 }
+          Write-Host "wintun.dll signed by: $($sig.SignerCertificate.Subject)"
+          New-Item -ItemType Directory -Force wintun-out | Out-Null
+          Copy-Item $dll wintun-out\wintun.dll -ErrorAction Stop
+          Copy-Item (Join-Path $out "wintun\LICENSE.txt") wintun-out\wintun-LICENSE.txt -ErrorAction Stop
+      - name: Bundle the VC++ runtime, the remote-access DLL and Wintun next to the exe
         shell: pwsh
         run: |
           $dest = "build\windows\x64\runner\Release"
           Copy-Item "native-out\windows\cvwg.dll" $dest -ErrorAction Stop
+          Copy-Item "wintun-out\wintun.dll", "wintun-out\wintun-LICENSE.txt" $dest -ErrorAction Stop
           foreach ($dll in 'msvcp140.dll','vcruntime140.dll','vcruntime140_1.dll') {
             Copy-Item "$env:WINDIR\System32\$dll" $dest -ErrorAction Stop
           }
