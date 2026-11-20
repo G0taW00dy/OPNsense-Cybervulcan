@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.0.4 (pre-release)
+
+### Fixed
+
+* Bufferbloat test pushes the line like Speedtest: 8 parallel streams each
+  way, 12 s per direction, sampling after a 2.5 s ramp-up, loaded latency as
+  the interquartile mean. With 3 streams it graded A while Speedtest showed
+  ~+1.4 s on the same line.
+
 ## 2.0.3 (pre-release)
 
 ### Fixed
