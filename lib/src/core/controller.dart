@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import '../api/models.dart';
 import '../api/opnsense_client.dart';
 import '../net/router_link.dart';
+import '../net/tailscale_engine.dart';
 import '../net/tunnel.dart';
 import 'bypass.dart';
 import 'client_factory.dart';
@@ -443,8 +444,9 @@ class CybervulcanController extends ChangeNotifier {
     // Reach the router directly, or through the in-app tunnel when away.
     // This is a TLS handshake only: if the certificate is wrong nothing -
     // in particular not the API key - is sent.
-    final ls = await link.check(
-        _foreground ? config : config.copyWith(remoteEnabled: false), _wg);
+    // In the background (Android) no in-app engine is started (v2.1: the
+    // device's own Tailscale app may still be used, as in v2.0).
+    final ls = await link.check(config, _wg, background: !_foreground);
     if (!ls.connected) {
       return HouseSnapshot(
         fetchedAt: now,
@@ -706,6 +708,46 @@ class CybervulcanController extends ChangeNotifier {
     if (setPsk) await secrets.writeWireGuardPresharedKey(presharedKey);
     await _loadWireGuard();
     await link.close();
+    notifyListeners();
+  }
+
+  // ---- v2.1 built-in Tailscale (tailscale agent). The logic lives in
+  // RouterLink / TailscaleEngine; these are the hooks for the UI.
+
+  /// State of the Tailscale engine built into the app.
+  TailscaleStatus get tailscaleStatus => link.tailscaleStatus;
+  bool get tailscaleAvailable => link.tailscale.isAvailable;
+  String? get tailscaleUnavailableReason => link.tailscale.unavailableReason;
+
+  /// Starts the built-in Tailscale engine so this device can sign in (works
+  /// at home too). Returns the sign-in URL to open in a browser, or null when
+  /// no sign-in is needed (already signed in) or it failed ([lastActionError]).
+  /// [cfg]: settings being edited (default: the saved ones).
+  Future<String?> logInTailscale([AppConfig? cfg]) async {
+    try {
+      final st = await link.startTailscale(cfg ?? config);
+      lastActionError = st.state == TailscaleState.error
+          ? 'Tailscale: ${st.lastError ?? 'the engine stopped'}'
+          : st.state == TailscaleState.starting
+              ? 'Tailscale is still starting - no Internet connection? Try again in a moment.'
+              : null;
+      notifyListeners();
+      return st.state == TailscaleState.needsLogin ? st.authUrl : null;
+    } on TailscaleException catch (e) {
+      lastActionError = 'Tailscale could not start: ${e.message}';
+      notifyListeners();
+      return null;
+    }
+  }
+
+  /// Signs this device out of the built-in Tailscale and forgets its login.
+  Future<void> logOutTailscale() async {
+    try {
+      await link.logoutTailscale();
+      lastActionInfo = 'Signed out of Tailscale. You can remove the device in the Tailscale admin console.';
+    } on TailscaleException catch (e) {
+      lastActionError = 'Tailscale sign-out failed: ${e.message}';
+    }
     notifyListeners();
   }
 
