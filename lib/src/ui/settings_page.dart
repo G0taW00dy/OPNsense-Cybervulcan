@@ -10,6 +10,7 @@ import '../core/client_factory.dart';
 import '../core/config.dart';
 import '../core/controller.dart';
 import '../core/network_map.dart';
+import '../core/providers.dart';
 import '../core/schedule.dart';
 import '../core/settings_transfer.dart';
 import '../core/storage.dart';
@@ -156,7 +157,7 @@ class _SettingsPageState extends State<SettingsPage> {
     'mainGateway', 'backupGateway', 'mainLabel', 'backupLabel', 'pcModeAlias', 'bypassAlias',
     'bypassNetwork', 'bypassMinutes', 'pcIpOverride', 'killSwitchTag', 'killSwitchRuleUuid',
     'pollSeconds', 'homeCountryCode', 'vpnCountryCode', 'tailscaleAddress', 'mainWgInstance',
-    'backupWgInstance', 'serverCities', 'schedStart', 'schedMinutes',
+    'backupWgInstance', 'serverCities', 'schedStart', 'schedMinutes', 'mainKeyExpiry', 'backupKeyExpiry',
   ];
 
   @override
@@ -205,6 +206,8 @@ class _SettingsPageState extends State<SettingsPage> {
         serverCities: _v('serverCities'),
         schedStart: _v('schedStart'),
         schedMinutes: int.tryParse(_v('schedMinutes')) ?? 180,
+        mainKeyExpiry: _v('mainKeyExpiry'),
+        backupKeyExpiry: _v('backupKeyExpiry'),
       );
 
   /// Refills every text field from [_cfg] (start, after an import).
@@ -238,6 +241,8 @@ class _SettingsPageState extends State<SettingsPage> {
       'serverCities': cfg.serverCities,
       'schedStart': cfg.schedStart,
       'schedMinutes': '${cfg.schedMinutes}',
+      'mainKeyExpiry': cfg.mainKeyExpiry,
+      'backupKeyExpiry': cfg.backupKeyExpiry,
     };
     for (final e in m.entries) {
       _t[e.key]!.text = e.value;
@@ -486,6 +491,12 @@ class _SettingsPageState extends State<SettingsPage> {
         onChanged: onChanged,
       );
 
+  String? _dateOrEmpty(String? v) {
+    final s = v?.trim() ?? '';
+    if (s.isEmpty) return null;
+    return parseIsoDate(s) == null ? 'Use yyyy-mm-dd' : null;
+  }
+
   String? _required(String? v) => (v == null || v.trim().isEmpty) ? 'Required' : null;
 
   String? _alias(String? v) =>
@@ -629,6 +640,30 @@ class _SettingsPageState extends State<SettingsPage> {
         children: [
           _field('vpnName', 'VPN provider name',
               help: 'Only used in texts, e.g. "back on Proton".', validator: _required),
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: DropdownButtonFormField<String>(
+              initialValue: _cfg.providerId,
+              decoration: const InputDecoration(
+                labelText: 'Provider profile',
+                suffixIcon: HelpButton(
+                    title: 'Provider profile',
+                    text: 'Tells the server switcher where servers come from.\n\n'
+                        'Proton VPN: add servers by scanning the QR code (phone) or pasting the [Peer] part of a '
+                        'config from account.protonvpn.com - Proton closed its public server list in 2025.\n\n'
+                        'Mullvad: the app downloads Mullvad\'s public server list.\n\n'
+                        'Other: any WireGuard provider - add servers from its config files. The router keeps its '
+                        'own key, so the provider must accept one key on all its servers (most do); the app checks '
+                        'for a real handshake and puts the old server back if not.\n\n'
+                        'Everything else in the app (tunnels, failover, kill switch, bypass, tests) works with any '
+                        'WireGuard provider.'),
+              ),
+              items: [
+                for (final p in ProviderProfile.all) DropdownMenuItem(value: p.id, child: Text(p.name)),
+              ],
+              onChanged: (v) => _set(_cfg.copyWith(vpnProvider: v)),
+            ),
+          ),
           Row(children: [
             Expanded(
                 child: _field('mainGateway', 'Main gateway',
@@ -643,9 +678,25 @@ class _SettingsPageState extends State<SettingsPage> {
             const SizedBox(width: 12),
             Expanded(child: _field('backupLabel', 'Shown as', help: 'e.g. the backup server\'s city.', validator: _required)),
           ]),
-          _switch('Proton server switcher', _cfg.serverSwitcherEnabled, (v) => _set(_cfg.copyWith(serverSwitcherEnabled: v)),
+          SubSection(title: 'Tunnel key expiry', children: [
+            Row(children: [
+              Expanded(
+                  child: _field('mainKeyExpiry', 'Main key expires',
+                      hint: 'yyyy-mm-dd',
+                      validator: _dateOrEmpty,
+                      help: 'Some providers give each router config an expiry date (Proton: shown next to the config '
+                          'name under Downloads > WireGuard configuration). When it passes, that tunnel stops - and '
+                          'if both stop, the kill switch blocks the VPN network. The app warns 30, 7 and 1 day(s) '
+                          'before. Empty = no warning.')),
+              const SizedBox(width: 12),
+              Expanded(
+                  child: _field('backupKeyExpiry', 'Backup key expires',
+                      hint: 'yyyy-mm-dd', validator: _dateOrEmpty, help: 'Same for the backup tunnel\'s config.')),
+            ]),
+          ]),
+          _switch('Server switcher', _cfg.serverSwitcherEnabled, (v) => _set(_cfg.copyWith(serverSwitcherEnabled: v)),
               subtitle: 'Change the exit city from the app, or let it find the fastest server.',
-              help: 'Adds a "VPN servers" card to Status. It changes which Proton server each tunnel '
+              help: 'Adds a "VPN servers" card to Status. It changes which provider server each tunnel '
                   'connects to (address + the server\'s public key). The router\'s private keys never '
                   'leave the router.\n\nNeeds the router privilege "VPN: WireGuard" on YOUR app user '
                   'only (not on keys you give to others). Note: that privilege can also read the WireGuard keys, so keep the '
@@ -665,7 +716,7 @@ class _SettingsPageState extends State<SettingsPage> {
                       validator: _required)),
             ]),
             _field('serverCities', 'Cities to choose from',
-                help: 'Comma-separated Proton cities "find best" may pick, e.g. "Chicago, New York". Empty = any. '
+                help: 'Comma-separated cities "find best" may pick, e.g. "Chicago, New York". Empty = any. '
                     'Keeps streaming regions predictable.',
                 hint: 'Chicago, New York'),
             _switch('Find the best server every night', _cfg.autoBestNightly,
@@ -750,8 +801,8 @@ class _SettingsPageState extends State<SettingsPage> {
                 validator: (v) => (v == null || v.trim().isEmpty || ipv4ToInt(v) != null) ? null : 'IPv4 address'),
           ]),
           if (isPhone)
-            const InfoLine('CLEAR on the phone only helps while Proton VPN on the phone is off - otherwise the phone '
-                'still tunnels everything itself.'),
+            InfoLine('CLEAR on the phone only helps while the ${_cfg.vpnName} app on the phone is off - otherwise the '
+                'phone still tunnels everything itself.'),
         ],
       ),
 
@@ -859,7 +910,7 @@ class _SettingsPageState extends State<SettingsPage> {
             const HelpButton(
                 title: 'Router backup reminder',
                 text: 'Reminds you to save an encrypted router config backup (System > Configuration > Backups) '
-                    'to Proton Drive. Tap "I saved a backup" on the Status page to reset the timer. The app '
+                    'somewhere safe off the router. Tap "I saved a backup" on the Status page to reset the timer. The app '
                     'never downloads the config itself - that needs far too much access.',
                 small: true),
             DropdownButton<int>(
@@ -928,7 +979,7 @@ class _SettingsPageState extends State<SettingsPage> {
           _switch('Allow outside test services', _cfg.externalTests, (v) => _set(_cfg.copyWith(externalTests: v)),
               help: 'Leak tests need a server on the internet to say where your traffic and DNS really come from '
                   '(ipify, ipwho.is, bash.ws, Akamai, Cloudflare - all HTTPS). On the VPN they only see the '
-                  'Proton exit. Off = the Tests page runs router-side checks only.'),
+                  'VPN exit. Off = the Tests page runs router-side checks only.'),
           Row(children: [
             Expanded(
                 child: _field('homeCountryCode', 'Home country',

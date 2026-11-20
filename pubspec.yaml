@@ -34,6 +34,9 @@ dependencies:
   file_selector: ^1.0.3
   # v2.0 app lock: fingerprint / face / device PIN / Windows Hello.
   local_auth: ^3.0.2
+  # v2.1: scan provider WireGuard QR codes on the phone. ZXing decodes on the
+  # device (no Google ML Kit, nothing sent anywhere).
+  flutter_zxing: ^3.1.1
 
 dev_dependencies:
   flutter_test:

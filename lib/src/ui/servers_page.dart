@@ -1,11 +1,14 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
 import '../api/opnsense_client.dart';
 import '../core/controller.dart';
+import '../core/providers.dart';
 import '../core/server_switcher.dart';
+import 'qr_scan_page.dart';
 import 'remote_access.dart';
 import 'theme.dart';
 
@@ -164,33 +167,53 @@ class _ServersPageState extends State<ServersPage> {
     return list;
   }
 
+  ProviderProfile get _profile => ProviderProfile.byId(c.config.providerId);
+
   Future<void> _download() async {
+    final p = _profile;
+    if (!p.hasServerList) return;
     setState(() {
       _loading = true;
       _message = null;
     });
     try {
-      final list = await fetchProtonServers(_http, country: c.config.vpnCountryCode);
-      // Keep manually added servers that Proton's list doesn't have.
+      final list = await p.fetchServers(_http, country: c.config.vpnCountryCode);
+      // Keep manually added servers that the provider's list doesn't have.
       final manual = _servers.where((m) => !list.any((s) => s.entryIp == m.entryIp));
       _servers = [...list, ...manual];
       await c.saveServers(_servers);
-      _message = 'Downloaded ${list.length} ${c.config.vpnCountryCode} servers from Proton.';
-    } on Object catch (e) {
-      _message = '$e';
+      _message = 'Downloaded ${list.length} ${c.config.vpnCountryCode} servers from ${p.name}.';
+    } on ProviderException catch (e) {
+      _message = e.message;
+    } on Object {
+      _message = 'Could not download the ${p.name} server list - check the internet connection, or add servers '
+          'from config files.';
     }
     if (mounted) setState(() => _loading = false);
   }
 
+  Future<void> _scanQr() async {
+    final text = await QrScanPage.scan(context,
+        title: 'Scan a WireGuard QR code',
+        hint: 'Point the camera at the QR code on your provider\'s config page. Only the server address and its '
+            'public key are kept - the private key in the code is ignored.');
+    if (text == null || !mounted) return;
+    await _importConfigText(text);
+  }
+
   Future<void> _addFromConf() async {
     final text = await pasteOrOpenText(context,
-        title: 'Add server from a Proton .conf',
-        hint: 'Paste a Proton WireGuard config (or open the file). Only the server address and its PUBLIC key '
-            'are used - the private key in the file is ignored and never stored.');
+        title: 'Add a server from a WireGuard config',
+        hint: 'Paste the [Peer] part (or the whole config, or open the file). Only the server address and its '
+            'PUBLIC key are used - a private key in the text is ignored and never stored.\n\n${_profile.configHelp}');
     if (text == null || !mounted) return;
+    await _importConfigText(text);
+  }
+
+  Future<void> _importConfigText(String text) async {
     final s = serverFromWireGuardConf(text);
     if (s == null) {
-      setState(() => _message = 'No [Peer] with a PublicKey and Endpoint found in that text.');
+      setState(() => _message = 'No [Peer] with a PublicKey and an IPv4 Endpoint found in that text.');
       return;
     }
     final city = await _askCity(s);
@@ -198,7 +221,28 @@ class _ServersPageState extends State<ServersPage> {
         name: s.name, entryIp: s.entryIp, publicKey: s.publicKey, port: s.port, city: city, country: c.config.vpnCountryCode);
     _servers = [..._servers.where((x) => x.entryIp != server.entryIp), server];
     await c.saveServers(_servers);
-    if (mounted) setState(() => _message = 'Added ${server.name}. (The private key in the file was ignored.)');
+    if (mounted) setState(() => _message = 'Added ${server.name}. (Any private key in it was ignored.)');
+  }
+
+  Future<void> _setCity(ProtonServer s) async {
+    final city = await _askCity(s);
+    if (city == null) return;
+    _servers = [
+      for (final x in _servers)
+        x.entryIp == s.entryIp
+            ? ProtonServer(
+                name: x.name, entryIp: x.entryIp, publicKey: x.publicKey, port: x.port, city: city, country: x.country,
+                load: x.load, score: x.score)
+            : x,
+    ];
+    await c.saveServers(_servers);
+    if (mounted) setState(() => _message = '${s.name} is now listed in $city.');
+  }
+
+  Future<void> _remove(ProtonServer s) async {
+    _servers = _servers.where((x) => x.entryIp != s.entryIp).toList();
+    await c.saveServers(_servers);
+    if (mounted) setState(() => _message = 'Removed ${s.name} from the list (the router is not changed).');
   }
 
   Future<String?> _askCity(ProtonServer s) async {
@@ -373,14 +417,20 @@ class _ServersPageState extends State<ServersPage> {
         ]),
         const SizedBox(height: 8),
         Wrap(spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
-          OutlinedButton.icon(
-              onPressed: _loading || _running ? null : _download,
-              icon: const Icon(Icons.cloud_download_outlined),
-              label: const Text('Download Proton list')),
+          if (_profile.hasServerList)
+            OutlinedButton.icon(
+                onPressed: _loading || _running ? null : _download,
+                icon: const Icon(Icons.cloud_download_outlined),
+                label: Text('Download ${_profile.name} list')),
+          if (Platform.isAndroid)
+            OutlinedButton.icon(
+                onPressed: _loading || _running ? null : _scanQr,
+                icon: const Icon(Icons.qr_code_scanner),
+                label: const Text('Scan QR')),
           OutlinedButton.icon(
               onPressed: _loading || _running ? null : _addFromConf,
               icon: const Icon(Icons.note_add_outlined),
-              label: const Text('Add from .conf')),
+              label: const Text('Paste config')),
           FilterChip(
             label: Text('Only ${c.config.serverCities.isEmpty ? 'my cities' : c.config.serverCities}'),
             selected: _onlyMyCities,
@@ -398,8 +448,7 @@ class _ServersPageState extends State<ServersPage> {
             padding: const EdgeInsets.all(16),
             child: Text(
               _servers.isEmpty
-                  ? 'No servers yet. Download Proton\'s list, or add servers from Proton WireGuard .conf files '
-                      '(account.protonvpn.com > Downloads > WireGuard).'
+                  ? 'No servers yet. ${_profile.noListReason ?? 'Download the list, or add servers from config files.'}'
                   : 'No servers in your cities - turn the filter off or change the cities in Settings.',
               style: t.bodySmall,
             ),
@@ -413,13 +462,21 @@ class _ServersPageState extends State<ServersPage> {
                   leading: _LoadDot(load: s.load),
                   title: Text(s.name),
                   subtitle: Text([s.city ?? '?', s.entryIp, if (s.load != null) '${s.load}% load'].join(' - ')),
-                  trailing: PopupMenuButton<bool>(
+                  trailing: PopupMenuButton<String>(
                     enabled: !_running && !_loading,
                     tooltip: 'Use this server',
-                    onSelected: (main) => _use(s, main: main),
+                    onSelected: (v) => switch (v) {
+                      'main' => _use(s, main: true),
+                      'backup' => _use(s, main: false),
+                      'city' => _setCity(s),
+                      _ => _remove(s),
+                    },
                     itemBuilder: (_) => [
-                      PopupMenuItem(value: true, child: Text('Use for ${c.config.mainLabel} (main)')),
-                      PopupMenuItem(value: false, child: Text('Use for ${c.config.backupLabel} (backup)')),
+                      PopupMenuItem(value: 'main', child: Text('Use for ${c.config.mainLabel} (main)')),
+                      PopupMenuItem(value: 'backup', child: Text('Use for ${c.config.backupLabel} (backup)')),
+                      const PopupMenuDivider(),
+                      const PopupMenuItem(value: 'city', child: Text('Set city')),
+                      const PopupMenuItem(value: 'remove', child: Text('Remove from list')),
                     ],
                   ),
                 ),
@@ -427,9 +484,9 @@ class _ServersPageState extends State<ServersPage> {
           ),
         const SizedBox(height: 12),
         Text(
-          'Proton has no official public server API; if downloading stops working, add servers from .conf '
-          'files. The tunnels keep the router\'s own private keys - only the server address and the server\'s '
-          'public key change.',
+          '${_profile.hasServerList ? '' : '${_profile.noListReason} '}'
+          'The tunnels keep the router\'s own private keys - only the server address and the server\'s public key '
+          'change, and the app waits for a real handshake before calling a switch done.',
           style: t.bodySmall,
         ),
       ]),
