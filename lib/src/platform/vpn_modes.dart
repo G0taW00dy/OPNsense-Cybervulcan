@@ -287,7 +287,9 @@ class HomeLink {
       error = null;
       return;
     }
-    final req = SystemVpnRequest.fromConfig(cfg);
+    // The system VPN rides on whichever engine connected the app: the
+    // built-in Tailscale engine or the WireGuard tunnel.
+    final req = SystemVpnRequest.fromConfig(cfg, transport: link?.builtInTailscale == true ? 'tailscale' : 'wireguard');
     if (req.signature != _runningSig) {
       state = HomeLinkState.connecting;
       try {

@@ -37,6 +37,8 @@ dependencies:
   # v2.1: scan provider WireGuard QR codes on the phone. ZXing decodes on the
   # device (no Google ML Kit, nothing sent anywhere).
   flutter_zxing: ^3.1.1
+  # v2.1 built-in Tailscale: app-private folder for its login state.
+  path_provider: ^2.1.5
 
 dev_dependencies:
   flutter_test:
