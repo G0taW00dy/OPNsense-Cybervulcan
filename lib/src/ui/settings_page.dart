@@ -2,14 +2,17 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../api/opnsense_client.dart';
+import '../api/shaper_models.dart';
 import '../api/tls.dart';
 import '../core/bypass.dart';
 import '../core/client_factory.dart';
 import '../core/config.dart';
 import '../core/controller.dart';
 import '../core/network_map.dart';
+import '../core/providers.dart';
 import '../core/schedule.dart';
 import '../core/settings_transfer.dart';
 import '../core/storage.dart';
@@ -20,6 +23,7 @@ import '../platform/autostart.dart';
 import 'format.dart';
 import 'help_page.dart';
 import 'remote_access.dart';
+import 'remote_engine_settings.dart';
 import 'remote_modes_editor.dart';
 import 'theme.dart';
 import 'update_widgets.dart';
@@ -82,23 +86,67 @@ Future<List<String>> testRouterConnection(AppConfig cfg, ApiCredentials? creds) 
   }
   final client = buildRouterClient(cfg, creds);
   if (client == null) return [...lines, 'FAIL  Enter the API key and secret first'];
-  Future<void> run(String name, Future<Object?> Function() f, {bool optional = false}) async {
+  // Setup checker (v2.1): not only "can I call it" but "is it set up the
+  // way the app expects", with the fix in the line.
+  final powers = <String>[];
+  Future<T?> check<T>(String name, Future<T> Function() f,
+      {bool optional = false, String? power, String? Function(T)? verify}) async {
     try {
-      await f();
-      lines.add('OK    $name');
+      final r = await f();
+      final problem = verify?.call(r);
+      lines.add(problem == null ? 'OK    $name' : 'FIX   $name: $problem');
+      if (power != null) powers.add(power);
+      return r;
     } on OpnsenseException catch (e) {
       final tag = e.kind == ApiErrorKind.forbidden ? (optional ? 'SKIP ' : 'NO PRIVILEGE') : 'FAIL';
       lines.add('$tag  $name: ${e.kind == ApiErrorKind.forbidden && optional ? 'not granted (optional)' : e.message}');
+      return null;
     }
   }
 
-  await run('Gateway status', client.gatewayStatus);
-  await run('Bypass alias ${cfg.bypassAlias}', () => client.aliasList(cfg.bypassAlias));
-  await run('CLEAR alias ${cfg.pcModeAlias}', () => client.aliasList(cfg.pcModeAlias));
-  await run('DHCP leases (devices, new-device alerts)', client.dnsmasqLeases, optional: true);
-  await run('Kill switch rule search', () => client.searchRules(cfg.killSwitchTag), optional: true);
-  await run('WireGuard peers (server switcher)', client.wgPeers, optional: !cfg.serverSwitcherEnabled);
-  await run('Unbound DNS-over-TLS (Tests page)', client.dotServers, optional: true);
+  await check('Gateway status', client.gatewayStatus, verify: (gws) {
+    final names = gws.map((g) => g.name).toSet();
+    final missing = [cfg.mainGateway, cfg.backupGateway].where((n) => !names.contains(n)).toList();
+    return missing.isEmpty
+        ? null
+        : 'gateway ${missing.join(' and ')} not found - check the names in Settings > VPN tunnels '
+            '(router: System > Gateways)';
+  });
+  await check('Bypass alias ${cfg.bypassAlias}', () => client.aliasList(cfg.bypassAlias), power: 'turn the whole-house bypass on/off');
+  await check('CLEAR alias ${cfg.pcModeAlias}', () => client.aliasList(cfg.pcModeAlias), power: 'put single devices on CLEAR');
+  await check('DHCP leases (devices, new-device alerts)', client.dnsmasqLeases, optional: true, power: 'see device names');
+  await check('Kill switch rule (tag ${cfg.killSwitchTag})', () => client.searchRules(cfg.killSwitchTag),
+      optional: true,
+      verify: (rules) => rules.isEmpty
+          ? 'no firewall rule with that tag - without it the VPN network is not protected when both tunnels drop'
+          : null);
+  await check('WireGuard peers (server switcher)', client.wgPeers,
+      optional: !cfg.serverSwitcherEnabled,
+      power: 'change VPN servers (and read the router\'s WireGuard keys)', verify: (peers) {
+    final missing = [cfg.mainWgInstance, cfg.backupWgInstance].where((i) => !peers.any((p) => p.belongsTo(i))).toList();
+    return !cfg.serverSwitcherEnabled || missing.isEmpty
+        ? null
+        : 'no peer linked to instance ${missing.join(' / ')} - check the instance names, or tick the instance on the '
+            'peer (VPN > WireGuard > Peers)';
+  });
+  if (cfg.serverSwitcherEnabled) {
+    await check('Route refresh after a server switch', client.routesProbe,
+        optional: true, power: 'change static routes');
+    await check('Gateway monitor restart after a server switch', client.servicesProbe,
+        optional: true, power: 'restart router services');
+  }
+  await check('Shaper (lag control)', client.shaperPipes,
+      optional: !cfg.shaperAutoTune,
+      power: 'change the shaper limits',
+      verify: (pipes) => findVpnPipes(pipes) == null
+          ? 'no enabled pipes named with "VPN" and "download"/"upload" (Firewall > Shaper > Pipes)'
+          : null);
+  await check('Unbound DNS-over-TLS (Tests page)', client.dotServers, optional: true);
+  lines.add('');
+  lines.add('INFO  This key can: ${powers.isEmpty ? 'read the status only' : powers.join('; ')}.');
+  if (powers.any((p) => p.contains('VPN servers') || p.contains('shaper') || p.contains('routes') || p.contains('services'))) {
+    lines.add('INFO  Keys for other people should only have Gateways + Diagnostics: Tables (status, bypass, CLEAR).');
+  }
   client.close();
   return lines;
 }
@@ -115,8 +163,6 @@ class SettingsPage extends StatefulWidget {
   @override
   State<SettingsPage> createState() => _SettingsPageState();
 }
-
-enum _Remote { off, wireguard, tailscale }
 
 class _SettingsPageState extends State<SettingsPage> {
   final _form = GlobalKey<FormState>();
@@ -157,7 +203,8 @@ class _SettingsPageState extends State<SettingsPage> {
     'mainGateway', 'backupGateway', 'mainLabel', 'backupLabel', 'pcModeAlias', 'bypassAlias',
     'bypassNetwork', 'bypassMinutes', 'pcIpOverride', 'killSwitchTag', 'killSwitchRuleUuid',
     'pollSeconds', 'homeCountryCode', 'vpnCountryCode', 'tailscaleAddress', 'mainWgInstance',
-    'backupWgInstance', 'serverCities', 'schedStart', 'schedMinutes',
+    'backupWgInstance', 'serverCities', 'schedStart', 'schedMinutes', 'mainKeyExpiry', 'backupKeyExpiry',
+    'shaperMinDown', 'shaperMaxDown', 'shaperMinUp', 'shaperMaxUp',
   ];
 
   @override
@@ -206,6 +253,12 @@ class _SettingsPageState extends State<SettingsPage> {
         serverCities: _v('serverCities'),
         schedStart: _v('schedStart'),
         schedMinutes: int.tryParse(_v('schedMinutes')) ?? 180,
+        mainKeyExpiry: _v('mainKeyExpiry'),
+        backupKeyExpiry: _v('backupKeyExpiry'),
+        shaperMinDown: int.tryParse(_v('shaperMinDown')) ?? _cfg.shaperMinDown,
+        shaperMaxDown: int.tryParse(_v('shaperMaxDown')) ?? _cfg.shaperMaxDown,
+        shaperMinUp: int.tryParse(_v('shaperMinUp')) ?? _cfg.shaperMinUp,
+        shaperMaxUp: int.tryParse(_v('shaperMaxUp')) ?? _cfg.shaperMaxUp,
       );
 
   /// Refills every text field from [_cfg] (start, after an import).
@@ -239,6 +292,12 @@ class _SettingsPageState extends State<SettingsPage> {
       'serverCities': cfg.serverCities,
       'schedStart': cfg.schedStart,
       'schedMinutes': '${cfg.schedMinutes}',
+      'mainKeyExpiry': cfg.mainKeyExpiry,
+      'backupKeyExpiry': cfg.backupKeyExpiry,
+      'shaperMinDown': '${cfg.shaperMinDown}',
+      'shaperMaxDown': '${cfg.shaperMaxDown}',
+      'shaperMinUp': '${cfg.shaperMinUp}',
+      'shaperMaxUp': '${cfg.shaperMaxUp}',
     };
     for (final e in m.entries) {
       _t[e.key]!.text = e.value;
@@ -487,16 +546,16 @@ class _SettingsPageState extends State<SettingsPage> {
         onChanged: onChanged,
       );
 
+  String? _dateOrEmpty(String? v) {
+    final s = v?.trim() ?? '';
+    if (s.isEmpty) return null;
+    return parseIsoDate(s) == null ? 'Use yyyy-mm-dd' : null;
+  }
+
   String? _required(String? v) => (v == null || v.trim().isEmpty) ? 'Required' : null;
 
   String? _alias(String? v) =>
       RegExp(r'^[A-Za-z0-9_]{1,32}$').hasMatch(v?.trim() ?? '') ? null : 'Letters, digits, _ only';
-
-  _Remote get _remote => _cfg.tailscaleEnabled
-      ? _Remote.tailscale
-      : _cfg.remoteEnabled
-          ? _Remote.wireguard
-          : _Remote.off;
 
   @override
   Widget build(BuildContext context) {
@@ -630,6 +689,30 @@ class _SettingsPageState extends State<SettingsPage> {
         children: [
           _field('vpnName', 'VPN provider name',
               help: 'Only used in texts, e.g. "back on Proton".', validator: _required),
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: DropdownButtonFormField<String>(
+              initialValue: _cfg.providerId,
+              decoration: const InputDecoration(
+                labelText: 'Provider profile',
+                suffixIcon: HelpButton(
+                    title: 'Provider profile',
+                    text: 'Tells the server switcher where servers come from.\n\n'
+                        'Proton VPN: add servers by scanning the QR code (phone) or pasting the [Peer] part of a '
+                        'config from account.protonvpn.com - Proton closed its public server list in 2025.\n\n'
+                        'Mullvad: the app downloads Mullvad\'s public server list.\n\n'
+                        'Other: any WireGuard provider - add servers from its config files. The router keeps its '
+                        'own key, so the provider must accept one key on all its servers (most do); the app checks '
+                        'for a real handshake and puts the old server back if not.\n\n'
+                        'Everything else in the app (tunnels, failover, kill switch, bypass, tests) works with any '
+                        'WireGuard provider.'),
+              ),
+              items: [
+                for (final p in ProviderProfile.all) DropdownMenuItem(value: p.id, child: Text(p.name)),
+              ],
+              onChanged: (v) => _set(_cfg.copyWith(vpnProvider: v)),
+            ),
+          ),
           Row(children: [
             Expanded(
                 child: _field('mainGateway', 'Main gateway',
@@ -644,9 +727,25 @@ class _SettingsPageState extends State<SettingsPage> {
             const SizedBox(width: 12),
             Expanded(child: _field('backupLabel', 'Shown as', help: 'e.g. the backup server\'s city.', validator: _required)),
           ]),
-          _switch('Proton server switcher', _cfg.serverSwitcherEnabled, (v) => _set(_cfg.copyWith(serverSwitcherEnabled: v)),
+          SubSection(title: 'Tunnel key expiry', children: [
+            Row(children: [
+              Expanded(
+                  child: _field('mainKeyExpiry', 'Main key expires',
+                      hint: 'yyyy-mm-dd',
+                      validator: _dateOrEmpty,
+                      help: 'Some providers give each router config an expiry date (Proton: shown next to the config '
+                          'name under Downloads > WireGuard configuration). When it passes, that tunnel stops - and '
+                          'if both stop, the kill switch blocks the VPN network. The app warns 30, 7 and 1 day(s) '
+                          'before. Empty = no warning.')),
+              const SizedBox(width: 12),
+              Expanded(
+                  child: _field('backupKeyExpiry', 'Backup key expires',
+                      hint: 'yyyy-mm-dd', validator: _dateOrEmpty, help: 'Same for the backup tunnel\'s config.')),
+            ]),
+          ]),
+          _switch('Server switcher', _cfg.serverSwitcherEnabled, (v) => _set(_cfg.copyWith(serverSwitcherEnabled: v)),
               subtitle: 'Change the exit city from the app, or let it find the fastest server.',
-              help: 'Adds a "VPN servers" card to Status. It changes which Proton server each tunnel '
+              help: 'Adds a "VPN servers" card to Status. It changes which provider server each tunnel '
                   'connects to (address + the server\'s public key). The router\'s private keys never '
                   'leave the router.\n\nNeeds the router privilege "VPN: WireGuard" on YOUR app user '
                   'only (not on keys you give to others). Note: that privilege can also read the WireGuard keys, so keep the '
@@ -666,7 +765,7 @@ class _SettingsPageState extends State<SettingsPage> {
                       validator: _required)),
             ]),
             _field('serverCities', 'Cities to choose from',
-                help: 'Comma-separated Proton cities "find best" may pick, e.g. "Chicago, New York". Empty = any. '
+                help: 'Comma-separated cities "find best" may pick, e.g. "Chicago, New York". Empty = any. '
                     'Keeps streaming regions predictable.',
                 hint: 'Chicago, New York'),
             _switch('Find the best server every night', _cfg.autoBestNightly,
@@ -675,6 +774,44 @@ class _SettingsPageState extends State<SettingsPage> {
                 help: 'Tests a few servers on the backup tunnel, then moves the fastest to main if it is '
                     'clearly better (at least 10 %). Takes about 5 minutes. You get a notification with the result.'),
           ],
+          SubSection(title: 'Shaper (lag control)', children: [
+            InfoLine(c.tuner.currentDown == null
+                ? 'The router\'s FQ-CoDel shaper keeps lag low while the line is busy. Limits shown here once '
+                    'auto-tune or a re-tune has read them.'
+                : 'VPN limits now: ${c.tuner.currentDown} Mbit/s down, ${c.tuner.currentUp} Mbit/s up.'
+                    '${c.tuner.lastReason == null ? '' : ' Last check: ${c.tuner.lastReason}'}'),
+            _switch('Auto-tune the shaper', _cfg.shaperAutoTune, (v) => _set(_cfg.copyWith(shaperAutoTune: v)),
+                subtitle: 'Lower the VPN limits when lag rises under load, raise them when it\'s clear.',
+                help: 'Mobile lines change speed all the time, so a fixed shaper limit is either too high (lag) or '
+                    'too low (wasted speed). Auto-tune watches the tunnel\'s ping (the router\'s gateway monitor) and '
+                    'how busy each direction is, and moves the VPN limits within the range below - about every '
+                    '30 seconds at most. After a server switch it starts again, because each server has its own '
+                    'speed and ping.\n\nRun it on ONE device only (best: the always-on PC). Needs the router '
+                    'privilege "Firewall: Shaper" on this app user, and shaper pipes named with "VPN" and '
+                    '"download"/"upload". The original limits are saved first: "Restore original limits" puts '
+                    'them back, and the app does so by itself if tuning keeps failing.'),
+            if (_cfg.shaperAutoTune) ...[
+              Row(children: [
+                Expanded(child: _field('shaperMinDown', 'Download min', number: true, note: 'Mbit/s')),
+                const SizedBox(width: 12),
+                Expanded(child: _field('shaperMaxDown', 'Download max', number: true, note: 'Mbit/s')),
+              ]),
+              Row(children: [
+                Expanded(child: _field('shaperMinUp', 'Upload min', number: true, note: 'Mbit/s')),
+                const SizedBox(width: 12),
+                Expanded(child: _field('shaperMaxUp', 'Upload max', number: true, note: 'Mbit/s')),
+              ]),
+            ],
+            Wrap(spacing: 8, runSpacing: 8, children: [
+              OutlinedButton.icon(
+                  onPressed: c.retuneShaper, icon: const Icon(Icons.tune), label: const Text('Re-tune now')),
+              if (c.shaperOriginal != null)
+                OutlinedButton.icon(
+                    onPressed: () => c.restoreShaperOriginal(),
+                    icon: const Icon(Icons.undo),
+                    label: Text('Restore original limits (${c.shaperOriginal!.values.join(' / ')})')),
+            ]),
+          ]),
         ],
       ),
 
@@ -751,8 +888,8 @@ class _SettingsPageState extends State<SettingsPage> {
                 validator: (v) => (v == null || v.trim().isEmpty || ipv4ToInt(v) != null) ? null : 'IPv4 address'),
           ]),
           if (isPhone)
-            const InfoLine('CLEAR on the phone only helps while Proton VPN on the phone is off - otherwise the phone '
-                'still tunnels everything itself.'),
+            InfoLine('CLEAR on the phone only helps while the ${_cfg.vpnName} app on the phone is off - otherwise the '
+                'phone still tunnels everything itself.'),
         ],
       ),
 
@@ -760,33 +897,18 @@ class _SettingsPageState extends State<SettingsPage> {
       SettingsSection(
         icon: Icons.travel_explore,
         title: 'Remote access',
-        summary: switch (_remote) {
-          _Remote.off => 'Off - home only',
-          _Remote.wireguard => 'WireGuard (needs a public IP at home)',
-          _Remote.tailscale => 'Tailscale${_tailscaleHere == true ? ' - active on this $deviceNoun' : ''}',
-        },
+        // v2.1: on/off + engine + built-in Tailscale live in RemoteEngineSettings.
+        summary: remoteAccessSummary(_cfg, tailscaleHere: _tailscaleHere, deviceNoun: deviceNoun),
         children: [
-          Text('Use the app away from home.', style: t.bodySmall),
-          const SizedBox(height: 8),
-          SegmentedButton<_Remote>(
-            segments: const [
-              ButtonSegment(value: _Remote.off, label: Text('Off')),
-              ButtonSegment(value: _Remote.wireguard, label: Text('WireGuard')),
-              ButtonSegment(value: _Remote.tailscale, label: Text('Tailscale')),
-            ],
-            selected: {_remote},
-            onSelectionChanged: (v) => _set(_cfg.copyWith(
-              remoteEnabled: v.first == _Remote.wireguard,
-              tailscaleEnabled: v.first == _Remote.tailscale,
-            )),
-          ),
-          const SizedBox(height: 12),
-          if (_remote == _Remote.tailscale) ...[
-            InfoLine(_tailscaleHere == null
-                ? 'Checking for Tailscale on this $deviceNoun...'
-                : _tailscaleHere!
-                    ? 'Tailscale is connected on this $deviceNoun.'
-                    : 'Tailscale is not connected on this $deviceNoun right now (fine at home).'),
+          RemoteEngineSettings(controller: c, config: _cfg, onChanged: _set),
+          const SizedBox(height: 4),
+          if (remoteSteps(_cfg).any((s) => s != RemoteStep.wireguard)) ...[
+            if (remoteSteps(_cfg).contains(RemoteStep.tailscaleDevice))
+              InfoLine(_tailscaleHere == null
+                  ? 'Checking for Tailscale on this $deviceNoun...'
+                  : _tailscaleHere!
+                      ? 'Tailscale is connected on this $deviceNoun.'
+                      : 'Tailscale is not connected on this $deviceNoun right now (fine at home).'),
             const SizedBox(height: 8),
             _field('tailscaleAddress', 'Router\'s Tailscale address (optional)',
                 hint: '100.x.y.z or opnsense.tailnet.ts.net',
@@ -800,9 +922,9 @@ class _SettingsPageState extends State<SettingsPage> {
                   if (s.isEmpty) return null;
                   return RegExp(r'^[A-Za-z0-9.:-]+$').hasMatch(s) ? null : 'An IP or host name';
                 }),
-            if (isPhone)
-              const InfoLine('Android allows one VPN app at a time: while Tailscale is on, the Proton app on the '
-                  'phone is off. Use Tailscale\'s "exit node" = home router if you want the house VPN while away.'),
+            if (isPhone && remoteSteps(_cfg).contains(RemoteStep.tailscaleDevice))
+              InfoLine('Android allows one VPN app at a time: while the Tailscale app is on, the ${_cfg.vpnName} app '
+                  'on the phone is off. The built-in Tailscale engine doesn\'t use that slot.'),
             Align(
               alignment: Alignment.centerLeft,
               child: TextButton.icon(
@@ -812,7 +934,7 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
             ),
           ],
-          if (_remote == _Remote.wireguard)
+          if (remoteSteps(_cfg).contains(RemoteStep.wireguard))
             RemoteAccessEditor(
               key: ValueKey('remote-$_remoteGen'),
               controller: c,
@@ -821,7 +943,7 @@ class _SettingsPageState extends State<SettingsPage> {
               onChanged: _set,
             ),
           // v2.1: what remote access carries (app only / home devices / everything).
-          if (_remote == _Remote.wireguard)
+          if (_cfg.remoteEnabled)
             RemoteModesEditor(key: ValueKey('modes-$_remoteGen'), controller: c, config: _cfg, onChanged: _set),
         ],
       ),
@@ -874,7 +996,7 @@ class _SettingsPageState extends State<SettingsPage> {
             const HelpButton(
                 title: 'Router backup reminder',
                 text: 'Reminds you to save an encrypted router config backup (System > Configuration > Backups) '
-                    'to Proton Drive. Tap "I saved a backup" on the Status page to reset the timer. The app '
+                    'somewhere safe off the router. Tap "I saved a backup" on the Status page to reset the timer. The app '
                     'never downloads the config itself - that needs far too much access.',
                 small: true),
             DropdownButton<int>(
@@ -943,7 +1065,7 @@ class _SettingsPageState extends State<SettingsPage> {
           _switch('Allow outside test services', _cfg.externalTests, (v) => _set(_cfg.copyWith(externalTests: v)),
               help: 'Leak tests need a server on the internet to say where your traffic and DNS really come from '
                   '(ipify, ipwho.is, bash.ws, Akamai, Cloudflare - all HTTPS). On the VPN they only see the '
-                  'Proton exit. Off = the Tests page runs router-side checks only.'),
+                  'VPN exit. Off = the Tests page runs router-side checks only.'),
           Row(children: [
             Expanded(
                 child: _field('homeCountryCode', 'Home country',
@@ -1017,12 +1139,38 @@ class _SettingsPageState extends State<SettingsPage> {
       ),
 
       // 9 -------------------------------------------------------------- app
-      if (_autostart != null || widget.updates != null)
-        SettingsSection(
+      SettingsSection(
           icon: Icons.system_update_alt,
           title: 'App & updates',
           summary: _cfg.checkUpdates ? 'Checks for updates automatically' : 'Manual updates',
           children: [
+            SubSection(title: 'Router changes made by the app', children: [
+              for (final e in c.journal.entries.take(10))
+                InfoLine('${formatWhen(e.at)}  ${e.ok ? '' : 'FAILED: '}${e.what}${e.detail == null ? '' : ' - ${e.detail}'}'),
+              if (c.journal.entries.isEmpty) const InfoLine('None yet.'),
+              const InfoLine('The router also keeps every change as a revision under System > Configuration > History, '
+                  'where an admin can compare and revert it.'),
+            ]),
+            SubSection(title: 'Diagnostics', children: [
+              Row(children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () async {
+                      await Clipboard.setData(ClipboardData(text: c.diagnostics()));
+                      _say('Diagnostics copied - paste them into a bug report or a message.');
+                    },
+                    icon: const Icon(Icons.bug_report_outlined),
+                    label: const Text('Copy diagnostics'),
+                  ),
+                ),
+                const HelpButton(
+                    title: 'Copy diagnostics',
+                    text: 'Copies what a bug report needs: app version, settings that matter, tunnel status, the '
+                        'app\'s recent router changes and recent app errors.\n\nNever included: API key or secret, '
+                        'WireGuard keys, the app PIN. Blanked: public IP addresses, domain names and tunnel keys. '
+                        'Kept: house addresses like 10.x.x.x. Have a look before you send it.'),
+              ]),
+            ]),
             if (_autostart != null)
               _switch('Start in the tray when I sign in', _autostart!, (v) async {
                 final ok = await WindowsAutostart.setEnabled(v);
@@ -1247,11 +1395,13 @@ String? summariseReport(String message) {
   final ok = n('OK');
   final fail = n('FAIL') + n('NO PRIVILEGE');
   final warn = n('WARN');
+  final fix = n('FIX');
   final skip = n('SKIP');
-  if (ok + fail + warn + skip < 3) return null;
+  if (ok + fail + warn + skip + fix < 3) return null;
   return [
     '$ok OK',
     if (fail > 0) '$fail failed',
+    if (fix > 0) '$fix to fix',
     if (warn > 0) '$warn warning${warn == 1 ? '' : 's'}',
     if (skip > 0) '$skip skipped (optional)',
   ].join(' - ');

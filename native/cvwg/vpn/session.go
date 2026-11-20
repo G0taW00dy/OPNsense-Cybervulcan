@@ -278,17 +278,19 @@ func (s *Session) handleTCP(r *tcp.ForwarderRequest) {
 }
 
 // handleUDP is called for the first packet of every new UDP flow.
-func (s *Session) handleUDP(r *udp.ForwarderRequest) {
+// handleUDP always reports the packet as handled (true): blocked flows are
+// dropped silently rather than answered with ICMP.
+func (s *Session) handleUDP(r *udp.ForwarderRequest) bool {
 	id := r.ID()
 	dst := addrPort(id.LocalAddress, id.LocalPort)
 	if !s.opts.allowed(dst.Addr()) && !(s.opts.DNS.IsValid() && dst.Port() == 53) {
 		s.c.blocked.Add(1)
-		return // dropped
+		return true // dropped
 	}
 	var wq waiter.Queue
 	ep, tcpErr := r.CreateEndpoint(&wq)
 	if tcpErr != nil {
-		return
+		return true
 	}
 	app := gonet.NewUDPConn(&wq, ep)
 	idle := s.opts.UDPIdleTimeout
@@ -303,6 +305,7 @@ func (s *Session) handleUDP(r *udp.ForwarderRequest) {
 		}
 		s.runFlow(app, far, idle, false, &s.c.udpActive, &s.c.udpTotal)
 	}()
+	return true
 }
 
 func (s *Session) runFlow(app, far net.Conn, idle time.Duration, halfClose bool, active, total interface{ Add(int64) int64 }) {

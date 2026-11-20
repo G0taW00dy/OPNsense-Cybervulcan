@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 
 import 'models.dart';
+import 'shaper_models.dart';
 import 'wireguard_models.dart';
 
 /// Why an API call failed - drives the UI wording and the tray colour.
@@ -190,9 +191,12 @@ class OpnsenseClient {
 
   void _expectDone(Object? json, String endpoint) {
     final map = _asMap(json, endpoint);
-    final status = map['status']?.toString().toLowerCase();
+    // OPNsense answers either {"status": "ok"} or {"result": "ok"} depending
+    // on the controller.
+    final status = (map['status'] ?? map['result'])?.toString().toLowerCase();
     if (status != 'done' && status != 'ok') {
-      final msg = map['status_msg']?.toString() ?? 'status: ${map['status']}';
+      final msg = map['status_msg']?.toString() ??
+          (status == null ? 'The router gave an unexpected answer' : 'The router answered "$status"');
       throw OpnsenseException(ApiErrorKind.server, msg, endpoint: endpoint);
     }
   }
@@ -324,7 +328,13 @@ class OpnsenseClient {
 
   /// Points a peer at another server: endpoint address, port and the
   /// server's public key. Nothing else (in particular no private key) is sent.
-  Future<void> setWgPeerServer(String uuid, {required String address, required int port, required String publicKey}) async {
+  ///
+  /// OPNsense's set_client clears relation fields that are not posted, so the
+  /// peer's instance link (`servers`) is read first and sent back unchanged.
+  /// If the link is already missing, [instance] (an instance name) is used to
+  /// restore it.
+  Future<void> setWgPeerServer(String uuid,
+      {required String address, required int port, required String publicKey, String? instance}) async {
     if (!_uuidRe.hasMatch(uuid)) throw ArgumentError.value(uuid, 'uuid', 'not a UUID');
     if (InternetAddress.tryParse(address.trim()) == null) {
       throw ArgumentError.value(address, 'address', 'not an IP address');
@@ -333,10 +343,23 @@ class OpnsenseClient {
     if (!RegExp(r'^[A-Za-z0-9+/]{43}=$').hasMatch(publicKey.trim())) {
       throw ArgumentError.value('(key)', 'publicKey', 'not a WireGuard public key');
     }
+    var servers = await _wgPeerInstanceUuids(uuid);
+    if (servers.isEmpty && instance != null && instance.trim().isNotEmpty) {
+      final want = instance.trim().toLowerCase();
+      servers = [
+        for (final i in await wgInstances())
+          if (i.name.toLowerCase() == want) i.uuid,
+      ];
+    }
     final ep = '/api/wireguard/client/set_client/$uuid';
     final map = _asMap(
         await _send('POST', ep, body: {
-          'client': {'serveraddress': address.trim(), 'serverport': '$port', 'pubkey': publicKey.trim()},
+          'client': {
+            'serveraddress': address.trim(),
+            'serverport': '$port',
+            'pubkey': publicKey.trim(),
+            if (servers.isNotEmpty) 'servers': servers.join(','),
+          },
         }),
         ep);
     if (map['result'] != 'saved') {
@@ -344,6 +367,71 @@ class OpnsenseClient {
       throw OpnsenseException(ApiErrorKind.server,
           'Router did not save the peer${v is Map && v.isNotEmpty ? ': ${v.values.join('; ')}' : ''}',
           endpoint: ep);
+    }
+  }
+
+  /// UUIDs of the instances a peer is linked to (from get_client's option map).
+  Future<List<String>> _wgPeerInstanceUuids(String uuid) async {
+    final ep = '/api/wireguard/client/get_client/$uuid';
+    final map = _asMap(await _send('GET', ep), ep);
+    final c = map['client'];
+    final s = c is Map ? c['servers'] : null;
+    if (s is! Map) return const [];
+    return [
+      for (final e in s.entries)
+        if (e.value is Map && _isSelected((e.value as Map)['selected']) && _uuidRe.hasMatch('${e.key}')) '${e.key}',
+    ];
+  }
+
+  static bool _isSelected(Object? v) => v == 1 || v == '1' || v == true;
+
+  /// WireGuard instances (local tunnels): uuid and name only - never keys.
+  Future<List<({String uuid, String name})>> wgInstances() async {
+    const ep = '/api/wireguard/server/search_server';
+    final json = await _send('POST', ep, body: const {'current': 1, 'rowCount': -1, 'searchPhrase': ''});
+    return [
+      for (final r in _rows(_asMap(json, ep)))
+        if (r is Map && _uuidRe.hasMatch('${r['uuid']}')) (uuid: '${r['uuid']}', name: '${r['name'] ?? ''}'),
+    ];
+  }
+
+  /// Read-only probe: may this key use the static routes API?
+  Future<void> routesProbe() async {
+    const ep = '/api/routes/routes/searchroute';
+    _asMap(await _send('POST', ep, body: const {'current': 1, 'rowCount': 1, 'searchPhrase': ''}), ep);
+  }
+
+  /// Read-only probe: may this key use the services API?
+  Future<void> servicesProbe() async {
+    const ep = '/api/core/service/search';
+    _asMap(await _send('POST', ep, body: const {'current': 1, 'rowCount': 1, 'searchPhrase': ''}), ep);
+  }
+
+  /// Re-applies the router's routes, which include the gateway monitor's
+  /// host route through each tunnel. Needs "System: Static Routes"; returns
+  /// false (instead of throwing) when the API user lacks it.
+  Future<bool> refreshRoutes() async {
+    const ep = '/api/routes/routes/reconfigure';
+    try {
+      _expectDone(await _send('POST', ep, body: const {}, timeout: const Duration(seconds: 30)), ep);
+      return true;
+    } on OpnsenseException catch (e) {
+      if (e.kind == ApiErrorKind.forbidden || e.kind == ApiErrorKind.notFound) return false;
+      rethrow;
+    }
+  }
+
+  /// Restarts the gateway monitor (dpinger) of [gateway] so its readings
+  /// start fresh. Needs "Status: Services"; returns false when not allowed.
+  Future<bool> restartGatewayMonitor(String gateway) async {
+    if (!RegExp(r'^[A-Za-z0-9_.-]{1,64}$').hasMatch(gateway)) throw ArgumentError.value(gateway, 'gateway');
+    final ep = '/api/core/service/restart/dpinger/$gateway';
+    try {
+      _expectDone(await _send('POST', ep, body: const {}, timeout: const Duration(seconds: 30)), ep);
+      return true;
+    } on OpnsenseException catch (e) {
+      if (e.kind == ApiErrorKind.forbidden || e.kind == ApiErrorKind.notFound) return false;
+      rethrow;
     }
   }
 
@@ -360,6 +448,44 @@ class OpnsenseClient {
       for (final r in _rows(_asMap(await _send('GET', ep), ep)))
         if (r is Map) WgRuntime.fromJson(r.cast<String, dynamic>()),
     ];
+  }
+
+  // ------------------------------------------------------------ Shaper (v2.1)
+  // Privilege "Firewall: Shaper" - optional, shaper card / auto-tune only.
+
+  Future<List<ShaperPipe>> shaperPipes() async {
+    const ep = '/api/trafficshaper/settings/search_pipes';
+    final json = await _send('POST', ep, body: const {'current': 1, 'rowCount': -1, 'searchPhrase': ''});
+    return [
+      for (final r in _rows(_asMap(json, ep)))
+        if (r is Map && _uuidRe.hasMatch('${r['uuid']}')) ShaperPipe.fromJson(r.cast<String, dynamic>()),
+    ];
+  }
+
+  /// Sets one pipe's bandwidth in Mbit/s (nothing else changes).
+  Future<void> setPipeBandwidth(String uuid, int mbit) async {
+    if (!_uuidRe.hasMatch(uuid)) throw ArgumentError.value(uuid, 'uuid', 'not a UUID');
+    if (mbit < 1 || mbit > 100000) throw ArgumentError.value(mbit, 'mbit');
+    final ep = '/api/trafficshaper/settings/set_pipe/$uuid';
+    final map = _asMap(
+        await _send('POST', ep, body: {
+          'pipe': {'bandwidth': '$mbit', 'bandwidthMetric': 'Mbit'},
+        }),
+        ep);
+    if (map['result'] != 'saved') {
+      throw OpnsenseException(ApiErrorKind.server, 'Router did not save the shaper limit', endpoint: ep);
+    }
+  }
+
+  Future<void> shaperReconfigure() async {
+    const ep = '/api/trafficshaper/service/reconfigure';
+    _expectDone(await _send('POST', ep, body: const {}, timeout: const Duration(seconds: 30)), ep);
+  }
+
+  /// Bytes counted so far per pipe number (rules on the pipe and on its queues).
+  Future<Map<int, int>> shaperBytes() async {
+    const ep = '/api/trafficshaper/service/statistics';
+    return shaperBytesFromStatistics(_asMap(await _send('GET', ep), ep));
   }
 
   // ------------------------------------------------------------ Unbound DNS

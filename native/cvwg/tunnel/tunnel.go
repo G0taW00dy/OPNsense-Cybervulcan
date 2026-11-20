@@ -2,33 +2,30 @@
 // on a gVisor netstack). No TUN device, no VpnService and no admin rights are
 // needed: the tunnel is only visible to this app.
 //
-// The app reaches the router through a loopback TCP forwarder:
+// The app reaches the router through a loopback TCP forwarder (package
+// forward, shared with the Tailscale engine):
 //
 //	app --TCP--> 127.0.0.1:<random port> --netstack/WireGuard--> target (router:443)
 //
 // Every forwarded connection must start with the 32-byte access token from
 // the Config, so other apps or processes on the same device cannot use the
-// forwarder. The token is consumed; everything after it (the TLS handshake
-// with the router, then HTTP) is relayed unchanged, so the app still checks
-// the router's certificate end to end.
+// forwarder.
 package tunnel
 
 import (
 	"bufio"
 	"context"
-	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
+	"github.com/G0taW00dy/opnsense-cybervulcan/native/cvwg/forward"
 	"golang.zx2c4.com/wireguard/conn"
 	"golang.zx2c4.com/wireguard/device"
 	"golang.zx2c4.com/wireguard/tun/netstack"
@@ -36,7 +33,7 @@ import (
 
 // TokenSize is the length of the access token each forwarded connection
 // must send first.
-const TokenSize = 32
+const TokenSize = forward.TokenSize
 
 // Config describes one WireGuard peer (the home router) and the single TCP
 // target that the forwarder may reach through it.
@@ -83,16 +80,14 @@ type Status struct {
 type Tunnel struct {
 	dev    *device.Device
 	tnet   *netstack.Net
-	ln     net.Listener
+	fwd    *forward.Forwarder
 	target netip.AddrPort
-	token  []byte
 	// allowed are the AllowedIPs: the only destinations DialContext reaches.
 	allowed []netip.Prefix
 
 	mu      sync.Mutex
 	lastErr string
 	closed  bool
-	wg      sync.WaitGroup
 }
 
 func keyHex(name, b64 string, optional bool) (string, error) {
@@ -195,9 +190,9 @@ func Start(c Config) (*Tunnel, error) {
 	if err != nil {
 		return nil, fmt.Errorf("target %q must be ip:port", c.Target)
 	}
-	token, err := base64.StdEncoding.DecodeString(c.Token)
-	if err != nil || len(token) != TokenSize {
-		return nil, errors.New("access token must be 32 bytes, base64")
+	token, err := forward.ParseToken(c.Token)
+	if err != nil {
+		return nil, err
 	}
 	mtu := c.MTU
 	if mtu <= 0 {
@@ -208,7 +203,7 @@ func Start(c Config) (*Tunnel, error) {
 	if err != nil {
 		return nil, err
 	}
-	t := &Tunnel{target: target, token: token, allowed: allowed}
+	t := &Tunnel{target: target, allowed: allowed}
 	logger := &device.Logger{
 		Verbosef: device.DiscardLogf,
 		Errorf: func(format string, args ...any) {
@@ -231,74 +226,31 @@ func Start(c Config) (*Tunnel, error) {
 		dev.Close()
 		return nil, fmt.Errorf("wireguard up: %w", err)
 	}
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	t.dev, t.tnet = dev, tnet
+	fwd, err := forward.Start(token, t.dial, t.setErr)
 	if err != nil {
 		dev.Close()
 		return nil, fmt.Errorf("loopback listener: %w", err)
 	}
-	t.dev, t.tnet, t.ln = dev, tnet, ln
-	t.wg.Add(1)
-	go t.acceptLoop()
+	t.fwd = fwd
 	return t, nil
 }
 
 // Port is the loopback port of the forwarder.
-func (t *Tunnel) Port() int { return t.ln.Addr().(*net.TCPAddr).Port }
+func (t *Tunnel) Port() int { return t.fwd.Port() }
 
-func (t *Tunnel) acceptLoop() {
-	defer t.wg.Done()
-	for {
-		c, err := t.ln.Accept()
-		if err != nil {
-			return
-		}
-		go t.forward(c)
+func (t *Tunnel) dial(ctx context.Context) (net.Conn, error) {
+	rc, err := t.tnet.DialContextTCPAddrPort(ctx, t.target)
+	if err != nil {
+		return nil, fmt.Errorf("dial %s through tunnel: %w", t.target, err)
 	}
+	return rc, nil
 }
 
 func (t *Tunnel) setErr(err error) {
 	t.mu.Lock()
 	t.lastErr = err.Error()
 	t.mu.Unlock()
-}
-
-func (t *Tunnel) forward(c net.Conn) {
-	defer c.Close()
-	// Access token first, within a few seconds.
-	_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
-	got := make([]byte, TokenSize)
-	if _, err := io.ReadFull(c, got); err != nil {
-		return
-	}
-	if subtle.ConstantTimeCompare(got, t.token) != 1 {
-		return
-	}
-	_ = c.SetReadDeadline(time.Time{})
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	rc, err := t.tnet.DialContextTCPAddrPort(ctx, t.target)
-	cancel()
-	if err != nil {
-		t.setErr(fmt.Errorf("dial %s through tunnel: %w", t.target, err))
-		return
-	}
-	defer rc.Close()
-
-	done := make(chan struct{}, 2)
-	go func() {
-		_, _ = io.Copy(rc, c)
-		_ = rc.CloseWrite()
-		done <- struct{}{}
-	}()
-	go func() {
-		_, _ = io.Copy(c, rc)
-		if tc, ok := c.(*net.TCPConn); ok {
-			_ = tc.CloseWrite()
-		}
-		done <- struct{}{}
-	}()
-	<-done
-	<-done
 }
 
 // ErrNotAllowed is returned by DialContext for a destination outside the
@@ -383,7 +335,6 @@ func (t *Tunnel) Close() {
 	}
 	t.closed = true
 	t.mu.Unlock()
-	_ = t.ln.Close()
-	t.wg.Wait()
+	t.fwd.Close()
 	t.dev.Close()
 }

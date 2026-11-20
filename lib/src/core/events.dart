@@ -16,6 +16,8 @@ enum AlertKind {
   backupReminder,
   serverChanged,
   // v2.1 (append only: the index is the notification id)
+  keyExpiry,
+  safetyNet,
   vpnReminder,
 }
 
