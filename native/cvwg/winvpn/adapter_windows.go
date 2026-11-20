@@ -139,9 +139,6 @@ func startSession(plan Plan, r StartRequest) (s *session, err error) {
 }
 
 func configureAdapter(luid winipcfg.LUID, plan Plan) error {
-	if err := luid.SetIPAddresses(plan.Addresses); err != nil {
-		return fmt.Errorf("set adapter address: %w", err)
-	}
 	routes := make([]*winipcfg.RouteData, 0, len(plan.Routes))
 	for _, p := range plan.Routes {
 		nh := netip.IPv4Unspecified()
@@ -150,9 +147,16 @@ func configureAdapter(luid winipcfg.LUID, plan Plan) error {
 		}
 		routes = append(routes, &winipcfg.RouteData{Destination: p, NextHop: nh, Metric: 0})
 	}
-	if err := luid.SetRoutes(routes); err != nil {
+	if err := luid.SetIPAddressesForFamily(windows.AF_INET, plan.Addresses); err != nil {
+		return fmt.Errorf("set adapter address: %w", err)
+	}
+	if err := luid.SetRoutesForFamily(windows.AF_INET, routes); err != nil {
 		return fmt.Errorf("set routes: %w", err)
 	}
+	// IPv6 (everything mode: catch-all into the adapter). Best effort: when
+	// IPv6 is turned off on this PC these fail, and nothing can leak anyway.
+	_ = luid.SetIPAddressesForFamily(windows.AF_INET6, plan.Addresses)
+	_ = luid.SetRoutesForFamily(windows.AF_INET6, routes)
 	for _, fam := range []winipcfg.AddressFamily{windows.AF_INET, windows.AF_INET6} {
 		iface, err := luid.IPInterface(fam)
 		if err != nil {
