@@ -304,6 +304,7 @@ Endpoint = 198.51.100.7:51820
       expect(bufferbloatGrade(45), 'B');
       expect(bufferbloatGrade(1400), 'F'); // the 5G line under load
       expect(median([5, 1, 3]), 3);
+      expect(iqm([100, 300, 310, 320, 330, 5000]), closeTo(315, 0.1)); // outliers ignored
     });
 
     test('connection report folds to a summary line', () {

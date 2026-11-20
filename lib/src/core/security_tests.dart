@@ -224,7 +224,7 @@ Future<SecurityTestResult> runSecurityTest(SecurityTest t, TestEnv env) async {
     return _r(t, TestStatus.skip, 'Outside services are switched off (Settings > Tests & privacy).');
   }
   try {
-    return await t.run(env).timeout(const Duration(seconds: 60));
+    return await t.run(env).timeout(Duration(seconds: t.id == 'bufferbloat' ? 90 : 60));
   } on TimeoutException {
     return _r(t, TestStatus.warn, 'Timed out.');
   } on OpnsenseException catch (e) {
@@ -549,18 +549,19 @@ Future<SecurityTestResult> _bufferbloat(TestEnv env) async {
     var bytes = 0;
     final sw = Stopwatch()..start();
     var done = false;
-    bool stop() => done || sw.elapsed > const Duration(seconds: 10);
+    bool stop() => done || sw.elapsed > const Duration(seconds: 12);
     final job = load((n) => bytes += n, stop);
     final sampler = () async {
-      await Future<void>.delayed(const Duration(milliseconds: 1000));
+      // Let the streams ramp up and the queue fill before sampling.
+      await Future<void>.delayed(const Duration(milliseconds: 2500));
       while (!stop()) {
         final r = await rtt();
         if (r != null) samples.add(r);
-        await Future<void>.delayed(const Duration(milliseconds: 250));
+        await Future<void>.delayed(const Duration(milliseconds: 200));
       }
     }();
     try {
-      await job.timeout(const Duration(seconds: 12));
+      await job.timeout(const Duration(seconds: 15));
     } on Object {
       // A partial transfer still loads the line and gives a speed figure.
     }
@@ -570,12 +571,14 @@ Future<SecurityTestResult> _bufferbloat(TestEnv env) async {
     return (samples, bytes, max(sw.elapsedMilliseconds / 1000, 0.5));
   }
 
-  // Three parallel streams each way so one TCP connection over a long VPN
-  // path can't leave the line half-empty. 25 MB requests (Cloudflare refuses
+  // Eight parallel streams each way (like Speedtest): fewer TCP connections
+  // over a long VPN path leave the line part-empty, so no queue builds and
+  // the lag people feel never shows (v2.0.3 used 3 and graded A while
+  // Speedtest saw +1.4 s). 25 MB requests (Cloudflare refuses
   // very large single downloads), repeated until the time is up.
   final errors = <String>[];
   Future<void> streams(Future<void> Function() one) =>
-      Future.wait([for (var i = 0; i < 3; i++) one().catchError((Object e) => errors.add('$e'))]);
+      Future.wait([for (var i = 0; i < bufferbloatStreams; i++) one().catchError((Object e) => errors.add('$e'))]);
   final down = await loaded((count, stop) => streams(() async {
         while (!stop()) {
           final resp = await env.web
@@ -600,15 +603,15 @@ Future<SecurityTestResult> _bufferbloat(TestEnv env) async {
       }));
 
   final base = median(idle);
-  double addedFor(List<double> s) => s.isEmpty ? 0 : max(0.0, median(s) - base);
+  double addedFor(List<double> s) => s.isEmpty ? 0 : max(0.0, iqm(s) - base);
   final addDown = addedFor(down.$1);
   final addUp = addedFor(up.$1);
   final worstAdd = max(addDown, addUp);
   String mbps((List<double>, int, double) x) => (x.$2 * 8 / x.$3 / 1e6).toStringAsFixed(1);
   final lines = [
     'Idle ${base.toStringAsFixed(0)} ms to 1.1.1.1',
-    'Downloading: ${down.$1.isEmpty ? 'no samples' : '${median(down.$1).toStringAsFixed(0)} ms (+${addDown.toStringAsFixed(0)})'} - ~${mbps(down)} Mbit/s',
-    'Uploading: ${up.$1.isEmpty ? 'no samples' : '${median(up.$1).toStringAsFixed(0)} ms (+${addUp.toStringAsFixed(0)})'} - ~${mbps(up)} Mbit/s',
+    'Downloading: ${down.$1.isEmpty ? 'no samples' : '${iqm(down.$1).toStringAsFixed(0)} ms (+${addDown.toStringAsFixed(0)})'} - ~${mbps(down)} Mbit/s',
+    'Uploading: ${up.$1.isEmpty ? 'no samples' : '${iqm(up.$1).toStringAsFixed(0)} ms (+${addUp.toStringAsFixed(0)})'} - ~${mbps(up)} Mbit/s',
     'Path: ${_expectWord(env.expected)}. Added delay under load is what makes games lag when someone else downloads.',
   ];
   // No real load = no valid result (the old version graded an idle line A+).
@@ -640,6 +643,19 @@ double median(List<double> v) {
   if (v.isEmpty) return double.nan;
   final s = [...v]..sort();
   return s[s.length ~/ 2];
+}
+
+/// Parallel transfer streams per direction for the bufferbloat test.
+const bufferbloatStreams = 8;
+
+/// Interquartile mean (Speedtest's loaded-latency figure): the average of
+/// the middle half, so a few outliers don't decide the result.
+double iqm(List<double> v) {
+  if (v.isEmpty) return double.nan;
+  if (v.length < 4) return median(v);
+  final s = [...v]..sort();
+  final mid = s.sublist(s.length ~/ 4, s.length - s.length ~/ 4);
+  return mid.reduce((a, b) => a + b) / mid.length;
 }
 
 /// Waveform-style grade for the added latency under load (ms).
