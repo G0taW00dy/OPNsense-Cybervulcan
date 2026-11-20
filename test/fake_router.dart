@@ -70,6 +70,18 @@ class FakeRouter {
   /// Server IPs that never complete a handshake (key refused).
   Set<String> deadServers = {};
   int routeReconfigures = 0;
+
+  // ---- v2.1 shaper
+  List<Map<String, dynamic>> pipes = [
+    {'uuid': '33333333-3333-4333-8333-333333333333', 'enabled': '1', 'number': '10000', 'bandwidth': '60',
+     'bandwidthMetric': 'Mbit', 'description': 'VPN download (5G)'},
+    {'uuid': '44444444-4444-4444-8444-444444444444', 'enabled': '1', 'number': '10001', 'bandwidth': '10',
+     'bandwidthMetric': 'Mbit', 'description': 'VPN upload (5G)'},
+  ];
+
+  /// Bytes the statistics report per pipe number (tests move these on).
+  Map<int, int> pipeBytes = {10000: 0, 10001: 0};
+  int shaperReconfigures = 0;
   final List<String> monitorRestarts = [];
   List<Map<String, dynamic>> dotRows = [];
 
@@ -171,6 +183,29 @@ class FakeRouter {
     if (path == '/api/wireguard/service/reconfigure') {
       wgReconfigures++;
       return json({'result': 'ok'});
+    }
+    if (path == '/api/trafficshaper/settings/search_pipes') return json({'rows': pipes});
+    final setPipe = RegExp(r'^/api/trafficshaper/settings/set_pipe/([0-9a-f-]{36})$').firstMatch(path);
+    if (setPipe != null) {
+      final pp = pipes.where((x) => x['uuid'] == setPipe.group(1)).firstOrNull;
+      if (pp == null) return json({'result': 'failed'});
+      pp.addAll((((jsonDecode(r.body) as Map)['pipe']) as Map).cast<String, dynamic>());
+      return json({'result': 'saved'});
+    }
+    if (path == '/api/trafficshaper/service/reconfigure') {
+      shaperReconfigures++;
+      return json({'status': 'ok'});
+    }
+    if (path == '/api/trafficshaper/service/statistics') {
+      return json({
+        'status': 'ok',
+        'items': [
+          for (final e in pipeBytes.entries) ...[
+            {'type': 'pipe', 'pipe': '${e.key}', 'rules': []},
+            {'type': 'queue', 'sched_nr': '${e.key}', 'rules': [{'pkts': 1, 'bytes': e.value}]},
+          ],
+        ],
+      });
     }
     if (path == '/api/routes/routes/reconfigure') {
       routeReconfigures++;

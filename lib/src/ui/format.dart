@@ -23,6 +23,13 @@ String formatClock(DateTime t) {
   return '${l.hour.toString().padLeft(2, '0')}:${l.minute.toString().padLeft(2, '0')}';
 }
 
+/// "14 Nov 21:35" (local).
+String formatWhen(DateTime t) {
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  final l = t.toLocal();
+  return '${l.day} ${months[l.month - 1]} ${formatClock(l)}';
+}
+
 String exitLabel(ProtonExit e, AppConfig cfg) => switch (e) {
       ProtonExit.main => '${cfg.mainLabel} (main)',
       ProtonExit.backup => '${cfg.backupLabel} (backup)',

@@ -45,6 +45,18 @@ Future<void> main(List<String> args) async {
     supportsPcMode: Platform.isWindows || Platform.isAndroid,
   );
 
+  // Diagnostics (v2.1): remember recent uncaught errors (redacted) so
+  // "Copy diagnostics" can include them.
+  final previousOnError = FlutterError.onError;
+  FlutterError.onError = (details) {
+    unawaited(controller.errorLog.add(details.exception, details.stack));
+    previousOnError?.call(details);
+  };
+  WidgetsBinding.instance.platformDispatcher.onError = (error, stack) {
+    unawaited(controller.errorLog.add(error, stack));
+    return false;
+  };
+
   final appLock = AppLock(store: controller.secrets, context: () => lockDialogContext(controller));
   runExternal = controller.whileExternal;
   controller.authorizer = appLock.authorize;

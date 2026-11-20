@@ -2,8 +2,10 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../api/opnsense_client.dart';
+import '../api/shaper_models.dart';
 import '../api/tls.dart';
 import '../core/bypass.dart';
 import '../core/client_factory.dart';
@@ -92,13 +94,67 @@ Future<List<String>> testRouterConnection(AppConfig cfg, ApiCredentials? creds) 
     }
   }
 
-  await run('Gateway status', client.gatewayStatus);
-  await run('Bypass alias ${cfg.bypassAlias}', () => client.aliasList(cfg.bypassAlias));
-  await run('CLEAR alias ${cfg.pcModeAlias}', () => client.aliasList(cfg.pcModeAlias));
-  await run('DHCP leases (devices, new-device alerts)', client.dnsmasqLeases, optional: true);
-  await run('Kill switch rule search', () => client.searchRules(cfg.killSwitchTag), optional: true);
-  await run('WireGuard peers (server switcher)', client.wgPeers, optional: !cfg.serverSwitcherEnabled);
-  await run('Unbound DNS-over-TLS (Tests page)', client.dotServers, optional: true);
+  // Setup checker (v2.1): not only "can I call it" but "is it set up the
+  // way the app expects", with the fix in the line.
+  final powers = <String>[];
+  Future<T?> check<T>(String name, Future<T> Function() f,
+      {bool optional = false, String? power, String? Function(T)? verify}) async {
+    try {
+      final r = await f();
+      final problem = verify?.call(r);
+      lines.add(problem == null ? 'OK    $name' : 'FIX   $name: $problem');
+      if (power != null) powers.add(power);
+      return r;
+    } on OpnsenseException catch (e) {
+      final tag = e.kind == ApiErrorKind.forbidden ? (optional ? 'SKIP ' : 'NO PRIVILEGE') : 'FAIL';
+      lines.add('$tag  $name: ${e.kind == ApiErrorKind.forbidden && optional ? 'not granted (optional)' : e.message}');
+      return null;
+    }
+  }
+
+  await check('Gateway status', client.gatewayStatus, verify: (gws) {
+    final names = gws.map((g) => g.name).toSet();
+    final missing = [cfg.mainGateway, cfg.backupGateway].where((n) => !names.contains(n)).toList();
+    return missing.isEmpty
+        ? null
+        : 'gateway ${missing.join(' and ')} not found - check the names in Settings > VPN tunnels '
+            '(router: System > Gateways)';
+  });
+  await check('Bypass alias ${cfg.bypassAlias}', () => client.aliasList(cfg.bypassAlias), power: 'turn the whole-house bypass on/off');
+  await check('CLEAR alias ${cfg.pcModeAlias}', () => client.aliasList(cfg.pcModeAlias), power: 'put single devices on CLEAR');
+  await check('DHCP leases (devices, new-device alerts)', client.dnsmasqLeases, optional: true, power: 'see device names');
+  await check('Kill switch rule (tag ${cfg.killSwitchTag})', () => client.searchRules(cfg.killSwitchTag),
+      optional: true,
+      verify: (rules) => rules.isEmpty
+          ? 'no firewall rule with that tag - without it the VPN network is not protected when both tunnels drop'
+          : null);
+  await check('WireGuard peers (server switcher)', client.wgPeers,
+      optional: !cfg.serverSwitcherEnabled,
+      power: 'change VPN servers (and read the router\'s WireGuard keys)', verify: (peers) {
+    final missing = [cfg.mainWgInstance, cfg.backupWgInstance].where((i) => !peers.any((p) => p.belongsTo(i))).toList();
+    return !cfg.serverSwitcherEnabled || missing.isEmpty
+        ? null
+        : 'no peer linked to instance ${missing.join(' / ')} - check the instance names, or tick the instance on the '
+            'peer (VPN > WireGuard > Peers)';
+  });
+  if (cfg.serverSwitcherEnabled) {
+    await check('Route refresh after a server switch', client.routesProbe,
+        optional: true, power: 'change static routes');
+    await check('Gateway monitor restart after a server switch', client.servicesProbe,
+        optional: true, power: 'restart router services');
+  }
+  await check('Shaper (lag control)', client.shaperPipes,
+      optional: !cfg.shaperAutoTune,
+      power: 'change the shaper limits',
+      verify: (pipes) => findVpnPipes(pipes) == null
+          ? 'no enabled pipes named with "VPN" and "download"/"upload" (Firewall > Shaper > Pipes)'
+          : null);
+  await check('Unbound DNS-over-TLS (Tests page)', client.dotServers, optional: true);
+  lines.add('');
+  lines.add('INFO  This key can: ${powers.isEmpty ? 'read the status only' : powers.join('; ')}.');
+  if (powers.any((p) => p.contains('VPN servers') || p.contains('shaper') || p.contains('routes') || p.contains('services'))) {
+    lines.add('INFO  Keys for other people should only have Gateways + Diagnostics: Tables (status, bypass, CLEAR).');
+  }
   client.close();
   return lines;
 }
@@ -158,6 +214,7 @@ class _SettingsPageState extends State<SettingsPage> {
     'bypassNetwork', 'bypassMinutes', 'pcIpOverride', 'killSwitchTag', 'killSwitchRuleUuid',
     'pollSeconds', 'homeCountryCode', 'vpnCountryCode', 'tailscaleAddress', 'mainWgInstance',
     'backupWgInstance', 'serverCities', 'schedStart', 'schedMinutes', 'mainKeyExpiry', 'backupKeyExpiry',
+    'shaperMinDown', 'shaperMaxDown', 'shaperMinUp', 'shaperMaxUp',
   ];
 
   @override
@@ -208,6 +265,10 @@ class _SettingsPageState extends State<SettingsPage> {
         schedMinutes: int.tryParse(_v('schedMinutes')) ?? 180,
         mainKeyExpiry: _v('mainKeyExpiry'),
         backupKeyExpiry: _v('backupKeyExpiry'),
+        shaperMinDown: int.tryParse(_v('shaperMinDown')) ?? _cfg.shaperMinDown,
+        shaperMaxDown: int.tryParse(_v('shaperMaxDown')) ?? _cfg.shaperMaxDown,
+        shaperMinUp: int.tryParse(_v('shaperMinUp')) ?? _cfg.shaperMinUp,
+        shaperMaxUp: int.tryParse(_v('shaperMaxUp')) ?? _cfg.shaperMaxUp,
       );
 
   /// Refills every text field from [_cfg] (start, after an import).
@@ -243,6 +304,10 @@ class _SettingsPageState extends State<SettingsPage> {
       'schedMinutes': '${cfg.schedMinutes}',
       'mainKeyExpiry': cfg.mainKeyExpiry,
       'backupKeyExpiry': cfg.backupKeyExpiry,
+      'shaperMinDown': '${cfg.shaperMinDown}',
+      'shaperMaxDown': '${cfg.shaperMaxDown}',
+      'shaperMinUp': '${cfg.shaperMinUp}',
+      'shaperMaxUp': '${cfg.shaperMaxUp}',
     };
     for (final e in m.entries) {
       _t[e.key]!.text = e.value;
@@ -725,6 +790,44 @@ class _SettingsPageState extends State<SettingsPage> {
                 help: 'Tests a few servers on the backup tunnel, then moves the fastest to main if it is '
                     'clearly better (at least 10 %). Takes about 5 minutes. You get a notification with the result.'),
           ],
+          SubSection(title: 'Shaper (lag control)', children: [
+            InfoLine(c.tuner.currentDown == null
+                ? 'The router\'s FQ-CoDel shaper keeps lag low while the line is busy. Limits shown here once '
+                    'auto-tune or a re-tune has read them.'
+                : 'VPN limits now: ${c.tuner.currentDown} Mbit/s down, ${c.tuner.currentUp} Mbit/s up.'
+                    '${c.tuner.lastReason == null ? '' : ' Last check: ${c.tuner.lastReason}'}'),
+            _switch('Auto-tune the shaper', _cfg.shaperAutoTune, (v) => _set(_cfg.copyWith(shaperAutoTune: v)),
+                subtitle: 'Lower the VPN limits when lag rises under load, raise them when it\'s clear.',
+                help: 'Mobile lines change speed all the time, so a fixed shaper limit is either too high (lag) or '
+                    'too low (wasted speed). Auto-tune watches the tunnel\'s ping (the router\'s gateway monitor) and '
+                    'how busy each direction is, and moves the VPN limits within the range below - about every '
+                    '30 seconds at most. After a server switch it starts again, because each server has its own '
+                    'speed and ping.\n\nRun it on ONE device only (best: the always-on PC). Needs the router '
+                    'privilege "Firewall: Shaper" on this app user, and shaper pipes named with "VPN" and '
+                    '"download"/"upload". The original limits are saved first: "Restore original limits" puts '
+                    'them back, and the app does so by itself if tuning keeps failing.'),
+            if (_cfg.shaperAutoTune) ...[
+              Row(children: [
+                Expanded(child: _field('shaperMinDown', 'Download min', number: true, note: 'Mbit/s')),
+                const SizedBox(width: 12),
+                Expanded(child: _field('shaperMaxDown', 'Download max', number: true, note: 'Mbit/s')),
+              ]),
+              Row(children: [
+                Expanded(child: _field('shaperMinUp', 'Upload min', number: true, note: 'Mbit/s')),
+                const SizedBox(width: 12),
+                Expanded(child: _field('shaperMaxUp', 'Upload max', number: true, note: 'Mbit/s')),
+              ]),
+            ],
+            Wrap(spacing: 8, runSpacing: 8, children: [
+              OutlinedButton.icon(
+                  onPressed: c.retuneShaper, icon: const Icon(Icons.tune), label: const Text('Re-tune now')),
+              if (c.shaperOriginal != null)
+                OutlinedButton.icon(
+                    onPressed: () => c.restoreShaperOriginal(),
+                    icon: const Icon(Icons.undo),
+                    label: Text('Restore original limits (${c.shaperOriginal!.values.join(' / ')})')),
+            ]),
+          ]),
         ],
       ),
 
@@ -1053,12 +1156,38 @@ class _SettingsPageState extends State<SettingsPage> {
       ),
 
       // 9 -------------------------------------------------------------- app
-      if (_autostart != null || widget.updates != null)
-        SettingsSection(
+      SettingsSection(
           icon: Icons.system_update_alt,
           title: 'App & updates',
           summary: _cfg.checkUpdates ? 'Checks for updates automatically' : 'Manual updates',
           children: [
+            SubSection(title: 'Router changes made by the app', children: [
+              for (final e in c.journal.entries.take(10))
+                InfoLine('${formatWhen(e.at)}  ${e.ok ? '' : 'FAILED: '}${e.what}${e.detail == null ? '' : ' - ${e.detail}'}'),
+              if (c.journal.entries.isEmpty) const InfoLine('None yet.'),
+              const InfoLine('The router also keeps every change as a revision under System > Configuration > History, '
+                  'where an admin can compare and revert it.'),
+            ]),
+            SubSection(title: 'Diagnostics', children: [
+              Row(children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () async {
+                      await Clipboard.setData(ClipboardData(text: c.diagnostics()));
+                      _say('Diagnostics copied - paste them into a bug report or a message.');
+                    },
+                    icon: const Icon(Icons.bug_report_outlined),
+                    label: const Text('Copy diagnostics'),
+                  ),
+                ),
+                const HelpButton(
+                    title: 'Copy diagnostics',
+                    text: 'Copies what a bug report needs: app version, settings that matter, tunnel status, the '
+                        'app\'s recent router changes and recent app errors.\n\nNever included: API key or secret, '
+                        'WireGuard keys, the app PIN. Blanked: public IP addresses, domain names and tunnel keys. '
+                        'Kept: house addresses like 10.x.x.x. Have a look before you send it.'),
+              ]),
+            ]),
             if (_autostart != null)
               _switch('Start in the tray when I sign in', _autostart!, (v) async {
                 final ok = await WindowsAutostart.setEnabled(v);
@@ -1283,11 +1412,13 @@ String? summariseReport(String message) {
   final ok = n('OK');
   final fail = n('FAIL') + n('NO PRIVILEGE');
   final warn = n('WARN');
+  final fix = n('FIX');
   final skip = n('SKIP');
-  if (ok + fail + warn + skip < 3) return null;
+  if (ok + fail + warn + skip + fix < 3) return null;
   return [
     '$ok OK',
     if (fail > 0) '$fail failed',
+    if (fix > 0) '$fix to fix',
     if (warn > 0) '$warn warning${warn == 1 ? '' : 's'}',
     if (skip > 0) '$skip skipped (optional)',
   ].join(' - ');

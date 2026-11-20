@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 
 import 'models.dart';
+import 'shaper_models.dart';
 import 'wireguard_models.dart';
 
 /// Why an API call failed - drives the UI wording and the tray colour.
@@ -394,6 +395,18 @@ class OpnsenseClient {
     ];
   }
 
+  /// Read-only probe: may this key use the static routes API?
+  Future<void> routesProbe() async {
+    const ep = '/api/routes/routes/searchroute';
+    _asMap(await _send('POST', ep, body: const {'current': 1, 'rowCount': 1, 'searchPhrase': ''}), ep);
+  }
+
+  /// Read-only probe: may this key use the services API?
+  Future<void> servicesProbe() async {
+    const ep = '/api/core/service/search';
+    _asMap(await _send('POST', ep, body: const {'current': 1, 'rowCount': 1, 'searchPhrase': ''}), ep);
+  }
+
   /// Re-applies the router's routes, which include the gateway monitor's
   /// host route through each tunnel. Needs "System: Static Routes"; returns
   /// false (instead of throwing) when the API user lacks it.
@@ -435,6 +448,44 @@ class OpnsenseClient {
       for (final r in _rows(_asMap(await _send('GET', ep), ep)))
         if (r is Map) WgRuntime.fromJson(r.cast<String, dynamic>()),
     ];
+  }
+
+  // ------------------------------------------------------------ Shaper (v2.1)
+  // Privilege "Firewall: Shaper" - optional, shaper card / auto-tune only.
+
+  Future<List<ShaperPipe>> shaperPipes() async {
+    const ep = '/api/trafficshaper/settings/search_pipes';
+    final json = await _send('POST', ep, body: const {'current': 1, 'rowCount': -1, 'searchPhrase': ''});
+    return [
+      for (final r in _rows(_asMap(json, ep)))
+        if (r is Map && _uuidRe.hasMatch('${r['uuid']}')) ShaperPipe.fromJson(r.cast<String, dynamic>()),
+    ];
+  }
+
+  /// Sets one pipe's bandwidth in Mbit/s (nothing else changes).
+  Future<void> setPipeBandwidth(String uuid, int mbit) async {
+    if (!_uuidRe.hasMatch(uuid)) throw ArgumentError.value(uuid, 'uuid', 'not a UUID');
+    if (mbit < 1 || mbit > 100000) throw ArgumentError.value(mbit, 'mbit');
+    final ep = '/api/trafficshaper/settings/set_pipe/$uuid';
+    final map = _asMap(
+        await _send('POST', ep, body: {
+          'pipe': {'bandwidth': '$mbit', 'bandwidthMetric': 'Mbit'},
+        }),
+        ep);
+    if (map['result'] != 'saved') {
+      throw OpnsenseException(ApiErrorKind.server, 'Router did not save the shaper limit', endpoint: ep);
+    }
+  }
+
+  Future<void> shaperReconfigure() async {
+    const ep = '/api/trafficshaper/service/reconfigure';
+    _expectDone(await _send('POST', ep, body: const {}, timeout: const Duration(seconds: 30)), ep);
+  }
+
+  /// Bytes counted so far per pipe number (rules on the pipe and on its queues).
+  Future<Map<int, int>> shaperBytes() async {
+    const ep = '/api/trafficshaper/service/statistics';
+    return shaperBytesFromStatistics(_asMap(await _send('GET', ep), ep));
   }
 
   // ------------------------------------------------------------ Unbound DNS
