@@ -84,16 +84,6 @@ Future<List<String>> testRouterConnection(AppConfig cfg, ApiCredentials? creds) 
   }
   final client = buildRouterClient(cfg, creds);
   if (client == null) return [...lines, 'FAIL  Enter the API key and secret first'];
-  Future<void> run(String name, Future<Object?> Function() f, {bool optional = false}) async {
-    try {
-      await f();
-      lines.add('OK    $name');
-    } on OpnsenseException catch (e) {
-      final tag = e.kind == ApiErrorKind.forbidden ? (optional ? 'SKIP ' : 'NO PRIVILEGE') : 'FAIL';
-      lines.add('$tag  $name: ${e.kind == ApiErrorKind.forbidden && optional ? 'not granted (optional)' : e.message}');
-    }
-  }
-
   // Setup checker (v2.1): not only "can I call it" but "is it set up the
   // way the app expects", with the fix in the line.
   final powers = <String>[];
