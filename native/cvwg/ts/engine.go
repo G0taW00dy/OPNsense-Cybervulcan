@@ -58,6 +58,16 @@ func NewEngine(o Options) (*Engine, error) {
 	}
 	// Privacy: no log upload to log.tailscale.com.
 	envknob.SetNoLogsNoSupport()
+	// Tailscale's backend asks for a folder for its log state even with
+	// uploads off; on Android it finds none of the usual places (no HOME,
+	// no cache dir for a c-shared library) and panics "no safe place found
+	// to store log state" (2.1.3 crash report). Point it at the app's folder.
+	if os.Getenv("TS_LOGS_DIR") == "" {
+		logs := filepath.Join(o.StateDir, "logs")
+		if err := os.MkdirAll(logs, 0o700); err == nil {
+			_ = os.Setenv("TS_LOGS_DIR", logs)
+		}
+	}
 	e := &Engine{opts: o, ready: make(chan struct{})}
 	logf := o.Logf
 	if logf == nil {
