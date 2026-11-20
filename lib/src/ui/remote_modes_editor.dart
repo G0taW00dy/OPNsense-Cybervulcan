@@ -30,7 +30,12 @@ String _slotWarning(String vpnName) => Platform.isAndroid
         'must be off while this is connected (it turns off by itself when this starts). To keep apps from '
         'going around the VPN, use Android Settings > Network > VPN > Cybervulcan > "Always-on VPN" and '
         '"Block connections without VPN".'
-    : 'Uses this computer\'s VPN slot: a separate VPN app should be off while this is connected.';
+    : Platform.isWindows
+        // v2.1 Windows home link (vpn_modes_windows.dart).
+        ? 'Each time this switches on, Windows asks for admin rights (UAC prompt) to add the "Cybervulcan" '
+            'network adapter; it is removed again when this switches off or the app closes. A separate VPN app '
+            'should be off while this is connected. The router\'s own pages stay reachable only through this app.'
+        : 'Uses this computer\'s VPN slot: a separate VPN app should be off while this is connected.';
 
 /// "What it carries" for remote access: App only / Home devices only /
 /// Everything via home, plus the home-device list. Platform neutral: the
