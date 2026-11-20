@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"tailscale.com/envknob"
+	"tailscale.com/ipn"
 	"tailscale.com/tsnet"
 )
 
@@ -92,11 +93,30 @@ func (e *Engine) Start() {
 			err := e.srv.Start()
 			if err != nil {
 				e.setErr(err)
+			} else {
+				e.acceptRoutes()
 			}
 			e.startErr = err
 			close(e.ready)
 		}()
 	})
+}
+
+// acceptRoutes makes sure subnet routes from other nodes are used: the
+// router reaches its own LAN address only through its advertised route
+// (v2.1.5: the phone was signed in and saw the router, but never sent a
+// packet to it).
+func (e *Engine) acceptRoutes() {
+	lc, err := e.srv.LocalClient()
+	if err != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err = lc.EditPrefs(ctx, &ipn.MaskedPrefs{Prefs: ipn.Prefs{RouteAll: true}, RouteAllSet: true})
+	if err != nil {
+		e.setErr(fmt.Errorf("could not turn on subnet routes: %w", err))
+	}
 }
 
 // WaitReady waits until the background start has finished (not until the
@@ -212,6 +232,10 @@ func (e *Engine) Status(ctx context.Context, target string) Status {
 	}
 	s := statusFrom(st, target)
 	s.LastError = lastErr
+	if prefs, err := lc.GetPrefs(ctx); err == nil {
+		ra := prefs.RouteAll
+		s.RouteAll = &ra
+	}
 	return s
 }
 

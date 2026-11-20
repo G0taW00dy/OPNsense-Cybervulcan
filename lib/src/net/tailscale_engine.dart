@@ -74,7 +74,19 @@ class TailscaleStatus {
     this.keyExpiry,
     this.health = const [],
     this.lastError,
+    this.routeAll,
+    this.peers = const [],
   });
+
+  /// Subnet routes accepted (null = unknown). Diagnostics only.
+  final bool? routeAll;
+
+  /// "host online routes" per peer, for diagnostics (no keys).
+  final List<String> peers;
+
+  /// One line for diagnostics: what this device sees on the tailnet.
+  String get mapSummary => 'routes accepted: ${routeAll ?? '?'}; peers: '
+      '${peers.isEmpty ? 'none' : peers.join(', ')}';
 
   final bool up;
   final TailscaleState state;
@@ -122,6 +134,13 @@ class TailscaleStatus {
       keyExpiry: exp > 0 ? DateTime.fromMillisecondsSinceEpoch(exp * 1000, isUtc: true) : null,
       health: [for (final h in (j['health'] is List ? j['health'] as List : const [])) '$h'],
       lastError: s('lastError'),
+      routeAll: j['routeAll'] is bool ? j['routeAll'] as bool : null,
+      peers: [
+        for (final p in (j['peers'] is List ? j['peers'] as List : const []))
+          if (p is Map)
+            '${p['host']} ${p['online'] == true ? 'online' : 'offline'}'
+                '${p['routes'] is List && (p['routes'] as List).isNotEmpty ? ' routes ${(p['routes'] as List).join('+')}' : ' no routes'}',
+      ],
     );
   }
 
