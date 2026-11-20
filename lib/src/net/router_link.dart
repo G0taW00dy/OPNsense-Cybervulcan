@@ -641,7 +641,13 @@ class RouterLink {
     final host = _tsHostname();
     final sig = [dir, host, dest].join('|');
     if (_tsPort != null && sig == _tsSig && tailscale.isUp) return tailscale.status();
+    if (TailscaleCrashGuard.blocked) {
+      throw TailscaleException('paused - it closed the app last time. Settings > Remote access > "Sign in to '
+          'Tailscale" tries again; Copy diagnostics shows the crash');
+    }
     final token = _newToken();
+    await TailscaleCrashGuard.starting();
+    Future<void>.delayed(const Duration(seconds: 20), TailscaleCrashGuard.survived);
     final st = await tailscale.start(TailscaleSpec(
       stateDir: dir,
       hostname: host,
@@ -665,6 +671,7 @@ class RouterLink {
     if (!tailscale.isAvailable) throw TailscaleException(tailscale.unavailableReason ?? 'not available');
     final target = RouterTarget.fromConfig(cfg);
     if (target == null) throw TailscaleException('set the router address first');
+    await TailscaleCrashGuard.unblock(); // an explicit sign-in tries again
     _tsHoldUntil = DateTime.now().add(signInHold);
     await _startTailscaleEngine(cfg, target);
     final until = DateTime.now().add(tailscaleTimeout);
