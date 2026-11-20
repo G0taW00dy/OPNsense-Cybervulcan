@@ -9,6 +9,7 @@ import '../core/controller.dart';
 import '../core/house_state.dart';
 import '../core/updater.dart';
 import '../net/router_link.dart';
+import '../platform/vpn_modes.dart' show HomeLinkState;
 import 'bypass_dialog.dart';
 import 'format.dart';
 import 'servers_page.dart';
@@ -79,6 +80,15 @@ class _StatusPageState extends State<StatusPage> {
                   text: s.link!.describe(c.config),
                   color: s.link!.state == LinkState.wrongCertificate ? OpnColors.red : OpnColors.grey,
                   icon: s.link!.state == LinkState.wrongCertificate ? Icons.gpp_bad : Icons.wifi_off,
+                ),
+              ],
+              // v2.1: system VPN for the remote modes ("Home link: ... - connected").
+              if (c.homeLink.describe() case final homeLine?) ...[
+                const SizedBox(height: 12),
+                _Banner(
+                  text: homeLine,
+                  color: c.homeLink.state == HomeLinkState.error ? OpnColors.amber : OpnColors.green,
+                  icon: Icons.vpn_lock_outlined,
                 ),
               ],
               if (s.reachable && (s.bypassActive ?? false) && s.bypassNoRouterDeadline) ...[
