@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:opnsense_cybervulcan/src/api/models.dart';
+import 'package:opnsense_cybervulcan/src/api/shaper_models.dart';
 import 'package:opnsense_cybervulcan/src/core/config.dart';
 import 'package:opnsense_cybervulcan/src/core/quick_tests.dart';
 import 'package:opnsense_cybervulcan/src/core/security_tests.dart';
@@ -43,5 +44,17 @@ void main() {
     expect(serverRegionHint('CH#10'), 'CH');
     expect(serverRegionHint('US-FREE#3'), isNull);
     expect(serverRegionHint('my server'), isNull);
+  });
+
+  test('bufferbloat advice knows the shaper is already there (21 Nov PC test)', () {
+    ShaperPipe pipe(String d, int mbit) => ShaperPipe(uuid: 'u', number: 1, description: d, mbit: mbit.toDouble(), enabled: true);
+    final pipes = [pipe('VPN download (5G)', 60), pipe('VPN upload (5G)', 10), pipe('CLEAR download (5G)', 85), pipe('CLEAR upload (5G)', 18)];
+    final direct = shaperAdvice(pipes, ExpectedPath.direct, downMbps: 73.8, upMbps: 12.6, lagDown: false);
+    expect(direct, contains('CLEAR upload (5G)'));
+    expect(direct, contains('10 Mbit/s'));
+    expect(direct, isNot(contains('Set up')));
+    expect(shaperAdvice(pipes, ExpectedPath.vpn, downMbps: 50, upMbps: 5, lagDown: true), contains('VPN download'));
+    expect(shaperAdvice(const [], ExpectedPath.vpn, downMbps: 50, upMbps: 5, lagDown: true), contains('Set up'));
+    expect(shaperAdvice(null, ExpectedPath.vpn, downMbps: 50, upMbps: 5, lagDown: true), contains('fixes this'));
   });
 }

@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../api/models.dart';
 import '../core/bypass.dart';
 import '../core/controller.dart';
+import '../core/network_map.dart';
 import '../core/house_state.dart';
 import '../core/updater.dart';
 import '../net/router_link.dart';
@@ -478,6 +479,11 @@ class _PcModeCard extends StatelessWidget {
     final s = controller.snapshot;
     final t = Theme.of(context).textTheme;
     final clear = s.pcClear;
+    final cfg = controller.config;
+    // v2.1.2: a device on another network (e.g. MGMT) is not on the VPN at
+    // all - the VPN/CLEAR switch only applies to the VPN network.
+    final onVpnNet = s.pcIp != null && (Ipv4Subnet.tryParse(cfg.bypassNetwork)?.contains(s.pcIp!) ?? false);
+    final otherNet = s.pcIp == null || onVpnNet ? null : (networkNameFor(s.pcIp!, cfg.networks) ?? 'another network');
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -494,13 +500,16 @@ class _PcModeCard extends StatelessWidget {
                   ButtonSegment(value: true, label: Text('CLEAR'), icon: Icon(Icons.sports_esports)),
                 ],
                 selected: {clear ?? false},
-                onSelectionChanged: clear == null || s.busy
+                onSelectionChanged: clear == null || s.busy || otherNet != null
                     ? null
                     : (v) => controller.setPcClear(v.first),
               ),
             ]),
             const SizedBox(height: 6),
-            Text(s.pcIp == null
+            Text(otherNet != null
+                ? 'IP ${s.pcIp} is on $otherNet, not the VPN network - this ${_deviceNoun()}\'s traffic follows '
+                    '$otherNet\'s own route, and VPN / CLEAR only applies on the VPN network.'
+                : s.pcIp == null
                 ? (Platform.isAndroid
                     ? 'Not on house Wi-Fi (or the phone\'s house IP is unknown) - CLEAR only works at home.'
                     : 'Could not detect this PC\'s house IP - set it in Settings.')
