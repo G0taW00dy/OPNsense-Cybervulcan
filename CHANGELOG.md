@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.1.4 (pre-release, 21 Nov 2026)
+
+* Fix the phone crash when the built-in Tailscale starts: Tailscale wanted a
+  folder for its log state and Android has none of its usual places
+  ("no safe place found to store log state"); it now uses the app's own
+  folder (nothing is uploaded).
+
 ## 2.1.3 (pre-release, 21 Nov 2026)
 
 * Phone closed ~2 s after start when away (built-in Tailscale starting):
