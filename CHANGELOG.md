@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.1.6 (pre-release)
+- Settings > Test now works away from home: when the home address does not answer, it tests through the remote route the app is already connected on (Tailscale or the in-app tunnel) and says so.
+- "Router's Tailscale address" rejects this device's own Tailscale name.
+
 ## 2.1.5 (pre-release, 21 Nov 2026)
 
 * Built-in Tailscale: explicitly accept subnet routes after start (the phone

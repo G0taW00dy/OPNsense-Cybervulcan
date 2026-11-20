@@ -18,6 +18,7 @@ import '../core/settings_transfer.dart';
 import '../core/storage.dart';
 import '../core/updater.dart';
 import '../net/router_link.dart';
+import '../net/tailscale_engine.dart';
 import '../platform/app_lock.dart';
 import '../platform/autostart.dart';
 import 'format.dart';
@@ -66,25 +67,41 @@ String? validateCertName(String? v) {
 
 /// Runs the identity check and every endpoint with the given settings.
 /// Returns report lines; the first says how the router was reached.
-Future<List<String>> testRouterConnection(AppConfig cfg, ApiCredentials? creds) async {
+Future<List<String>> testRouterConnection(AppConfig cfg, ApiCredentials? creds, {RouterLink? link}) async {
   final target = RouterTarget.fromConfig(cfg);
   if (target == null) return ['FAIL  Router address is not valid'];
-  final probe = await probeRouter(target, RouterRoute.direct(target.host, target.port),
-      const Duration(seconds: 4));
+  var route = RouterRoute.direct(target.host, target.port);
+  var probe = await probeRouter(target, route, const Duration(seconds: 4));
   final lines = <String>[];
+  // Away from home: reuse the remote route the app is already connected on
+  // (Tailscale or the in-app tunnel) instead of failing on the home address.
+  if (probe.kind == ProbeKind.unreachable && link != null && link.status.connected && link.status.remote) {
+    final remote = link.routeFor(target);
+    final viaRemote = await probeRouter(target, remote, const Duration(seconds: 8));
+    if (viaRemote.kind != ProbeKind.unreachable) {
+      route = remote;
+      probe = viaRemote;
+      lines.add('INFO  Away from home - tested through '
+          '${link.status.viaTailscale ? 'Tailscale' : 'the remote access tunnel'}');
+    }
+  }
   switch (probe.kind) {
     case ProbeKind.ok:
       lines.add(target.secure
           ? 'OK    Certificate valid for ${target.tlsName}${target.pinned ? ' (pinned)' : ''}'
           : 'WARN  Plain http:// - no certificate check, API key sent unencrypted');
     case ProbeKind.wrongCertificate:
-      return ['FAIL  Wrong certificate - not your router? ${probe.detail ?? ''}',
+      return [...lines, 'FAIL  Wrong certificate - not your router? ${probe.detail ?? ''}',
         '      The API key was NOT sent.'];
     case ProbeKind.unreachable:
       return ['FAIL  ${target.host}:${target.port} did not answer (${probe.detail ?? 'timeout'}).',
-        '      At home? Check the address. Away? The test only works at home.'];
+        link != null && link.status.remote
+            ? '      Remote access did not answer either - check the Status page.'
+            : '      At home? Check the address. Away? Open the Status page first so the app '
+                'connects through remote access, then test again.'];
   }
-  final client = buildRouterClient(cfg, creds);
+  final picked = route;
+  final client = buildRouterClient(cfg, creds, route: (_) => picked);
   if (client == null) return [...lines, 'FAIL  Enter the API key and secret first'];
   // Setup checker (v2.1): not only "can I call it" but "is it set up the
   // way the app expects", with the fix in the line.
@@ -403,7 +420,7 @@ class _SettingsPageState extends State<SettingsPage> {
     final creds = _newCreds() ?? await c.secrets.read();
     if (!mounted) return;
     setState(() => _busy = true);
-    final results = await testRouterConnection(_collect(), creds);
+    final results = await testRouterConnection(_collect(), creds, link: c.link);
     if (!mounted) return;
     setState(() => _busy = false);
     _say(results.join('\n'), error: results.any((r) => r.startsWith('FAIL') || r.startsWith('NO')));
@@ -934,7 +951,13 @@ class _SettingsPageState extends State<SettingsPage> {
                 validator: (v) {
                   final s = v?.trim() ?? '';
                   if (s.isEmpty) return null;
-                  return RegExp(r'^[A-Za-z0-9.:-]+$').hasMatch(s) ? null : 'An IP or host name';
+                  if (!RegExp(r'^[A-Za-z0-9.:-]+$').hasMatch(s)) return 'An IP or host name';
+                  final own = defaultTailscaleHostname().toLowerCase();
+                  final low = s.toLowerCase();
+                  if (low == own || low.startsWith('$own.')) {
+                    return 'That is this $deviceNoun\'s own Tailscale name - enter the router\'s, or leave empty';
+                  }
+                  return null;
                 }),
             if (isPhone && remoteSteps(_cfg).contains(RemoteStep.tailscaleDevice))
               InfoLine('Android allows one VPN app at a time: while the Tailscale app is on, the ${_cfg.vpnName} app '

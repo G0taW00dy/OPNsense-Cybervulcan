@@ -89,7 +89,7 @@ class _SetupWizardState extends State<SetupWizard> {
       _busy = true;
       _testLines = null;
     });
-    final lines = await testRouterConnection(_collect(), _creds);
+    final lines = await testRouterConnection(_collect(), _creds, link: widget.controller.link);
     if (!mounted) return;
     setState(() {
       _busy = false;
