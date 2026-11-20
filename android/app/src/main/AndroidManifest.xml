@@ -4,6 +4,9 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <!-- v2.0 app lock (local_auth). -->
     <uses-permission android:name="android.permission.USE_BIOMETRIC"/>
+    <!-- v2.1: scan WireGuard QR codes (asked only when scanning). -->
+    <uses-permission android:name="android.permission.CAMERA"/>
+    <uses-feature android:name="android.hardware.camera" android:required="false"/>
     <!-- In-app updates: hand the downloaded, checksum-verified APK to Android's installer.
          The user still confirms every install on the system screen. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>

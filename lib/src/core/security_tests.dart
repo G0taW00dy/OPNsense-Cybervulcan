@@ -5,6 +5,7 @@ import 'dart:math';
 
 import 'package:http/http.dart' as http;
 
+import '../api/models.dart';
 import '../api/opnsense_client.dart';
 import '../net/router_link.dart';
 import 'config.dart';
@@ -124,7 +125,7 @@ String _expectWord(ExpectedPath p) => switch (p) {
 TestStatus classifyResolver({required String? countryCode, required String? org, required ExpectedPath expected, required AppConfig cfg}) {
   final cc = countryCode?.toUpperCase();
   final o = (org ?? '').toLowerCase();
-  final quad9 = o.contains('quad9') || o.contains('woodynet');
+  final quad9 = isQuad9Org(o);
   switch (expected) {
     case ExpectedPath.vpn:
       if (cc == null) return TestStatus.info;
@@ -138,6 +139,15 @@ TestStatus classifyResolver({required String? countryCode, required String? org,
     case ExpectedPath.unknown:
       return TestStatus.info;
   }
+}
+
+/// Quad9's resolvers show up under several network names depending on the
+/// site (seen from Adelaide: "Streamline Network Solutions" and "Anycast
+/// Holdings"); all of them are Quad9, i.e. the router's encrypted DNS.
+bool isQuad9Org(String? org) {
+  final o = (org ?? '').toLowerCase();
+  return const ['quad9', 'woodynet', 'streamline network', 'anycast holdings', 'packet clearing house']
+      .any(o.contains);
 }
 
 /// The test id from bash.ws/id: a plain number, possibly wrapped in JSON or
@@ -505,12 +515,30 @@ Future<SecurityTestResult> _latency(TestEnv env) async {
     lines.add('$label: ${d.toStringAsFixed(0)} ms, jitter ${j.toStringAsFixed(1)} ms, loss ${l.toStringAsFixed(1)} %');
   }
   final st = worst(statuses);
+  final both = [
+    for (final n in [cfg.mainGateway, cfg.backupGateway]) gws.where((x) => x.name == n).firstOrNull,
+  ];
+  final congestion = st != TestStatus.pass && lineCongestion(both[0], both[1]);
   return _r(t, st, switch (st) {
+    _ when congestion =>
+      'Both tunnels are slow by about the same amount - that points to the home line being busy or congested, '
+          'not the VPN servers. Changing server won\'t help much; the shaper and a quieter line will.',
     TestStatus.pass => 'Tunnels are steady.',
     TestStatus.warn => 'Some latency / jitter - fine for browsing, noticeable in games.',
     TestStatus.fail => 'Poor tunnel quality - try "Find best server".',
     _ => 'No tunnel measurements available.',
-  }, [...lines, 'Measured by the router to the tunnel monitor IPs (US servers: ~150-220 ms from AU is normal).']);
+  }, [...lines, 'Measured by the router to the tunnel monitor IPs (US servers: ~150-260 ms from AU is normal).']);
+}
+
+/// Both tunnels degraded alike (delay within 15 % and both jittery or both
+/// lossy): the shared home line is the likely cause, not either server.
+bool lineCongestion(GatewayStatus? a, GatewayStatus? b) {
+  if (a?.delayMs == null || b?.delayMs == null) return false;
+  final da = a!.delayMs!, db = b!.delayMs!;
+  final close = (da - db).abs() <= 0.15 * max(da, db);
+  final jittery = (a.stddevMs ?? 0) > 30 && (b.stddevMs ?? 0) > 30;
+  final lossy = (a.lossPercent ?? 0) > 0 && (b.lossPercent ?? 0) > 0;
+  return close && (jittery || lossy);
 }
 
 /// Bufferbloat: round trip to an internet server (Cloudflare 1.1.1.1:443,
@@ -544,6 +572,24 @@ Future<SecurityTestResult> _bufferbloat(TestEnv env) async {
   }
   if (idle.length < 3) return _r(t, TestStatus.skip, 'Could not reach 1.1.1.1 to measure.');
 
+  // Second opinion from the router: its gateway monitor pings through the
+  // VPN tunnel, and the whole tunnel is ONE flow on the line - so it feels
+  // the line's queue even when this device's own new connections are
+  // served quickly by the router's shaper.
+  final c = env.client;
+  final gwName = env.expected == ExpectedPath.vpn ? env.config.mainGateway : null;
+  Future<double?> routerDelay() async {
+    if (c == null || gwName == null) return null;
+    try {
+      return (await c.gatewayStatus()).where((g) => g.name == gwName).firstOrNull?.delayMs;
+    } on Object {
+      return null;
+    }
+  }
+
+  final routerIdle = await routerDelay();
+  final routerLoaded = <double>[];
+
   Future<(List<double>, int, double)> loaded(Future<void> Function(void Function(int) count, bool Function() stop) load) async {
     final samples = <double>[];
     var bytes = 0;
@@ -560,6 +606,14 @@ Future<SecurityTestResult> _bufferbloat(TestEnv env) async {
         await Future<void>.delayed(const Duration(milliseconds: 200));
       }
     }();
+    final routerSampler = () async {
+      await Future<void>.delayed(const Duration(milliseconds: 5000));
+      while (!stop()) {
+        final d = await routerDelay();
+        if (d != null) routerLoaded.add(d);
+        await Future<void>.delayed(const Duration(seconds: 2));
+      }
+    }();
     try {
       await job.timeout(const Duration(seconds: 15));
     } on Object {
@@ -567,6 +621,7 @@ Future<SecurityTestResult> _bufferbloat(TestEnv env) async {
     }
     done = true;
     await sampler;
+    await routerSampler;
     sw.stop();
     return (samples, bytes, max(sw.elapsedMilliseconds / 1000, 0.5));
   }
@@ -606,12 +661,18 @@ Future<SecurityTestResult> _bufferbloat(TestEnv env) async {
   double addedFor(List<double> s) => s.isEmpty ? 0 : max(0.0, iqm(s) - base);
   final addDown = addedFor(down.$1);
   final addUp = addedFor(up.$1);
-  final worstAdd = max(addDown, addUp);
+  // The router's monitor averages over a minute, so it can only under-read
+  // a 12 s burst - taking the larger of the two never overstates the lag.
+  final addRouter = routerIdle == null || routerLoaded.isEmpty ? 0.0 : max(0.0, routerLoaded.reduce(max) - routerIdle);
+  final worstAdd = max(max(addDown, addUp), addRouter);
   String mbps((List<double>, int, double) x) => (x.$2 * 8 / x.$3 / 1e6).toStringAsFixed(1);
   final lines = [
     'Idle ${base.toStringAsFixed(0)} ms to 1.1.1.1',
     'Downloading: ${down.$1.isEmpty ? 'no samples' : '${iqm(down.$1).toStringAsFixed(0)} ms (+${addDown.toStringAsFixed(0)})'} - ~${mbps(down)} Mbit/s',
     'Uploading: ${up.$1.isEmpty ? 'no samples' : '${iqm(up.$1).toStringAsFixed(0)} ms (+${addUp.toStringAsFixed(0)})'} - ~${mbps(up)} Mbit/s',
+    if (routerIdle != null && routerLoaded.isNotEmpty)
+      'Router tunnel monitor: ${routerIdle.toStringAsFixed(0)} ms idle, up to ${routerLoaded.reduce(max).toStringAsFixed(0)} ms '
+          'under load (+${addRouter.toStringAsFixed(0)})',
     'Path: ${_expectWord(env.expected)}. Added delay under load is what makes games lag when someone else downloads.',
   ];
   // No real load = no valid result (the old version graded an idle line A+).

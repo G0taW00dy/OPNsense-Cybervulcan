@@ -1,11 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show Platform;
 
 import 'package:flutter/foundation.dart';
 
 import '../api/models.dart';
 import '../api/opnsense_client.dart';
+import '../api/shaper_models.dart';
 import '../net/router_link.dart';
+import '../net/tailscale_engine.dart';
 import '../net/tunnel.dart';
 import '../platform/vpn_modes.dart';
 import 'bypass.dart';
@@ -16,6 +19,10 @@ import 'house_state.dart';
 import 'network_map.dart';
 import 'pc_mode.dart';
 import 'schedule.dart';
+import 'shaper_tuner.dart';
+import 'change_journal.dart';
+import 'diagnostics.dart';
+import 'updater.dart' show appVersion;
 import 'server_switcher.dart';
 import 'storage.dart';
 import 'wg_keys.dart' as wg;
@@ -89,7 +96,24 @@ class CybervulcanController extends ChangeNotifier {
   bool get locked => config.appLock && !_sessionValid;
 
   /// The window was hidden / the app went to the background.
-  void appBackgrounded() => _backgroundSince ??= clock();
+  void appBackgrounded() {
+    // A file picker / browser the app opened itself is not "leaving the app".
+    if (_externalUi > 0) return;
+    _backgroundSince ??= clock();
+  }
+
+  int _externalUi = 0;
+
+  /// Runs [action] (which opens another app: a file picker, the browser, the
+  /// camera) without the app lock counting that time as being away.
+  Future<T> whileExternal<T>(Future<T> Function() action) async {
+    _externalUi++;
+    try {
+      return await action();
+    } finally {
+      _externalUi--;
+    }
+  }
 
   /// Back in the foreground: locks if it was away long enough.
   void appForegrounded() {
@@ -289,10 +313,35 @@ class CybervulcanController extends ChangeNotifier {
           await prefs.setString(_backupRemindedKey, now.toUtc().toIso8601String());
           _events.add(AlertEvent(AlertKind.backupReminder, 'Time for a router backup',
               'Last confirmed backup ${now.difference(ack).inDays} days ago. Save an encrypted config '
-              'backup (System > Configuration > Backups) to Proton Drive, then tap "I saved a backup".'));
+              'backup (System > Configuration > Backups) somewhere safe off the router, then tap "I saved a backup".'));
           notifyListeners();
         }
       }
+
+      // Provider key expiry (30 / 7 / 1 day(s) before, and when expired).
+      for (final (which, label, date) in [
+        ('main', config.mainLabel, config.mainKeyExpiry),
+        ('backup', config.backupLabel, config.backupKeyExpiry),
+      ]) {
+        final exp = parseIsoDate(date);
+        if (exp == null) continue;
+        final key = 'key_expiry_warned_$which:$date';
+        final stage = keyExpiryStage(exp, now.toLocal(), int.tryParse(prefs.getString(key) ?? ''));
+        if (stage == null) continue;
+        await prefs.setString(key, '$stage');
+        _events.add(AlertEvent(
+            AlertKind.keyExpiry,
+            stage == 0 ? 'VPN key for $label has expired' : 'VPN key for $label expires in $stage day${stage == 1 ? '' : 's'}',
+            stage == 0
+                ? 'That tunnel stops working. Make a new router config at your VPN provider, put its key on the '
+                    'router (VPN > WireGuard), then update the date in Settings.'
+                : 'Make a new router config at your VPN provider before $date and put its key on the router '
+                    '(VPN > WireGuard). If both tunnels expire, the kill switch blocks the VPN network.'));
+        notifyListeners();
+      }
+
+      // Shaper auto-tune (this device only; best on the always-on PC).
+      if (config.shaperAutoTune) await _tuneShaper();
 
       // Nightly "find best server".
       final lastBest = DateTime.tryParse(prefs.getString(_bestRunKey) ?? '');
@@ -395,9 +444,35 @@ class CybervulcanController extends ChangeNotifier {
     notifyListeners();
     final r = await _action((c) async {
       final (m, b) = await sw.peers();
-      await sw.apply(main ? m : b, server);
+      final peer = main ? m : b;
+      final old = ProtonServer(
+          name: '${main ? config.mainLabel : config.backupLabel} (${peer.serverAddress})',
+          entryIp: peer.serverAddress,
+          publicKey: peer.publicKey,
+          port: peer.serverPort);
+      try {
+        await sw.apply(peer, server, main: main);
+      } on ServerSwitchException catch (e) {
+        await journal.add('${main ? 'Main' : 'Backup'} tunnel -> ${server.name}', ok: false, detail: e.message);
+        if (!config.routerSafetyNet) rethrow;
+        // Safety net: put the old server back so the tunnel keeps working.
+        try {
+          await sw.apply(peer, old, main: main);
+        } on Object {
+          throw ServerSwitchException('${e.message} Putting the old server back also failed - '
+              'check VPN > WireGuard on the router.');
+        }
+        await journal.add('${main ? 'Main' : 'Backup'} tunnel back on ${peer.serverAddress}', ok: true,
+            detail: 'Safety net: restored after the failed switch');
+        throw ServerSwitchException('${e.message} The old server was put back.');
+      }
+      await journal.add('${main ? 'Main' : 'Backup'} tunnel -> ${server.name}', ok: true,
+          detail: 'Handshake confirmed${sw.monitorWarning == null ? '' : '; monitor not refreshed'}');
+      tuner.pathChanged();
       return true;
-    }, done: '${main ? config.mainLabel : config.backupLabel} tunnel now uses ${server.name}');
+    },
+        done: '${main ? config.mainLabel : config.backupLabel} tunnel now uses ${server.name} (handshake confirmed)',
+        detail: (_) => sw.monitorWarning);
     serverBusy = false;
     notifyListeners();
     return r ?? false;
@@ -414,6 +489,10 @@ class CybervulcanController extends ChangeNotifier {
     notifyListeners();
     try {
       final plan = await sw.findBest(candidates, log);
+      if (plan != null) {
+        await journal.add('Find best server', ok: true, detail: plan.reason);
+        tuner.pathChanged();
+      }
       if (plan != null && config.notifyOnFailover) {
         _events.add(AlertEvent(AlertKind.serverChanged,
             plan.changeMain ? 'VPN moved to ${plan.newMain.server.name}' : 'VPN server check done',
@@ -426,6 +505,10 @@ class CybervulcanController extends ChangeNotifier {
       return null;
     } on ArgumentError catch (e) {
       log('Stopped: ${e.message}');
+      return null;
+    } on ServerSwitchException catch (e) {
+      log('Stopped: ${e.message}');
+      lastActionError = 'Server switch failed: ${e.message}';
       return null;
     } finally {
       serverBusy = false;
@@ -457,10 +540,11 @@ class CybervulcanController extends ChangeNotifier {
     // Reach the router directly, or through the in-app tunnel when away.
     // This is a TLS handshake only: if the certificate is wrong nothing -
     // in particular not the API key - is sent.
-    // (v2.1: a system-VPN mode keeps the tunnel up in the background.)
-    final ls = await link.check(
-        _foreground || homeLink.keepTunnelInBackground(config) ? config : config.copyWith(remoteEnabled: false),
-        _wg);
+    // In the background (Android) no in-app engine is started (v2.1: the
+    // device's own Tailscale app may still be used, as in v2.0) - unless a
+    // system-VPN mode needs the tunnel kept up.
+    final ls = await link.check(config, _wg,
+        background: !_foreground && !homeLink.keepTunnelInBackground(config));
     if (!ls.connected) {
       return HouseSnapshot(
         fetchedAt: now,
@@ -641,6 +725,9 @@ class CybervulcanController extends ChangeNotifier {
     } on ArgumentError catch (e) {
       lastActionError = '${e.message}';
       return null;
+    } on ServerSwitchException catch (e) {
+      lastActionError = e.message;
+      return null;
     } finally {
       snapshot = snapshot.copyWith(busy: false);
       await _refreshAfterChange();
@@ -667,6 +754,129 @@ class CybervulcanController extends ChangeNotifier {
         done: 'Deadline stored on the router - it can now end the bypass by itself');
   }
 
+  // ----------------------------------------------------- v2.1 shaper
+
+  late final ChangeJournal journal = ChangeJournal(prefs);
+  late final ErrorLog errorLog = ErrorLog(prefs);
+
+  /// Redacted diagnostics text for bug reports (Settings > App).
+  String diagnostics() => buildDiagnostics(
+        appVersion: appVersion,
+        config: config,
+        snapshot: snapshot,
+        changes: journal.entries,
+        errors: errorLog.entries,
+        linkStatus: '${link.status.state.name}${link.status.viaTunnel ? ' via WireGuard' : ''}'
+            '${link.status.viaTailscale ? ' via Tailscale' : ''}${link.status.detail == null ? '' : ' (${link.status.detail})'}',
+        lastError: lastActionError,
+      );
+  late final ShaperTuner tuner = ShaperTuner(clock: clock);
+  static const shaperOriginalKey = 'shaper_original_v1';
+  int _tuneErrors = 0;
+
+  /// Original VPN limits saved before the first auto-tune change, or null.
+  Map<String, int>? get shaperOriginal {
+    try {
+      final m = jsonDecode(prefs.getString(shaperOriginalKey) ?? '');
+      return m is Map ? {for (final e in m.entries) '${e.key}': (e.value as num).toInt()} : null;
+    } on Object {
+      return null;
+    }
+  }
+
+  Future<void> _tuneShaper() async {
+    final c = _client;
+    final gw = snapshot.activeGateway;
+    if (c == null || gw == null) return;
+    try {
+      if (shaperOriginal == null) {
+        final p = findVpnPipes(await c.shaperPipes());
+        if (p == null) {
+          tuner.lastReason = 'No VPN shaper pipes found on the router.';
+          return;
+        }
+        await prefs.setString(shaperOriginalKey, jsonEncode({p.down.uuid: p.down.mbit.round(), p.up.uuid: p.up.mbit.round()}));
+      }
+      final d = await tuner.tick(c, config, gw.delayMs);
+      _tuneErrors = 0;
+      if (d != null) {
+        await journal.add('Shaper ${tuner.currentDown}/${tuner.currentUp} Mbit/s', ok: true, detail: d.reason);
+        notifyListeners();
+      }
+    } on OpnsenseException catch (e) {
+      tuner.lastReason = e.kind == ApiErrorKind.forbidden
+          ? 'Needs the router privilege "Firewall: Shaper" on this app user.'
+          : 'Router: ${e.message}';
+      // Safety net: three failures in a row -> put the original limits back.
+      if (++_tuneErrors == 3 && config.routerSafetyNet) await restoreShaperOriginal(reason: 'auto-tune kept failing');
+    }
+  }
+
+  /// Puts the limits from before auto-tune back on the router.
+  Future<bool> restoreShaperOriginal({String reason = 'restored by you'}) async {
+    final c = _client;
+    final orig = shaperOriginal;
+    if (c == null || orig == null) return false;
+    try {
+      for (final e in orig.entries) {
+        await c.setPipeBandwidth(e.key, e.value);
+      }
+      await c.shaperReconfigure();
+      await prefs.remove(shaperOriginalKey);
+      tuner.pathChanged();
+      tuner.currentDown = null;
+      tuner.currentUp = null;
+      await journal.add('Shaper back to the original limits', ok: true, detail: reason);
+      lastActionInfo = 'Shaper limits restored (${orig.values.join(' / ')} Mbit/s).';
+      notifyListeners();
+      return true;
+    } on OpnsenseException catch (e) {
+      lastActionError = 'Could not restore the shaper limits: ${e.message}';
+      notifyListeners();
+      return false;
+    }
+  }
+
+  /// Starts tuning afresh: new baseline, limits to the middle of the range.
+  Future<void> retuneShaper() async {
+    final c = _client;
+    if (c == null) return;
+    if (!await authorize('Re-tune the router shaper')) return;
+    await _action((c) async {
+      final p = findVpnPipes(await c.shaperPipes());
+      if (p == null) throw OpnsenseException(ApiErrorKind.notFound, 'No VPN shaper pipes found on the router');
+      if (shaperOriginal == null) {
+        await prefs.setString(shaperOriginalKey, jsonEncode({p.down.uuid: p.down.mbit.round(), p.up.uuid: p.up.mbit.round()}));
+      }
+      final down = ((config.shaperMinDown + config.shaperMaxDown) / 2).round();
+      final up = ((config.shaperMinUp + config.shaperMaxUp) / 2).round();
+      await c.setPipeBandwidth(p.down.uuid, down);
+      await c.setPipeBandwidth(p.up.uuid, up);
+      await c.shaperReconfigure();
+      tuner.pathChanged();
+      tuner.currentDown = down;
+      tuner.currentUp = up;
+      await journal.add('Shaper re-tune from $down/$up Mbit/s', ok: true);
+      return true;
+    }, done: 'Shaper re-tune started - auto-tune adjusts it under load');
+  }
+
+  /// Key-expiry lines for the Status banner (within 30 days or expired).
+  List<String> get keyExpiryWarnings {
+    final now = clock().toLocal();
+    return [
+      for (final (label, date) in [(config.mainLabel, config.mainKeyExpiry), (config.backupLabel, config.backupKeyExpiry)])
+        if (parseIsoDate(date) case final exp?)
+          if (daysUntil(exp, now) <= 30)
+            daysUntil(exp, now) <= 0
+                ? '$label tunnel key expired on $date - renew it at your VPN provider.'
+                : '$label tunnel key expires in ${daysUntil(exp, now)} days ($date).',
+    ];
+  }
+
+  /// "This phone" / "This PC" in messages (overridable in tests).
+  String deviceWord = Platform.isAndroid ? 'This phone' : 'This PC';
+
   Future<void> setPcClear(bool clear) async {
     if (!supportsPcMode) return;
     if (clear && !await authorize('Take this device off the VPN (CLEAR)')) return;
@@ -677,7 +887,7 @@ class CybervulcanController extends ChangeNotifier {
       return;
     }
     await _action((c) => setPcMode(client: c, cfg: config, pcIp: ip, clear: clear),
-        done: clear ? 'PC is now CLEAR (direct internet)' : 'PC is back on the VPN',
+        done: clear ? '$deviceWord is now CLEAR (direct internet)' : '$deviceWord is back on the VPN',
         detail: (r) => r.$2.describe());
   }
 
@@ -722,6 +932,46 @@ class CybervulcanController extends ChangeNotifier {
     if (setPsk) await secrets.writeWireGuardPresharedKey(presharedKey);
     await _loadWireGuard();
     await link.close();
+    notifyListeners();
+  }
+
+  // ---- v2.1 built-in Tailscale (tailscale agent). The logic lives in
+  // RouterLink / TailscaleEngine; these are the hooks for the UI.
+
+  /// State of the Tailscale engine built into the app.
+  TailscaleStatus get tailscaleStatus => link.tailscaleStatus;
+  bool get tailscaleAvailable => link.tailscale.isAvailable;
+  String? get tailscaleUnavailableReason => link.tailscale.unavailableReason;
+
+  /// Starts the built-in Tailscale engine so this device can sign in (works
+  /// at home too). Returns the sign-in URL to open in a browser, or null when
+  /// no sign-in is needed (already signed in) or it failed ([lastActionError]).
+  /// [cfg]: settings being edited (default: the saved ones).
+  Future<String?> logInTailscale([AppConfig? cfg]) async {
+    try {
+      final st = await link.startTailscale(cfg ?? config);
+      lastActionError = st.state == TailscaleState.error
+          ? 'Tailscale: ${st.lastError ?? 'the engine stopped'}'
+          : st.state == TailscaleState.starting
+              ? 'Tailscale is still starting - no Internet connection? Try again in a moment.'
+              : null;
+      notifyListeners();
+      return st.state == TailscaleState.needsLogin ? st.authUrl : null;
+    } on TailscaleException catch (e) {
+      lastActionError = 'Tailscale could not start: ${e.message}';
+      notifyListeners();
+      return null;
+    }
+  }
+
+  /// Signs this device out of the built-in Tailscale and forgets its login.
+  Future<void> logOutTailscale() async {
+    try {
+      await link.logoutTailscale();
+      lastActionInfo = 'Signed out of Tailscale. You can remove the device in the Tailscale admin console.';
+    } on TailscaleException catch (e) {
+      lastActionError = 'Tailscale sign-out failed: ${e.message}';
+    }
     notifyListeners();
   }
 

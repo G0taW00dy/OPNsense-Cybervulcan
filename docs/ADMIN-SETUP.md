@@ -229,7 +229,10 @@ What the router needs (per mode, on the **RW** interface rules, above the
   Proton WireGuard interfaces. Without these the phone has no internet while
   connected - which is the safe failure.
 
-## 3b. Tailscale (remote access behind CGNAT) - v2.0
+For the Tailscale engine use the same rules on the TAILSCALE interface; step by
+step: docs/ROUTER-REMOTE-MODES.md.
+
+## 3b. Tailscale (remote access behind CGNAT) - v2.0, built-in from v2.1
 
 WireGuard (section 3) needs the router to be reachable from the internet.
 Behind CGNAT - for example a 5G hotspot - nothing can connect in. Tailscale
@@ -249,15 +252,47 @@ connects outwards from both ends and works anyway.
 5. If System > Settings > Administration has restricted *Listen
    interfaces*, add the Tailscale interface.
 
-**Each device**: install Tailscale, sign in to the same tailnet. In
-Cybervulcan: Settings > Remote access > **Tailscale**. With the subnet route
+**Each device - built-in Tailscale (v2.1, recommended)**: no Tailscale app
+needed. The app runs its own Tailscale node in user space (no VPN slot on
+Android, no admin rights on Windows), only for the app's own connection to
+the router - the Proton app on the phone can stay on.
+
+1. Cybervulcan: Settings > Remote access: switch it on, engine **Tailscale**
+   (or **Auto**: WireGuard first, Tailscale when WireGuard can't get in within
+   a few seconds), keep **Built-in Tailscale** on, Save.
+2. Tap **Sign in to Tailscale**. A browser opens: log in with the account
+   of the tailnet the router is in. No auth key is typed into the app. This
+   works at home too - sign in before you leave.
+3. Admin console > Machines: the device shows up as `cybervulcan-<pc name>`
+   or `cybervulcan-android` (Tailscale adds `-1`, `-2` for more phones). If
+   the tailnet uses *device approval*, approve it (Settings shows "waiting
+   for approval" until then). The app saves the login in its private folder;
+   later starts are silent.
+4. **Key expiry**: Tailscale device keys expire (180 days by default).
+   Settings shows the date and warns 14 days ahead. Either sign in again
+   then, or in the admin console use *Disable key expiry* on the device
+   (fine for a device you control; then remove it promptly if it is lost).
+5. **Sign out** in Settings forgets the login on the device (and expires
+   its key when the engine is running). Also remove the machine in the admin
+   console - always do that for a lost phone (section 8).
+
+The app reaches the router at its LAN IP through the subnet route from
+step 2 above (or at the address in "Router's Tailscale address" if set). The
+route must be approved, otherwise Settings says "router not visible". The
+built-in node does not upload logs to Tailscale, offers no services to the
+tailnet and is not an exit node. The certificate is still checked
+against `router.example.com`, so a wrong path can't see the API key.
+
+**Each device - Tailscale app (as in v2.0)**: turn **Built-in Tailscale**
+off, install Tailscale, sign in to the same tailnet. With the subnet route
 the normal router URL works unchanged; otherwise enter the router's
 `100.x.y.z` (or MagicDNS name) as "Router's Tailscale address". The
 certificate is still checked against `router.example.com`.
 
-Android runs one VPN app at a time: with Tailscale on, the Proton app on
-the phone is off. To keep the house VPN while away, set the router as the
-phone's Tailscale *exit node*.
+Android runs one VPN app at a time: with the Tailscale *app* on, the Proton
+app on the phone is off. To keep the house VPN while away, set the router as
+the phone's Tailscale *exit node*. (Built-in Tailscale doesn't have this
+limit.)
 
 ## 3c. Windows: home link ("Home devices" / "Everything") - v2.1
 
@@ -382,5 +417,7 @@ admin** > enter their own API key + secret > test > Remote access:
 * **System > Access > Users > (user) > API keys**: delete the key (or the
   whole user).
 * **VPN > WireGuard > Peers**: delete (or disable) their peer, Apply.
+* **Tailscale admin console > Machines**: remove the device
+  (`cybervulcan-...` for built-in Tailscale, or its Tailscale app).
 
 Nobody else is affected.

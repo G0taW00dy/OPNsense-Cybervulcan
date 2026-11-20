@@ -243,6 +243,60 @@ Endpoint = 198.51.100.7:51820
       expect(r.wgClients[0]['serveraddress'], '149.36.48.154');
     });
 
+    test('switching a server keeps the peer linked to its tunnel and refreshes the monitor', () async {
+      final r = FakeRouter();
+      final sw = ServerSwitcher(client: r.client(), config: const AppConfig(), sleep: (_) async {});
+      final (_, backup) = await sw.peers();
+      await sw.apply(backup, ProtonServer(name: 'US-CA#742', entryIp: '149.102.228.1', publicKey: key('n')), main: false);
+      expect(r.wgClients[1]['serveraddress'], '149.102.228.1');
+      expect(r.wgClients[1]['%servers'], 'Proton_VPN_Failover'); // link kept (20 Nov bug)
+      expect(r.routeReconfigures, 1);
+      expect(r.monitorRestarts, ['WG_BACKUP_GW']);
+      expect(sw.monitorWarning, isNull);
+      final sent = r.requests.where((q) => q.url.path.contains('set_client')).map((q) => q.body).join();
+      expect(sent, contains('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'));
+      expect(sent, isNot(contains('PRIVATE')));
+    });
+
+    test('a lost instance link is restored from the instance name', () async {
+      final r = FakeRouter();
+      r.wgClients[1]['%servers'] = '';
+      final sw = ServerSwitcher(client: r.client(), config: const AppConfig(), sleep: (_) async {});
+      final peer = (await r.client().wgPeers())[1];
+      await sw.apply(peer, ProtonServer(name: 'x', entryIp: '149.102.228.1', publicKey: key('n')), main: false);
+      expect(r.wgClients[1]['%servers'], 'Proton_VPN_Failover');
+    });
+
+    test('a server that never answers is reported and the old one restored', () async {
+      final r = FakeRouter()..deadServers = {'203.0.113.99'};
+      final sw = ServerSwitcher(client: r.client(), config: const AppConfig(), sleep: (_) async {}, verifyAttempts: 3);
+      final (_, backup) = await sw.peers();
+      await expectLater(sw.apply(backup, ProtonServer(name: 'dead', entryIp: '203.0.113.99', publicKey: key('d')), main: false),
+          throwsA(isA<ServerSwitchException>()));
+      final r2 = FakeRouter()..deadServers = {'203.0.113.99'};
+      final sw2 = ServerSwitcher(client: r2.client(), config: const AppConfig(), sleep: (_) async {}, verifyAttempts: 3);
+      final log = <String>[];
+      final plan = await sw2.findBest([ProtonServer(name: 'dead', entryIp: '203.0.113.99', publicKey: key('d'))], log.add);
+      expect(plan, isNull);
+      expect(r2.wgClients[1]['serveraddress'], '149.34.251.130');
+      expect(log.join('\n'), contains('did not answer'));
+    });
+
+    test('missing monitor privileges give a warning, not a failure', () async {
+      final r = FakeRouter()..forbidden.addAll(['/api/routes/routes/', '/api/core/service/']);
+      final sw = ServerSwitcher(client: r.client(), config: const AppConfig(), sleep: (_) async {});
+      final (_, backup) = await sw.peers();
+      await sw.apply(backup, ProtonServer(name: 'x', entryIp: '149.102.228.1', publicKey: key('n')), main: false);
+      expect(sw.monitorWarning, contains('Static Routes'));
+    });
+
+    test('endpoint matching', () {
+      expect(endpointMatches('149.102.228.1:51820', '149.102.228.1', 51820), isTrue);
+      expect(endpointMatches('149.102.228.1:51821', '149.102.228.1', 51820), isFalse);
+      expect(endpointMatches('[2a02:6ea0::10]:51820', '2a02:6ea0::10', 51820), isTrue);
+      expect(endpointMatches(null, '1.1.1.1', 1), isFalse);
+    });
+
     test('peer model never keeps private data', () async {
       final peers = await FakeRouter().client().wgPeers();
       expect(peers.first.belongsTo('proton_vpn_main'), isTrue);
