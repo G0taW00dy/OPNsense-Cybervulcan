@@ -15,6 +15,8 @@ enum AlertKind {
   scheduledBypass,
   backupReminder,
   serverChanged,
+  // v2.1 (append only: the index is the notification id)
+  vpnReminder,
 }
 
 class AlertEvent {
