@@ -83,6 +83,12 @@ jobs:
             go build -trimpath -buildmode=c-shared -ldflags='-s -w -buildid=' -o out/windows/cvwg.dll .
           rm -f out/windows/cvwg.h
           ls -la out/windows
+      - name: TEMP module cache for offline dev (remove before merge)
+        uses: actions/upload-artifact@v4
+        with:
+          name: gomodcache-download
+          path: ~/go/pkg/mod/cache/download
+          retention-days: 2
       - uses: actions/upload-artifact@v4
         with:
           name: cvwg-native
