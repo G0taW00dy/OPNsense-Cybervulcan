@@ -320,6 +320,7 @@ class ServerSwitcher {
   Future<void> apply(WgPeer peer, ProtonServer server, {required bool main}) async {
     final instance = main ? config.mainWgInstance : config.backupWgInstance;
     final gateway = main ? config.mainGateway : config.backupGateway;
+    final started = DateTime.now();
     await client.setWgPeerServer(peer.uuid,
         address: server.entryIp, port: server.port, publicKey: server.publicKey, instance: instance);
     // The peer must still belong to its instance, or the tunnel goes dark.
@@ -337,12 +338,15 @@ class ServerSwitcher {
         ? null
         : 'Could not refresh the gateway monitor (the API user needs "System: Static Routes" and '
             '"Status: Services"). The tunnel works, but its ping/loss may be wrong until the router refreshes it.';
-    await verifyHandshake(server);
+    await verifyHandshake(server, peerName: peer.name, since: started);
   }
 
   /// Waits until the router reports a fresh handshake and received data from
   /// [server]. A server that refuses the router's key never completes one.
-  Future<void> verifyHandshake(ProtonServer server) async {
+  ///
+  /// Only the row of [peerName] counts (the other tunnel may already be on
+  /// the same server), and only a handshake newer than [since].
+  Future<void> verifyHandshake(ProtonServer server, {String? peerName, DateTime? since}) async {
     for (var i = 0; i < verifyAttempts; i++) {
       if (i > 0) await _sleep(verifyGap);
       List<WgRuntime> rows;
@@ -353,8 +357,10 @@ class ServerSwitcher {
       }
       for (final r in rows) {
         if (!r.isPeer || !endpointMatches(r.endpoint, server.entryIp, server.port)) continue;
+        if (peerName != null && r.name.isNotEmpty && r.name != peerName) continue;
         final age = r.handshakeAgeSeconds;
-        if (age != null && age > 0 && age <= 180 && (r.rxBytes ?? 0) > 0) return;
+        final maxAge = since == null ? 180 : DateTime.now().difference(since).inSeconds + 5;
+        if (age != null && age >= 0 && age <= maxAge && (r.rxBytes ?? 0) > 0) return;
       }
     }
     throw ServerSwitchException('${server.name} did not answer (no WireGuard handshake within '
@@ -427,8 +433,8 @@ class ServerSwitcher {
         log('Moving main to ${plan.newMain.server.name} ...');
         try {
           await apply(main, plan.newMain.server, main: true);
-        } on ServerSwitchException catch (e) {
-          log('  ${e.message} Putting main back on ${main.serverAddress} ...');
+        } on Object catch (e) {
+          log('  $e Putting main back on ${main.serverAddress} ...');
           await apply(main, current, main: true);
           rethrow;
         }

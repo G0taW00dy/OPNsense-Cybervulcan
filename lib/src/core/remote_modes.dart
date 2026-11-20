@@ -94,6 +94,43 @@ List<String> remoteModeProblems(AppConfig cfg) => [
       if (cfg.mode != 'app' && cfg.routerTunnelIp == null) 'Set the router\'s LAN IP.',
     ];
 
+/// What to do with the system VPN after a router check (v2.1 review fix:
+/// a single failed check must NOT drop the VPN - in "Everything" that would
+/// send traffic out on the plain network).
+enum VpnAction {
+  /// Bring it up (or keep it up / reconfigure).
+  run,
+
+  /// Leave it as it is: up and waiting if it was running, off if it wasn't.
+  hold,
+
+  /// Turn it off: mode off/not ready, or home confirmed.
+  stop,
+}
+
+/// [homeSeen] = how many checks in a row found the router directly (home).
+VpnAction systemVpnAction(AppConfig cfg, LinkStatus? link, {required int homeSeen, int homeConfirmations = 2}) {
+  if (!cfg.remoteEnabled || cfg.mode == 'app' || remoteModeProblems(cfg).isNotEmpty) return VpnAction.stop;
+  if (link != null && link.connected && !link.remote) {
+    return homeSeen >= homeConfirmations ? VpnAction.stop : VpnAction.hold;
+  }
+  if (wantsSystemVpn(cfg, link)) return VpnAction.run;
+  return VpnAction.hold; // failed / unclear check: keep whatever is running
+}
+
+/// "Everything via home" needs a WireGuard link for now: over Tailscale the
+/// router would have to be the device's exit node, which the app doesn't
+/// set up yet. Null = fine.
+String? transportProblem(AppConfig cfg, LinkStatus link, {required bool windows}) {
+  if (!link.builtInTailscale) return null;
+  if (cfg.mode == 'everything') {
+    return '"Everything via home" works over WireGuard only for now - over Tailscale the router would need to be '
+        'this device\'s exit node, which the app does not set up yet. Use "Home devices only", or WireGuard.';
+  }
+  if (windows) return 'On Windows the home link works over WireGuard only for now.';
+  return null;
+}
+
 /// Whether the system VPN should be up right now: a VPN mode is chosen and
 /// the app is away from home with the WireGuard tunnel connected. At home
 /// (router answers directly) it is off: the devices are reachable anyway.

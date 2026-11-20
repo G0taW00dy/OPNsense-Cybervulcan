@@ -103,6 +103,8 @@ void main() {
       expect(s, contains('speed.cloudflare.com'));
       expect(s, contains('controller.dart'));
       expect(s, contains('ApiErrorKind.forbidden'));
+      expect(redact('endpoint [2a02:6ea0:c803:5949::10]:51820'), isNot(contains('2a02')));
+      expect(redact('local fe80::1 ok'), contains('fe80::1'));
     });
 
     test('error log is redacted and bounded', () async {

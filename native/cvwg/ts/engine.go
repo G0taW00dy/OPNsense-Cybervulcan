@@ -100,8 +100,16 @@ func (e *Engine) WaitReady(ctx context.Context) error {
 	}
 }
 
-// Ready reports whether the engine is signed in and running.
-func (e *Engine) Ready() bool { return e.isReady() }
+// Ready reports whether the engine is started, signed in and running (not
+// merely started while it still waits for a login).
+func (e *Engine) Ready() bool {
+	if !e.isReady() || e.startErr != nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	return e.Status(ctx, "").State == StateRunning
+}
 
 func (e *Engine) isReady() bool {
 	select {

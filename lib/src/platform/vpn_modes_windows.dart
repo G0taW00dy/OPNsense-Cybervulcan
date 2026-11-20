@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:ffi';
+import 'dart:io' show Platform;
 
 import 'package:ffi/ffi.dart';
 
@@ -202,6 +203,17 @@ class WindowsSystemVpn implements SystemVpn {
     if (native == null) throw SystemVpnException(unsupportedReason!);
     final cfg = request.config;
     if (cfg == null) throw SystemVpnException('The home link needs the remote access settings.');
+    if (request.mode == 'everything') {
+      // v2.1 review: Windows can still leak DNS outside the adapter and the
+      // endpoint route isn't re-pinned after an IP change - not shipped yet.
+      throw SystemVpnException('"Everything via home" is not available on Windows yet - use "Home devices only".');
+    }
+    if (!installedForAllUsers(Platform.resolvedExecutable)) {
+      // The elevated helper runs this exe and its DLLs; from a per-user
+      // folder any program could swap a DLL and gain admin rights.
+      throw SystemVpnException('The home link needs the app installed for all users (Program Files): run the '
+          'installer again and choose "Install for all users".');
+    }
     final String endpoint;
     try {
       endpoint = await _resolve(cfg.wgEndpointHost, cfg.wgEndpointPort);
@@ -307,4 +319,14 @@ class _FfiHomeLink implements HomeLinkNative {
 
   @override
   void stop() => _stop();
+}
+
+/// Whether [exePath] is under Program Files (only admins can change it).
+bool installedForAllUsers(String exePath, {Map<String, String>? env}) {
+  final e = env ?? Platform.environment;
+  final p = exePath.toLowerCase().replaceAll('/', '\\');
+  return [e['ProgramFiles'], e['ProgramW6432'], e['ProgramFiles(x86)']]
+      .whereType<String>()
+      .where((d) => d.isNotEmpty)
+      .any((d) => p.startsWith('${d.toLowerCase().replaceAll('/', '\\')}\\'));
 }
