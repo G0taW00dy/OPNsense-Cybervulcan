@@ -6,6 +6,7 @@ import 'dart:isolate';
 import 'package:ffi/ffi.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../core/bypass.dart' show KeyValueStore;
 import 'tunnel.dart';
 
 /// What the app asks the built-in Tailscale engine for: a node (state folder,
@@ -324,6 +325,53 @@ class NativeTailscale implements TailscaleEngine {
 }
 
 /// `<app support folder>/tailscale` (private to the app, kept across updates).
+/// Crash guard for the built-in engine (v2.1.3). If the app dies while the
+/// engine is starting (a crash in native code leaves no Dart error), the
+/// next launch finds the marker still set and pauses the engine instead of
+/// crashing again on every start. "Sign in to Tailscale" un-pauses it.
+class TailscaleCrashGuard {
+  static KeyValueStore? store;
+  static const _marker = 'ts_start_marker_v1';
+  static const _blocked = 'ts_blocked_v1';
+
+  static bool get blocked => store?.getString(_blocked) == '1';
+
+  static Future<void> starting() async => store?.setString(_marker, DateTime.now().toUtc().toIso8601String());
+
+  /// Called once the engine has run for a while without taking the app down.
+  static Future<void> survived() async => store?.remove(_marker);
+
+  static Future<void> unblock() async {
+    await store?.remove(_blocked);
+    await store?.remove(_marker);
+  }
+
+  /// At launch: true when the previous start never survived (app closed).
+  static Future<bool> checkAtLaunch() async {
+    final s = store;
+    if (s == null || s.getString(_marker) == null) return false;
+    await s.remove(_marker);
+    await s.setString(_blocked, '1');
+    return true;
+  }
+}
+
+/// A fatal native crash saved by the Go library on the last run, or null
+/// (read once and deleted).
+Future<String?> takeNativeCrash() async {
+  try {
+    final base = await getApplicationSupportDirectory();
+    final f = File('${base.path}${Platform.pathSeparator}native-crash.txt');
+    if (!await f.exists()) return null;
+    final text = (await f.readAsString()).trim();
+    await f.delete();
+    if (text.isEmpty) return null;
+    return text.length > 6000 ? text.substring(0, 6000) : text;
+  } on Object {
+    return null;
+  }
+}
+
 Future<String> defaultTailscaleStateDir() async {
   final base = await getApplicationSupportDirectory();
   return '${base.path}${Platform.pathSeparator}tailscale';

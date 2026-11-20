@@ -8,6 +8,7 @@ import 'src/core/controller.dart';
 import 'src/core/events.dart';
 import 'src/core/storage.dart';
 import 'src/core/updater.dart';
+import 'src/net/tailscale_engine.dart';
 import 'src/platform/android_widget.dart';
 import 'src/platform/app_lock.dart';
 import 'src/platform/notifications.dart';
@@ -44,6 +45,18 @@ Future<void> main(List<String> args) async {
     // Per-device CLEAR: the PC, and (v2.0) the phone on house Wi-Fi.
     supportsPcMode: Platform.isWindows || Platform.isAndroid,
   );
+
+  // v2.1.3: a native crash from the last run (built-in Tailscale) goes into
+  // the diagnostics, and a start that took the app down pauses the engine.
+  TailscaleCrashGuard.store = controller.prefs;
+  final nativeCrash = await takeNativeCrash();
+  if (nativeCrash != null) {
+    await controller.errorLog.add('Native crash on the last run', StackTrace.fromString(nativeCrash));
+  }
+  if (await TailscaleCrashGuard.checkAtLaunch()) {
+    controller.lastActionError = 'The built-in Tailscale engine closed the app last time, so it is paused. '
+        'Settings > Remote access > "Sign in to Tailscale" tries again; Copy diagnostics shows the details.';
+  }
 
   // Diagnostics (v2.1): remember recent uncaught errors (redacted) so
   // "Copy diagnostics" can include them.

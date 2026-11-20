@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.1.3 (pre-release, 21 Nov 2026)
+
+* Phone closed ~2 s after start when away (built-in Tailscale starting):
+  - a crash while the engine starts now pauses the engine on the next
+    launch instead of crashing again ("Sign in to Tailscale" retries);
+  - a fatal native crash is saved and shown in Copy diagnostics, so the
+    cause can be found.
+
 ## 2.1.2 (pre-release, 21 Nov 2026)
 
 Found testing 2.1.0 on the PC:
