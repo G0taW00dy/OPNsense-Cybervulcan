@@ -164,14 +164,40 @@ class WindowsSystemVpn implements SystemVpn {
   String? get unsupportedReason =>
       isSupported ? null : 'This build has no home link library (cvwg.dll) - reinstall Cybervulcan.';
 
-  /// Nothing to ask up front: the admin prompt comes with [start].
+  // A start that failed (prompt cancelled, error) is not retried by the
+  // poll loop with the same settings - that would show the admin prompt
+  // again every few seconds. [prepare] (Settings: picking the mode, "Try
+  // again") clears it.
+  String? _failedSig;
+  String? _failedMsg;
+
+  /// Nothing to ask up front: the admin prompt comes with [start]. Re-arms
+  /// a start that failed before.
   @override
-  Future<bool> prepare() async => isSupported;
+  Future<bool> prepare() async {
+    _failedSig = null;
+    _failedMsg = null;
+    return isSupported;
+  }
 
   /// Shows the UAC prompt (each turn-on), then waits until the adapter is
   /// up. Throws [SystemVpnException] with a plain-English message.
   @override
   Future<void> start(SystemVpnRequest request) async {
+    if (_failedSig != null && _failedSig == request.signature) {
+      throw SystemVpnException(_failedMsg ?? friendlyHomeLinkError(null)!);
+    }
+    try {
+      await _start(request);
+      _failedSig = null;
+    } on SystemVpnException catch (e) {
+      _failedSig = request.signature;
+      _failedMsg = e.message;
+      rethrow;
+    }
+  }
+
+  Future<void> _start(SystemVpnRequest request) async {
     final native = _native;
     if (native == null) throw SystemVpnException(unsupportedReason!);
     final cfg = request.config;

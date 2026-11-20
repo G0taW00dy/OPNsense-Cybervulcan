@@ -142,6 +142,19 @@ void main() {
               .having((e) => e.message, 'message', contains('admin prompt was cancelled'))));
     });
 
+    test('a failed start is not re-prompted by the poll loop until prepare', () async {
+      final fake = FakeHomeLink(statuses: [
+        '{"helper":{"state":"error","error":"operation was canceled by the user"},"vpn":{}}',
+      ]);
+      final vpn = _vpn(fake);
+      await expectLater(vpn.start(req), throwsA(isA<SystemVpnException>()));
+      await expectLater(vpn.start(req), throwsA(isA<SystemVpnException>()));
+      expect(fake.started, hasLength(1));
+      await vpn.prepare(); // "Try again"
+      await expectLater(vpn.start(req), throwsA(isA<SystemVpnException>()));
+      expect(fake.started, hasLength(2));
+    });
+
     test('refused request is a plain error', () async {
       final fake = FakeHomeLink(startReply: '{"error":"router LAN IP \\"\\" is not a valid IPv4 address"}');
       await expectLater(_vpn(fake).start(req),
