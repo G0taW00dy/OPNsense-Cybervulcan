@@ -104,7 +104,8 @@ jobs:
           rm -f out/windows/cvwg.h
           ls -la out/windows
           # Windows-only code (home link helper) is not covered by the Linux vet above.
-          CGO_ENABLED=1 GOOS=windows GOARCH=amd64 CC=x86_64-w64-mingw32-gcc go vet ./...
+          CGO_ENABLED=1 GOOS=windows GOARCH=amd64 CC=x86_64-w64-mingw32-gcc \
+            go vet -tags "$(echo $CVWG_TAGS | tr -d ' ')" ./...
       - uses: actions/upload-artifact@v4
         with:
           name: cvwg-native
