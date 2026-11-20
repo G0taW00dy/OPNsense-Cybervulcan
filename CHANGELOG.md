@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.0.3 (pre-release)
+
+### Fixed
+
+* Bufferbloat test: the download didn't run (one 100 MB request was refused),
+  so an idle line was graded A+. Now 3 parallel streams each way with 25 MB
+  requests, and the result says "not valid" when the line couldn't be loaded.
+* bash.ws now hands out hexadecimal test ids; accepted.
+
 ## 2.0.2 (pre-release)
 
 ### Changed
