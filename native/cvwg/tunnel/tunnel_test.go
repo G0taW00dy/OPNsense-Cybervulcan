@@ -2,9 +2,11 @@ package tunnel
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -13,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/G0taW00dy/opnsense-cybervulcan/native/cvwg/vpn"
 	"golang.org/x/crypto/curve25519"
 	"golang.zx2c4.com/wireguard/conn"
 	"golang.zx2c4.com/wireguard/device"
@@ -86,8 +89,24 @@ func startFakeRouter(t *testing.T, peerPub, psk []byte) *fakeRouter {
 			}()
 		}
 	}()
+	// UDP echo on 10.10.10.254:7 (for the vpn.Dialer tests).
+	uc, err := tnet.ListenUDPAddrPort(netip.MustParseAddrPort("10.10.10.254:7"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		buf := make([]byte, 2048)
+		for {
+			n, from, err := uc.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			_, _ = uc.WriteTo(buf[:n], from)
+		}
+	}()
 	t.Cleanup(func() {
 		ln.Close()
+		uc.Close()
 		dev.Close()
 	})
 	return &fakeRouter{dev: dev, port: port, pub: pub}
@@ -221,5 +240,94 @@ func TestConfigValidation(t *testing.T) {
 	}
 	if !strings.Contains(uapi, "allowed_ip=10.10.10.254/32\n") {
 		t.Fatalf("allowed IP missing: %s", uapi)
+	}
+}
+
+func startTestTunnel(t *testing.T, allowed ...string) *Tunnel {
+	t.Helper()
+	appPriv, appPub := keypair(t)
+	r := startFakeRouter(t, appPub, nil)
+	tun, err := Start(Config{
+		PrivateKey:    b64(appPriv),
+		PeerPublicKey: b64(r.pub),
+		Endpoint:      fmt.Sprintf("127.0.0.1:%d", r.port),
+		Address:       "10.10.99.2/32",
+		AllowedIPs:    allowed,
+		Target:        "10.10.10.254:443",
+		Token:         b64(newToken(t)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(tun.Close)
+	return tun
+}
+
+func TestDialContextThroughTunnel(t *testing.T) {
+	tun := startTestTunnel(t, "10.10.10.0/24")
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	c, err := tun.DialContext(ctx, "tcp", "10.10.10.254:443")
+	if err != nil {
+		t.Fatalf("tcp: %v (status %+v)", err, tun.Status())
+	}
+	_ = c.SetDeadline(time.Now().Add(10 * time.Second))
+	_, _ = c.Write([]byte("tcp-hello"))
+	got := make([]byte, 9)
+	if _, err := io.ReadFull(c, got); err != nil || string(got) != "tcp-hello" {
+		t.Fatalf("tcp echo %q %v", got, err)
+	}
+	c.Close()
+
+	u, err := tun.DialContext(ctx, "udp", "10.10.10.254:7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer u.Close()
+	_ = u.SetDeadline(time.Now().Add(10 * time.Second))
+	_, _ = u.Write([]byte("udp-hello"))
+	n, err := u.Read(got)
+	if err != nil || string(got[:n]) != "udp-hello" {
+		t.Fatalf("udp echo %q %v", got[:n], err)
+	}
+
+	if _, err := tun.DialContext(ctx, "tcp", "192.0.2.1:443"); !errors.Is(err, ErrNotAllowed) {
+		t.Fatalf("outside allowed IPs: %v", err)
+	}
+	if _, err := tun.DialContext(ctx, "tcp", "nas.example.com:5001"); err == nil {
+		t.Fatal("host names must be rejected")
+	}
+	tun.Close()
+	if _, err := tun.DialContext(ctx, "tcp", "10.10.10.254:443"); err == nil {
+		t.Fatal("dial after Close")
+	}
+}
+
+// End to end: phone netstack -> vpn.Session -> WireGuard tunnel -> router.
+func TestVPNSessionOverTunnel(t *testing.T) {
+	tun := startTestTunnel(t, "10.10.10.254/32")
+	tdev, phone, err := netstack.CreateNetTUN([]netip.Addr{netip.MustParseAddr("10.0.0.2")}, nil, 1280)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := vpn.Start(tdev, vpn.Options{Allowed: []netip.Prefix{netip.MustParsePrefix("10.10.10.254/32")}}, tun)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	c, err := phone.DialContextTCPAddrPort(ctx, netip.MustParseAddrPort("10.10.10.254:443"))
+	if err != nil {
+		t.Fatalf("dial: %v (vpn %+v, tunnel %+v)", err, s.Stats(), tun.Status())
+	}
+	defer c.Close()
+	_ = c.SetDeadline(time.Now().Add(15 * time.Second))
+	msg := bytes.Repeat([]byte("0123456789"), 5000)
+	go func() { _, _ = c.Write(msg) }()
+	got := make([]byte, len(msg))
+	if _, err := io.ReadFull(c, got); err != nil || !bytes.Equal(got, msg) {
+		t.Fatalf("echo through vpn+tunnel: %v", err)
 	}
 }
