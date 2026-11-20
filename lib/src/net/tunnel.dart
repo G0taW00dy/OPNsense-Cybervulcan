@@ -144,8 +144,11 @@ class NativeTunnel implements AppTunnel {
         _free = _lib.lookupFunction<_FreeC, _FreeD>('cvwg_free');
 
   // Kept alive for the lifetime of the process.
-  // ignore: unused_field
   final DynamicLibrary _lib;
+
+  /// The loaded native library, shared with the built-in Tailscale engine
+  /// (one Go runtime per process: never open a second copy).
+  DynamicLibrary get library => _lib;
   final Pointer<Utf8> Function() _version;
   final Pointer<Utf8> Function(Pointer<Utf8>) _up;
   final Pointer<Utf8> Function() _status;

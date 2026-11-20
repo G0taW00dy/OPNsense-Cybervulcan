@@ -1,5 +1,23 @@
 # Changelog
 
+## 2.1.0 (unreleased)
+
+### Added - built-in Tailscale
+
+* **Tailscale built into the app**: remote access through Tailscale without
+  the Tailscale app - works behind CGNAT (5G home internet), uses no VPN
+  slot on Android and needs no admin rights on Windows. Sign in once with
+  "Sign in to Tailscale" (browser login, no auth keys); the login is kept.
+  Settings shows the Tailscale state, approval needed, relay vs direct path
+  and the device key expiry date. "Sign out" forgets the login.
+* **Remote access engine: WireGuard, Tailscale or Auto.** Auto tries
+  WireGuard first and uses Tailscale when WireGuard can't connect in time;
+  while Tailscale is working it is tried first. Remote access now has its
+  own on/off switch. v2.0 settings carry over (Tailscale users keep using the
+  Tailscale app until they turn on "Built-in Tailscale").
+* Native library: tsnet (Tailscale 1.104) next to wireguard-go in the same
+  library; Go 1.27. Log upload to Tailscale is off.
+
 ## 2.0.4 (pre-release)
 
 ### Fixed
