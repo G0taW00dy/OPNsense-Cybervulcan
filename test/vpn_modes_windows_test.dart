@@ -188,4 +188,11 @@ void main() {
     expect(friendlyHomeLinkError(null), 'The home link could not be turned on.');
     expect(friendlyHomeLinkError('Exception: 0x80070005'), isNot(contains('0x')));
   });
+
+  test('home link only from an all-users install (Program Files)', () {
+    const env = {'ProgramFiles': r'C:\Program Files', 'ProgramFiles(x86)': r'C:\Program Files (x86)'};
+    expect(installedForAllUsers(r'C:\Program Files\Cybervulcan\opnsense_cybervulcan.exe', env: env), isTrue);
+    expect(installedForAllUsers(r'C:\Users\tim\AppData\Local\Programs\Cybervulcan\x.exe', env: env), isFalse);
+    expect(installedForAllUsers(r'C:\Program Files Evil\x.exe', env: env), isFalse);
+  });
 }
