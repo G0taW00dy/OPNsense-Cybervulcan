@@ -22,11 +22,12 @@ import (
 // asynchronous because the UAC prompt can take as long as the user wants;
 // callers poll Status.
 type Client struct {
-	mu   sync.Mutex
-	conn net.Conn
-	rd   *bufio.Reader
-	busy bool // a Start (UAC prompt + adapter set-up) is in flight
-	last Status
+	mu      sync.Mutex
+	conn    net.Conn
+	rd      *bufio.Reader
+	busy    bool // a Start (UAC prompt + adapter set-up) is in flight
+	stopReq bool // Stop was called while busy: undo the start when it ends
+	last    Status
 
 	ioMu sync.Mutex // one request on the pipe at a time
 }
@@ -47,6 +48,7 @@ func (c *Client) Start(r StartRequest) error {
 		return errors.New("the home link is already being changed - wait a moment")
 	}
 	c.busy = true
+	c.stopReq = false
 	c.last = Status{State: StateStarting, Mode: r.Mode}
 	c.mu.Unlock()
 
@@ -63,6 +65,12 @@ func (c *Client) Start(r StartRequest) error {
 			return
 		}
 		c.last = st
+		if c.stopReq {
+			c.stopReq = false
+			c.mu.Unlock()
+			c.Stop()
+			c.mu.Lock()
+		}
 	}()
 	return nil
 }
@@ -94,7 +102,10 @@ func (c *Client) Stop() {
 		_, _ = c.roundTrip(Request{Op: OpStop}, 15*time.Second)
 	}
 	c.mu.Lock()
-	if !c.busy {
+	if c.busy {
+		// Turned off while the admin prompt / set-up is still running.
+		c.stopReq = true
+	} else {
 		c.closeLocked()
 		c.last = Status{State: StateOff}
 	}
