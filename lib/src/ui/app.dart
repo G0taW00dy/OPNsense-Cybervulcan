@@ -197,6 +197,10 @@ class _LockGateState extends State<LockGate> with WidgetsBindingObserver {
     }
   }
 
+  /// Android Back while locked must not pop the hidden pages.
+  @override
+  Future<bool> didPopRoute() async => c.locked;
+
   Future<void> _unlock() async {
     if (_prompting) return;
     setState(() => _prompting = true);
@@ -259,7 +263,12 @@ class _LockGateState extends State<LockGate> with WidgetsBindingObserver {
           return Stack(children: [
             // Kept mounted (pages, dialogs and their state survive), but not
             // painted, focusable or readable while locked.
-            Offstage(offstage: locked, child: TickerMode(enabled: !locked, child: widget.child)),
+            // ExcludeFocus: no Enter/Space on a focused button behind the lock
+            // (Back is swallowed in didPopRoute).
+            Offstage(
+              offstage: locked,
+              child: ExcludeFocus(excluding: locked, child: TickerMode(enabled: !locked, child: widget.child)),
+            ),
             if (locked)
               Positioned.fill(
                 child: Navigator(

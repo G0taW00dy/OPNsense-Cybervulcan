@@ -142,7 +142,7 @@ TestStatus classifyResolver({required String? countryCode, required String? org,
 }
 
 /// Quad9's resolvers show up under several network names depending on the
-/// site (seen from Adelaide: "Streamline Network Solutions" and "Anycast
+/// site (seen in Australia: "Streamline Network Solutions" and "Anycast
 /// Holdings"); all of them are Quad9, i.e. the router's encrypted DNS.
 bool isQuad9Org(String? org) {
   final o = (org ?? '').toLowerCase();

@@ -225,7 +225,7 @@ class FakeRouter {
               'name': c['name'],
               'ifname': c['%servers'],
               'endpoint': '${c['serveraddress']}:${c['serverport']}',
-              'latest-handshake-age': deadServers.contains(c['serveraddress']) ? null : 12,
+              'latest-handshake-age': deadServers.contains(c['serveraddress']) ? null : 1,
               'transfer-rx': deadServers.contains(c['serveraddress']) ? 0 : 4096,
               'peer-status': deadServers.contains(c['serveraddress']) ? 'stale' : 'online',
             },

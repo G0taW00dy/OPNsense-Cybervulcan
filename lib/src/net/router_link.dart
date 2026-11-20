@@ -729,4 +729,9 @@ class RouterLink {
     _tsHoldUntil = null;
     return _allDown();
   }
+
+  /// Like [close], but a Tailscale engine waiting for its browser sign-in
+  /// stays up (the browser itself sends the app to the background, and the
+  /// person may tap Save before finishing the sign-in).
+  Future<void> pause() => _allDown(keepHeldTailscale: true);
 }

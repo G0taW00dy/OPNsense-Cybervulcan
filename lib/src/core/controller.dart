@@ -452,7 +452,12 @@ class CybervulcanController extends ChangeNotifier {
           port: peer.serverPort);
       try {
         await sw.apply(peer, server, main: main);
-      } on ServerSwitchException catch (e) {
+      } on Object catch (err) {
+        // Any failure after the save (reconfigure timeout, lost router...)
+        // leaves the peer on an unverified server: roll back for all of them.
+        final e = err is ServerSwitchException
+            ? err
+            : ServerSwitchException(err is OpnsenseException ? 'Router: ${err.message}.' : 'The switch failed ($err).');
         await journal.add('${main ? 'Main' : 'Backup'} tunnel -> ${server.name}', ok: false, detail: e.message);
         if (!config.routerSafetyNet) rethrow;
         // Safety net: put the old server back so the tunnel keeps working.
@@ -908,7 +913,7 @@ class CybervulcanController extends ChangeNotifier {
       _creds = credentials;
     }
     _rebuildClient();
-    await link.close();
+    await link.pause(); // keeps a Tailscale sign-in in progress
     if (pollChanged) _schedule();
     await _refreshAfterChange();
   }
@@ -981,7 +986,7 @@ class CybervulcanController extends ChangeNotifier {
     _foreground = foreground;
     if (!foreground) {
       if (homeLink.keepTunnelInBackground(config)) return; // v2.1: the VPN needs the tunnel
-      unawaited(link.close());
+      unawaited(link.pause());
     } else {
       unawaited(refresh());
     }

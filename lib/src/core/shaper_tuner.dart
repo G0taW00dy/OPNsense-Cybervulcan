@@ -58,15 +58,17 @@ TuneDecision decideTune({
       return TuneDecision(reason: 'Lag +${bloat.round()} ms without much VPN traffic - not the shaper\'s doing; no change.');
     }
     return TuneDecision(
-      down: busyDown ? changed(down, clampDown(down * 0.85)) : null,
-      up: busyUp ? changed(up, clampUp(up * 0.85)) : null,
+      // Never let the clamp move a limit the other way (a pipe already below
+      // the range must not be raised while lagging).
+      down: busyDown ? changed(down, min(down, clampDown(down * 0.85))) : null,
+      up: busyUp ? changed(up, min(up, clampUp(up * 0.85))) : null,
       reason: 'Lag +${bloat.round()} ms while busy - lowering the limit.',
     );
   }
   if (bloat < tuneClearMs && (busyDown || busyUp)) {
     return TuneDecision(
-      down: busyDown ? changed(down, clampDown(max(down * 1.08, down + 1.0))) : null,
-      up: busyUp ? changed(up, clampUp(max(up * 1.08, up + 1.0))) : null,
+      down: busyDown ? changed(down, max(down, clampDown(max(down * 1.08, down + 1.0)))) : null,
+      up: busyUp ? changed(up, max(up, clampUp(max(up * 1.08, up + 1.0)))) : null,
       reason: 'Busy with low lag (+${bloat.round()} ms) - raising the limit a little.',
     );
   }

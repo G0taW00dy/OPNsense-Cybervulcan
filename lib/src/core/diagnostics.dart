@@ -42,6 +42,11 @@ class ErrorLog {
 
 final _ipv4 = RegExp(r'\b(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\b');
 final _wgKey = RegExp(r'\b[A-Za-z0-9+/]{43}=');
+// Long API key/secret-like tokens (OPNsense keys are ~80 chars of base64).
+final _longToken = RegExp(r'\b[A-Za-z0-9+/]{40,}={0,2}');
+// IPv6 addresses (anything with 2+ colons and hex groups); link-local and
+// unique-local (fe80::/10, fc00::/7) are kept.
+final _ipv6 = RegExp(r'(?<![\w:])(?:[0-9a-fA-F]{1,4}:){2,7}(?::?[0-9a-fA-F]{1,4}|:)(?![\w:])');
 // Real-looking host names only (common TLDs + 2-letter country codes), so
 // code references like `ApiErrorKind.forbidden` in error texts survive.
 final _domain = RegExp(
@@ -60,7 +65,13 @@ bool _privateV4(int a, int b) =>
 
 /// Blanks public IPv4 addresses, domain names and WireGuard keys.
 String redact(String s) {
-  var out = s.replaceAll(_wgKey, '<key>');
+  var out = s.replaceAll(_wgKey, '<key>').replaceAll(_longToken, '<token>');
+  out = out.replaceAllMapped(_ipv6, (m) {
+    final h = m.group(0)!.toLowerCase();
+    // Clock times like 12:17:39 look similar: real IPv6 has :: or a hex letter.
+    if (!h.contains('::') && !RegExp('[a-f]').hasMatch(h)) return m.group(0)!;
+    return h.startsWith('fe8') || h.startsWith('fc') || h.startsWith('fd') ? m.group(0)! : '<public-ip6>';
+  });
   out = out.replaceAllMapped(_ipv4, (m) {
     final p = [for (var i = 1; i <= 4; i++) int.parse(m.group(i)!)];
     if (p.any((x) => x > 255)) return m.group(0)!;

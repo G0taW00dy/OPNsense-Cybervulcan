@@ -282,12 +282,26 @@ class HomeLink {
     return describe() != before;
   }
 
+  int _homeSeen = 0;
+  bool _adopted = false;
+
   Future<void> _syncVpn(AppConfig cfg, LinkStatus? link) async {
     if (!vpn.isSupported) {
       state = HomeLinkState.off;
       return;
     }
-    if (!wantsSystemVpn(cfg, link)) {
+    // After an app restart the service may still be running (Always-on VPN
+    // restarts it with the last settings): take it over so it can be stopped.
+    if (!_adopted) {
+      _adopted = true;
+      try {
+        if ((await vpn.status()).running) _runningSig = 'adopted';
+      } on Object catch (_) {}
+    }
+    final home = link != null && link.connected && !link.remote;
+    _homeSeen = home ? _homeSeen + 1 : 0;
+    final action = systemVpnAction(cfg, link, homeSeen: _homeSeen);
+    if (action == VpnAction.stop) {
       if (_runningSig != null || state != HomeLinkState.off) {
         await vpn.stop();
         _runningSig = null;
@@ -297,21 +311,41 @@ class HomeLink {
       error = null;
       return;
     }
-    // The system VPN rides on whichever engine connected the app: the
-    // built-in Tailscale engine or the WireGuard tunnel.
-    final req = SystemVpnRequest.fromConfig(cfg, transport: link?.builtInTailscale == true ? 'tailscale' : 'wireguard');
-    if (req.signature != _runningSig) {
-      state = HomeLinkState.connecting;
-      try {
-        await vpn.start(req);
-        _runningSig = req.signature;
-        mode = req.mode;
-        error = null;
-      } on SystemVpnException catch (e) {
-        _runningSig = null;
-        state = HomeLinkState.error;
-        error = e.message;
+    if (action == VpnAction.hold) {
+      // A failed or unclear check (or the first "home" sighting): never drop
+      // a running VPN on that - its netstack holds traffic until the tunnel
+      // is back. Not running = nothing to do yet.
+      if (_runningSig == null) {
+        if (state != HomeLinkState.error) state = HomeLinkState.off;
         return;
+      }
+    } else {
+      final problem = transportProblem(cfg, link!, windows: Platform.isWindows);
+      if (problem != null) {
+        if (_runningSig != null) {
+          await vpn.stop();
+          _runningSig = null;
+        }
+        state = HomeLinkState.error;
+        error = problem;
+        return;
+      }
+      // The system VPN rides on whichever engine connected the app: the
+      // built-in Tailscale engine or the WireGuard tunnel.
+      final req = SystemVpnRequest.fromConfig(cfg, transport: link.builtInTailscale ? 'tailscale' : 'wireguard');
+      if (req.signature != _runningSig) {
+        state = HomeLinkState.connecting;
+        try {
+          await vpn.start(req);
+          _runningSig = req.signature;
+          mode = req.mode;
+          error = null;
+        } on SystemVpnException catch (e) {
+          _runningSig = null;
+          state = HomeLinkState.error;
+          error = e.message;
+          return;
+        }
       }
     }
     final st = await vpn.status();
