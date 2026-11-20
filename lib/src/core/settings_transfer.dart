@@ -28,6 +28,7 @@ const _deviceOnly = {
   'serverSwitcherEnabled',
   'autoBestNightly',
   'externalTests',
+  'lockAfterMinutes',
 };
 
 /// Every key that may be imported (the non-secret settings).

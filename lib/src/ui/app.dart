@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import '../core/controller.dart';
@@ -26,7 +28,7 @@ class CybervulcanApp extends StatelessWidget {
         debugShowCheckedModeBanner: false,
         theme: buildTheme(),
         themeMode: ThemeMode.dark,
-        home: HomeShell(controller: controller, updates: updates),
+        home: LockGate(controller: controller, child: HomeShell(controller: controller, updates: updates)),
       );
 }
 
@@ -135,4 +137,94 @@ class _Title extends StatelessWidget {
         SizedBox(width: 12),
         Text('Cybervulcan'),
       ]);
+}
+
+
+/// App lock (v2.0.2): shows a lock screen until the person unlocks, and
+/// tells the controller when the app goes to / comes back from the
+/// background so it can lock again after the chosen time.
+class LockGate extends StatefulWidget {
+  const LockGate({super.key, required this.controller, required this.child});
+  final CybervulcanController controller;
+  final Widget child;
+
+  @override
+  State<LockGate> createState() => _LockGateState();
+}
+
+class _LockGateState extends State<LockGate> with WidgetsBindingObserver {
+  bool _prompting = false;
+  bool _autoTried = false;
+
+  CybervulcanController get c => widget.controller;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    switch (state) {
+      case AppLifecycleState.paused:
+      case AppLifecycleState.hidden:
+        c.appBackgrounded();
+        _autoTried = false;
+      case AppLifecycleState.resumed:
+        c.appForegrounded();
+      case AppLifecycleState.inactive:
+      case AppLifecycleState.detached:
+        break;
+    }
+  }
+
+  Future<void> _unlock() async {
+    if (_prompting) return;
+    setState(() => _prompting = true);
+    await c.unlock();
+    if (mounted) setState(() => _prompting = false);
+  }
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+        listenable: c,
+        builder: (context, _) {
+          if (!c.locked) return widget.child;
+          // Phone: ask straight away when the lock screen appears. PC: wait
+          // for a click (the tray app may start hidden at sign-in).
+          if (Platform.isAndroid && !_autoTried && !_prompting) {
+            _autoTried = true;
+            WidgetsBinding.instance.addPostFrameCallback((_) => _unlock());
+          }
+          final t = Theme.of(context).textTheme;
+          return Scaffold(
+            body: Center(
+              child: Padding(
+                padding: const EdgeInsets.all(32),
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  const VulcanLogo(size: 72),
+                  const SizedBox(height: 20),
+                  Text('Cybervulcan is locked', style: t.headlineSmall),
+                  const SizedBox(height: 8),
+                  Text('The house stays protected and alerts keep coming while it is locked.',
+                      textAlign: TextAlign.center, style: t.bodyMedium?.copyWith(color: OpnColors.textSoft)),
+                  const SizedBox(height: 24),
+                  FilledButton.icon(
+                    onPressed: _prompting ? null : _unlock,
+                    icon: Icon(Platform.isWindows ? Icons.lock_open : Icons.fingerprint),
+                    label: const Text('Unlock'),
+                  ),
+                ]),
+              ),
+            ),
+          );
+        },
+      );
 }

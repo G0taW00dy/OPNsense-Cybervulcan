@@ -59,6 +59,19 @@ class SecretStore {
     }
   }
 
+  // ---- App lock backup PIN: only "salt:sha256" is stored, never the PIN.
+  static const _kAppPin = 'app_lock_pin_hash';
+
+  Future<String?> readAppPinHash() => _s.read(key: _kAppPin);
+
+  Future<void> writeAppPinHash(String? saltedHash) async {
+    if (saltedHash == null || saltedHash.isEmpty) {
+      await _s.delete(key: _kAppPin);
+    } else {
+      await _s.write(key: _kAppPin, value: saltedHash);
+    }
+  }
+
   Future<void> clearWireGuard() async {
     await _s.delete(key: _kWgPrivate);
     await _s.delete(key: _kWgPsk);

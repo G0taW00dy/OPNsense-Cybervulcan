@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -141,6 +142,7 @@ class _SettingsPageState extends State<SettingsPage> {
         if (mounted) setState(() => _autostart = v);
       });
     }
+    unawaited(_refreshPin());
     tailscaleActiveOnDevice().then((v) {
       if (mounted) setState(() => _tailscaleHere = v);
     });
@@ -407,19 +409,48 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
+  AppLock get _lock => AppLock(store: c.secrets, context: () => mounted ? context : null);
+
+  bool? _hasAppPin;
+
+  Future<void> _refreshPin() async {
+    final v = await _lock.hasAppPin();
+    if (mounted) setState(() => _hasAppPin = v);
+  }
+
   Future<void> _toggleAppLock(bool on) async {
     if (on) {
-      final lock = AppLock();
-      if (!await lock.supported()) {
-        _say(Platform.isWindows
-            ? 'Windows Hello (PIN, fingerprint or face) is not set up on this PC. Set it up in Windows Settings > Accounts > Sign-in options first.'
-            : 'This phone has no screen lock. Set a PIN, pattern or fingerprint in Android Settings first.',
+      final lock = _lock;
+      if (!await lock.available()) {
+        _say(
+            Platform.isWindows
+                ? 'Windows Hello is not set up on this PC - set an app PIN below first (or set up Windows Hello '
+                    'in Windows Settings > Accounts > Sign-in options).'
+                : 'This phone has no screen lock - set an app PIN below first (or a screen lock in Android Settings).',
             error: true);
         return;
       }
       if (!await lock.authorize('Turn on the Cybervulcan app lock')) return;
+    } else if (!await c.authorize('Turn off the Cybervulcan app lock', always: true)) {
+      return;
     }
     _set(_cfg.copyWith(appLock: on));
+  }
+
+  Future<void> _setPin() async {
+    if (_hasAppPin == true && !await c.authorize('Change the app PIN', always: true)) return;
+    if (!mounted) return;
+    if (await _lock.setAppPin(context)) {
+      _say('App PIN saved. It works as a backup whenever the fingerprint prompt has no PIN option.');
+    }
+    await _refreshPin();
+  }
+
+  Future<void> _removePin() async {
+    if (!await c.authorize('Remove the app PIN', always: true)) return;
+    await _lock.removeAppPin();
+    _say('App PIN removed.');
+    await _refreshPin();
   }
 
   // ------------------------------------------------------------- widgets
@@ -858,10 +889,42 @@ class _SettingsPageState extends State<SettingsPage> {
             '${_cfg.externalTests ? 'outside test services allowed' : 'router-only tests'}',
         children: [
           _switch('App lock', _cfg.appLock, _toggleAppLock,
-              subtitle: Platform.isWindows ? 'Windows Hello before risky actions' : 'Fingerprint / face / PIN before risky actions',
-              help: 'Asks for your ${Platform.isWindows ? 'Windows Hello PIN, fingerprint or face' : 'fingerprint, face or phone PIN'} '
-                  'before anything that takes devices off the VPN (bypass, CLEAR), changes VPN servers or saves '
-                  'settings. Going back on the VPN never asks. Cybervulcan never sees the fingerprint or PIN.'),
+              subtitle: Platform.isWindows
+                  ? 'Windows Hello or app PIN when the app opens'
+                  : 'Fingerprint / face / PIN when the app opens',
+              help: 'Unlock once when you open the app (${Platform.isWindows ? 'Windows Hello' : 'fingerprint, face or phone PIN'}, '
+                  'or the app PIN below). It locks again after the time you choose in the background. '
+                  'Turning the lock off and changing VPN servers always ask again. Shortcuts outside the app '
+                  '(${Platform.isWindows ? 'tray menu' : 'widget, quick-settings tile'}) ask before going off the '
+                  'VPN unless the app was unlocked a moment ago. Going back on the VPN never asks.'),
+          if (_cfg.appLock)
+            Row(children: [
+              const Expanded(child: Text('Lock again after')),
+              DropdownButton<int>(
+                value: const [1, 5, 15].contains(_cfg.lockAfterMinutes) ? _cfg.lockAfterMinutes : 5,
+                items: const [
+                  DropdownMenuItem(value: 1, child: Text('1 min')),
+                  DropdownMenuItem(value: 5, child: Text('5 min')),
+                  DropdownMenuItem(value: 15, child: Text('15 min')),
+                ],
+                onChanged: (v) => _set(_cfg.copyWith(lockAfterMinutes: v ?? 5)),
+              ),
+            ]),
+          Row(children: [
+            Expanded(
+              child: Row(children: [
+                Flexible(child: Text(_hasAppPin == true ? 'App PIN: set' : 'App PIN: not set')),
+                const HelpButton(
+                    title: 'App PIN',
+                    text: 'A backup way to unlock, for when the fingerprint prompt offers no PIN option or there is '
+                        'no screen lock / Windows Hello. Stored only as a salted hash on this device; never shared or '
+                        'exported. 5 wrong tries cancel the unlock.',
+                    small: true),
+              ]),
+            ),
+            TextButton(onPressed: _setPin, child: Text(_hasAppPin == true ? 'Change' : 'Set PIN')),
+            if (_hasAppPin == true) TextButton(onPressed: _removePin, child: const Text('Remove')),
+          ]),
           _switch('Allow outside test services', _cfg.externalTests, (v) => _set(_cfg.copyWith(externalTests: v)),
               help: 'Leak tests need a server on the internet to say where your traffic and DNS really come from '
                   '(ipify, ipwho.is, bash.ws, Akamai, Cloudflare - all HTTPS). On the VPN they only see the '
