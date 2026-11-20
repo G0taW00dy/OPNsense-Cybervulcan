@@ -297,6 +297,7 @@ Endpoint = 198.51.100.7:51820
     test('bash.ws id parsing and bufferbloat grades', () {
       expect(bashWsId(200, ' 1234567\n'), '1234567');
       expect(bashWsId(200, '{"id": "98765"}'), '98765');
+      expect(bashWsId(200, '4a383d141b61b555'), '4a383d141b61b555'); // seen live, Nov 2026
       expect(() => bashWsId(200, '<html>Just a moment...</html>'), throwsA(isA<Exception>()));
       expect(() => bashWsId(503, ''), throwsA(isA<Exception>()));
       expect(bufferbloatGrade(3), 'A+');

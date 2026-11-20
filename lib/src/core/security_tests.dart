@@ -145,7 +145,8 @@ TestStatus classifyResolver({required String? countryCode, required String? org,
 String bashWsId(int status, String body) {
   if (status != 200) throw Exception('bash.ws answered HTTP $status');
   final t = body.trim();
-  final m = RegExp(r'^"?(\d{4,20})"?$').firstMatch(t) ?? RegExp(r'"id"\s*:\s*"?(\d{4,20})').firstMatch(t);
+  final m = RegExp(r'^"?([0-9A-Za-z]{4,40})"?$').firstMatch(t) ??
+      RegExp(r'"id"\s*:\s*"?([0-9A-Za-z]{4,40})').firstMatch(t);
   if (m == null) {
     final peek = t.length > 40 ? '${t.substring(0, 40)}...' : t;
     throw Exception('unexpected answer "${peek.replaceAll(RegExp(r'\s+'), ' ')}"');
@@ -569,26 +570,34 @@ Future<SecurityTestResult> _bufferbloat(TestEnv env) async {
     return (samples, bytes, max(sw.elapsedMilliseconds / 1000, 0.5));
   }
 
-  final down = await loaded((count, stop) async {
-    final resp = await env.web
-        .send(http.Request('GET', Uri.parse('https://speed.cloudflare.com/__down?bytes=100000000')))
-        .timeout(const Duration(seconds: 10));
-    await for (final chunk in resp.stream) {
-      count(chunk.length);
-      if (stop()) break;
-    }
-  });
-  final up = await loaded((count, stop) async {
-    // Upload in 1 MB pieces until the time is up.
-    final piece = List<int>.filled(1 << 20, 0x61);
-    while (!stop()) {
-      final r = await env.web
-          .post(Uri.parse('https://speed.cloudflare.com/__up'), body: piece)
-          .timeout(const Duration(seconds: 10));
-      if (r.statusCode >= 400) break;
-      count(piece.length);
-    }
-  });
+  // Three parallel streams each way so one TCP connection over a long VPN
+  // path can't leave the line half-empty. 25 MB requests (Cloudflare refuses
+  // very large single downloads), repeated until the time is up.
+  final errors = <String>[];
+  Future<void> streams(Future<void> Function() one) =>
+      Future.wait([for (var i = 0; i < 3; i++) one().catchError((Object e) => errors.add('$e'))]);
+  final down = await loaded((count, stop) => streams(() async {
+        while (!stop()) {
+          final resp = await env.web
+              .send(http.Request('GET', Uri.parse('https://speed.cloudflare.com/__down?bytes=25000000')))
+              .timeout(const Duration(seconds: 10));
+          if (resp.statusCode != 200) throw Exception('download HTTP ${resp.statusCode}');
+          await for (final chunk in resp.stream) {
+            count(chunk.length);
+            if (stop()) break;
+          }
+        }
+      }));
+  final piece = List<int>.filled(1 << 20, 0x61);
+  final up = await loaded((count, stop) => streams(() async {
+        while (!stop()) {
+          final r = await env.web
+              .post(Uri.parse('https://speed.cloudflare.com/__up'), body: piece)
+              .timeout(const Duration(seconds: 10));
+          if (r.statusCode >= 400) throw Exception('upload HTTP ${r.statusCode}');
+          count(piece.length);
+        }
+      }));
 
   final base = median(idle);
   double addedFor(List<double> s) => s.isEmpty ? 0 : max(0.0, median(s) - base);
@@ -602,6 +611,16 @@ Future<SecurityTestResult> _bufferbloat(TestEnv env) async {
     'Uploading: ${up.$1.isEmpty ? 'no samples' : '${median(up.$1).toStringAsFixed(0)} ms (+${addUp.toStringAsFixed(0)})'} - ~${mbps(up)} Mbit/s',
     'Path: ${_expectWord(env.expected)}. Added delay under load is what makes games lag when someone else downloads.',
   ];
+  // No real load = no valid result (the old version graded an idle line A+).
+  final downMbps = down.$2 * 8 / down.$3 / 1e6;
+  final upMbps = up.$2 * 8 / up.$3 / 1e6;
+  if (downMbps < 1 || upMbps < 0.2 || down.$1.length < 3) {
+    return _r(t, TestStatus.warn, 'Could not load the line enough to measure (download ${downMbps.toStringAsFixed(1)}, '
+        'upload ${upMbps.toStringAsFixed(1)} Mbit/s) - result not valid, run it again.', [
+      ...lines,
+      if (errors.isNotEmpty) 'Errors: ${errors.toSet().take(3).join('; ')}',
+    ]);
+  }
   final grade = bufferbloatGrade(worstAdd);
   final st = switch (grade) {
     'A+' || 'A' => TestStatus.pass,
