@@ -2,6 +2,8 @@ package winvpn
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -168,5 +170,22 @@ func TestParseStartJSON(t *testing.T) {
 		if _, err := ParseStartJSON([]byte(bad)); err == nil {
 			t.Errorf("accepted %s", bad)
 		}
+	}
+}
+
+// The Dart side (lib/src/platform/vpn_modes_windows.dart) sends exactly this
+// shape; test/vpn_modes_windows_test.dart checks the same fixture.
+func TestDartContractFixture(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "..", "test", "fixtures", "home_link_request.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := ParseStartJSON(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := BuildPlan(r)
+	if err != nil || len(p.Routes) != 3 || r.PresharedKey == "" || r.MTU != 1280 {
+		t.Fatalf("%+v %v", p, err)
 	}
 }

@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.1.0 (unreleased)
+
+### Windows: home link (remote access modes "Home devices" / "Everything")
+
+* New **Cybervulcan** network adapter (Wintun) for the Windows app's remote
+  access modes: *Home devices* routes the router and the listed home devices
+  (e.g. the NAS) through the house; *Everything* sends all of the PC's
+  traffic via the house with the router as DNS and no IPv6 leak. *App only*
+  (the default) is unchanged and needs no admin rights.
+* Turning a mode on shows one Windows admin (UAC) prompt: a small helper
+  (the app's own exe with `--vpn-helper`) makes the network changes and
+  talks to the tray app over a pipe only your Windows user can open; it
+  accepts nothing but start / stop / status with checked settings. Turning
+  the mode off, or closing the app, removes the adapter, routes and DNS.
+* The WireGuard connection itself is kept on the real network (host route
+  to the endpoint via the normal gateway, follows Wi-Fi changes).
+* The installer ships the official signed `wintun.dll` (0.14.1, checksum
+  pinned in CI) and its licence (`wintun-LICENSE.txt`).
+
 ## 2.0.4 (pre-release)
 
 ### Fixed

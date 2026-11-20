@@ -1,0 +1,15 @@
+{
+  "mode": "home",
+  "privateKey": "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=",
+  "peerPublicKey": "ISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0A=",
+  "presharedKey": "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVpbXF1eX2A=",
+  "endpoint": "203.0.113.7:51830",
+  "address": "10.10.99.2/32",
+  "routerIp": "10.10.10.254",
+  "homeCidrs": [
+    "10.10.10.20/32",
+    "192.168.50.0/24"
+  ],
+  "keepalive": 25,
+  "mtu": 1280
+}

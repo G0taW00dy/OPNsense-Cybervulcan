@@ -57,6 +57,9 @@ func (c *Client) Start(r StartRequest) error {
 		c.busy = false
 		if err != nil {
 			c.last = Status{State: StateError, Mode: r.Mode, Error: FriendlyError(err)}
+			// Let the helper exit: no elevated process stays behind after a
+			// failed start (a retry shows the prompt again).
+			c.closeLocked()
 			return
 		}
 		c.last = st

@@ -47,6 +47,17 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "autostart"; Description: "Start Cybervulcan in the tray when I sign in"; GroupDescription: "Startup:"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
+; Home link (remote access modes "home" / "everything"): wintun.dll (official
+; signed Wintun prebuilt, checksum-pinned in CI) must sit next to cvwg.dll and
+; the exe; its licence ships as wintun-LICENSE.txt. Both come with the
+; wildcard below - fail the build if CI didn't put them there.
+#if !FileExists(SourceDir + "\wintun.dll")
+  #error wintun.dll is missing from SourceDir (see the "Fetch Wintun" CI step)
+#endif
+#if !FileExists(SourceDir + "\wintun-LICENSE.txt")
+  #error wintun-LICENSE.txt is missing from SourceDir
+#endif
+
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
