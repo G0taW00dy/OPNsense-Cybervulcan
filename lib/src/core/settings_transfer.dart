@@ -29,6 +29,10 @@ const _deviceOnly = {
   'autoBestNightly',
   'externalTests',
   'lockAfterMinutes',
+  // v2.1 per-device choices.
+  'shaperAutoTune',
+  'protonReminder',
+  'remoteMode',
 };
 
 /// Every key that may be imported (the non-secret settings).

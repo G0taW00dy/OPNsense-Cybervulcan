@@ -74,6 +74,20 @@ class AppConfig {
     this.serverCities = '',
     this.autoBestNightly = false,
     this.lockAfterMinutes = 5,
+    this.remoteTransport = 'wireguard',
+    this.remoteMode = 'app',
+    this.tailscaleBuiltIn = true,
+    this.homeDevices = '',
+    this.vpnProvider = '',
+    this.mainKeyExpiry = '',
+    this.backupKeyExpiry = '',
+    this.shaperAutoTune = false,
+    this.shaperMinDown = 20,
+    this.shaperMaxDown = 80,
+    this.shaperMinUp = 3,
+    this.shaperMaxUp = 15,
+    this.protonReminder = false,
+    this.routerSafetyNet = true,
   });
 
   /// Router address: `https://10.10.10.254` (scheme + IP/host + optional port).
@@ -202,6 +216,77 @@ class AppConfig {
   /// App lock: lock again after this many minutes in the background.
   final int lockAfterMinutes;
 
+  /// Remote access engine: `wireguard`, `tailscale` or `auto` (WireGuard first, Tailscale when WireGuard cannot get in).
+  final String remoteTransport;
+
+  /// What remote access carries: `app` (only the app talks to the router, no VPN slot), `home` (home devices such as the NAS, takes the VPN slot) or `everything` (all traffic exits via the house, takes the VPN slot).
+  final String remoteMode;
+
+  /// Use the Tailscale engine built into the app (true) or the separate Tailscale app on this device (false).
+  final bool tailscaleBuiltIn;
+
+  /// Home devices reachable in `home` mode: IPs or CIDRs, comma separated (e.g. the NAS).
+  final String homeDevices;
+
+  /// VPN provider profile for the server switcher: `proton`, `mullvad` or `other` (empty = guess from [vpnName]).
+  final String vpnProvider;
+
+  /// Date (yyyy-mm-dd) the main tunnel key/certificate expires at the provider; empty = unknown.
+  final String mainKeyExpiry;
+
+  /// Date (yyyy-mm-dd) the backup tunnel key/certificate expires at the provider; empty = unknown.
+  final String backupKeyExpiry;
+
+  /// Automatically tune the router shaper limits to the VPN tunnel (lower when latency rises, raise when clear).
+  final bool shaperAutoTune;
+
+  /// Auto-tune: lowest VPN download limit, Mbit/s.
+  final int shaperMinDown;
+
+  /// Auto-tune: highest VPN download limit, Mbit/s.
+  final int shaperMaxDown;
+
+  /// Auto-tune: lowest VPN upload limit, Mbit/s.
+  final int shaperMinUp;
+
+  /// Auto-tune: highest VPN upload limit, Mbit/s.
+  final int shaperMaxUp;
+
+  /// Phone only: remind to turn the provider app off at home and on when away.
+  final bool protonReminder;
+
+  /// Back up the router config before the app changes it, and restore it if the change fails its check.
+  final bool routerSafetyNet;
+
+  /// Provider profile in effect: [vpnProvider], or a guess from [vpnName].
+  String get providerId {
+    final p = vpnProvider.trim().toLowerCase();
+    if (const {'proton', 'mullvad', 'other'}.contains(p)) return p;
+    final n = vpnName.toLowerCase();
+    if (n.contains('proton')) return 'proton';
+    if (n.contains('mullvad')) return 'mullvad';
+    return 'other';
+  }
+
+  /// [remoteTransport], validated (`wireguard`, `tailscale` or `auto`).
+  String get transport {
+    final t = remoteTransport.trim().toLowerCase();
+    return const {'wireguard', 'tailscale', 'auto'}.contains(t) ? t : 'wireguard';
+  }
+
+  /// [remoteMode], validated (`app`, `home` or `everything`).
+  String get mode {
+    final m = remoteMode.trim().toLowerCase();
+    return const {'app', 'home', 'everything'}.contains(m) ? m : 'app';
+  }
+
+  /// [homeDevices] as canonical CIDRs (a bare IP becomes /32); invalid entries dropped.
+  List<String> get homeDeviceCidrs => [
+        for (final p in homeDevices.split(RegExp(r'[,\s]+')))
+          if (p.isNotEmpty && canonicalCidr(p.contains('/') ? p : '$p/32') != null)
+            canonicalCidr(p.contains('/') ? p : '$p/32')!,
+      ];
+
   Uri? get baseUri {
     final u = Uri.tryParse(normaliseRouterAddress(baseUrl));
     if (u == null || u.host.isEmpty || !(u.scheme == 'http' || u.scheme == 'https')) {
@@ -324,6 +409,20 @@ class AppConfig {
     String? serverCities,
     bool? autoBestNightly,
     int? lockAfterMinutes,
+    String? remoteTransport,
+    String? remoteMode,
+    bool? tailscaleBuiltIn,
+    String? homeDevices,
+    String? vpnProvider,
+    String? mainKeyExpiry,
+    String? backupKeyExpiry,
+    bool? shaperAutoTune,
+    int? shaperMinDown,
+    int? shaperMaxDown,
+    int? shaperMinUp,
+    int? shaperMaxUp,
+    bool? protonReminder,
+    bool? routerSafetyNet,
   }) =>
       AppConfig(
         baseUrl: baseUrl ?? this.baseUrl,
@@ -379,6 +478,20 @@ class AppConfig {
         serverCities: serverCities ?? this.serverCities,
         autoBestNightly: autoBestNightly ?? this.autoBestNightly,
         lockAfterMinutes: lockAfterMinutes ?? this.lockAfterMinutes,
+        remoteTransport: remoteTransport ?? this.remoteTransport,
+        remoteMode: remoteMode ?? this.remoteMode,
+        tailscaleBuiltIn: tailscaleBuiltIn ?? this.tailscaleBuiltIn,
+        homeDevices: homeDevices ?? this.homeDevices,
+        vpnProvider: vpnProvider ?? this.vpnProvider,
+        mainKeyExpiry: mainKeyExpiry ?? this.mainKeyExpiry,
+        backupKeyExpiry: backupKeyExpiry ?? this.backupKeyExpiry,
+        shaperAutoTune: shaperAutoTune ?? this.shaperAutoTune,
+        shaperMinDown: shaperMinDown ?? this.shaperMinDown,
+        shaperMaxDown: shaperMaxDown ?? this.shaperMaxDown,
+        shaperMinUp: shaperMinUp ?? this.shaperMinUp,
+        shaperMaxUp: shaperMaxUp ?? this.shaperMaxUp,
+        protonReminder: protonReminder ?? this.protonReminder,
+        routerSafetyNet: routerSafetyNet ?? this.routerSafetyNet,
       );
 
   Map<String, dynamic> toJson() => {
@@ -435,6 +548,20 @@ class AppConfig {
         'serverCities': serverCities,
         'autoBestNightly': autoBestNightly,
         'lockAfterMinutes': lockAfterMinutes,
+        'remoteTransport': remoteTransport,
+        'remoteMode': remoteMode,
+        'tailscaleBuiltIn': tailscaleBuiltIn,
+        'homeDevices': homeDevices,
+        'vpnProvider': vpnProvider,
+        'mainKeyExpiry': mainKeyExpiry,
+        'backupKeyExpiry': backupKeyExpiry,
+        'shaperAutoTune': shaperAutoTune,
+        'shaperMinDown': shaperMinDown,
+        'shaperMaxDown': shaperMaxDown,
+        'shaperMinUp': shaperMinUp,
+        'shaperMaxUp': shaperMaxUp,
+        'protonReminder': protonReminder,
+        'routerSafetyNet': routerSafetyNet,
       };
 
   factory AppConfig.fromJson(Map<String, dynamic> j) {
@@ -531,6 +658,23 @@ class AppConfig {
       serverCities: s('serverCities', d.serverCities),
       autoBestNightly: b('autoBestNightly', d.autoBestNightly),
       lockAfterMinutes: i('lockAfterMinutes', d.lockAfterMinutes),
+      // v2.0 stored Tailscale as its own switch; carry that choice over.
+      remoteTransport: j.containsKey('remoteTransport')
+          ? s('remoteTransport', d.remoteTransport)
+          : (b('tailscaleEnabled', false) ? 'tailscale' : d.remoteTransport),
+      remoteMode: s('remoteMode', d.remoteMode),
+      tailscaleBuiltIn: b('tailscaleBuiltIn', d.tailscaleBuiltIn),
+      homeDevices: s('homeDevices', d.homeDevices),
+      vpnProvider: s('vpnProvider', d.vpnProvider),
+      mainKeyExpiry: s('mainKeyExpiry', d.mainKeyExpiry),
+      backupKeyExpiry: s('backupKeyExpiry', d.backupKeyExpiry),
+      shaperAutoTune: b('shaperAutoTune', d.shaperAutoTune),
+      shaperMinDown: i('shaperMinDown', d.shaperMinDown, min: 0),
+      shaperMaxDown: i('shaperMaxDown', d.shaperMaxDown, min: 0),
+      shaperMinUp: i('shaperMinUp', d.shaperMinUp, min: 0),
+      shaperMaxUp: i('shaperMaxUp', d.shaperMaxUp, min: 0),
+      protonReminder: b('protonReminder', d.protonReminder),
+      routerSafetyNet: b('routerSafetyNet', d.routerSafetyNet),
     );
   }
 
