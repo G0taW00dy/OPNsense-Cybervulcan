@@ -53,6 +53,18 @@ type Status struct {
 	Health []string `json:"health,omitempty"`
 
 	LastError string `json:"lastError,omitempty"`
+
+	// Diagnostics (v2.1.5): whether subnet routes are accepted and what the
+	// network map holds (peer host names, online, routes).
+	RouteAll *bool     `json:"routeAll,omitempty"`
+	Peers    []PeerSum `json:"peers,omitempty"`
+}
+
+// PeerSum is a short, key-free description of one tailnet peer.
+type PeerSum struct {
+	Host   string   `json:"host"`
+	Online bool     `json:"online"`
+	Routes []string `json:"routes,omitempty"`
 }
 
 // mapBackendState converts an ipn backend state name to our state.
@@ -92,6 +104,15 @@ func statusFrom(st *ipnstate.Status, target string) Status {
 	}
 	if st.Self != nil && st.Self.KeyExpiry != nil && !st.Self.KeyExpiry.IsZero() {
 		s.KeyExpiry = st.Self.KeyExpiry.Unix()
+	}
+	for _, p := range st.Peer {
+		ps := PeerSum{Host: p.HostName, Online: p.Online}
+		if p.PrimaryRoutes != nil {
+			for i := 0; i < p.PrimaryRoutes.Len(); i++ {
+				ps.Routes = append(ps.Routes, p.PrimaryRoutes.At(i).String())
+			}
+		}
+		s.Peers = append(s.Peers, ps)
 	}
 	if p := peerFor(st, target); p != nil {
 		online := p.Online

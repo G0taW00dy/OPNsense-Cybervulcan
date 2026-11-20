@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.1.5 (pre-release, 21 Nov 2026)
+
+* Built-in Tailscale: explicitly accept subnet routes after start (the phone
+  was signed in and saw the router but never sent it a packet).
+* "Router not visible" now says what the device sees on the tailnet (peers,
+  their routes, whether routes are accepted) for diagnostics.
+
 ## 2.1.4 (pre-release, 21 Nov 2026)
 
 * Fix the phone crash when the built-in Tailscale starts: Tailscale wanted a

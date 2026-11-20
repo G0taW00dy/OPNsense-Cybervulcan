@@ -612,7 +612,8 @@ class RouterLink {
     // Keep the engine up (it is signed in; the router may just be offline).
     _touch();
     return _Attempt.failed(!st.peerFound
-        ? 'Tailscale is connected but the router is not visible - approve its subnet route in the admin console'
+        ? 'Tailscale is connected but the router is not visible - approve its subnet route in the admin console '
+            '[${st.mapSummary}]'
         : st.peerOnline == false
             ? 'Tailscale is connected but the router is offline'
             : 'no answer from the router through Tailscale');
