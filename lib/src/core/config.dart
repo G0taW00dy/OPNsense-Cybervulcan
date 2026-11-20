@@ -73,6 +73,7 @@ class AppConfig {
     this.backupWgInstance = 'Proton_VPN_Failover',
     this.serverCities = '',
     this.autoBestNightly = false,
+    this.lockAfterMinutes = 5,
   });
 
   /// Router address: `https://10.10.10.254` (scheme + IP/host + optional port).
@@ -198,6 +199,9 @@ class AppConfig {
   /// Run "find best server" once a night (between 3 and 5 am) while the app runs.
   final bool autoBestNightly;
 
+  /// App lock: lock again after this many minutes in the background.
+  final int lockAfterMinutes;
+
   Uri? get baseUri {
     final u = Uri.tryParse(normaliseRouterAddress(baseUrl));
     if (u == null || u.host.isEmpty || !(u.scheme == 'http' || u.scheme == 'https')) {
@@ -319,6 +323,7 @@ class AppConfig {
     String? backupWgInstance,
     String? serverCities,
     bool? autoBestNightly,
+    int? lockAfterMinutes,
   }) =>
       AppConfig(
         baseUrl: baseUrl ?? this.baseUrl,
@@ -373,6 +378,7 @@ class AppConfig {
         backupWgInstance: backupWgInstance ?? this.backupWgInstance,
         serverCities: serverCities ?? this.serverCities,
         autoBestNightly: autoBestNightly ?? this.autoBestNightly,
+        lockAfterMinutes: lockAfterMinutes ?? this.lockAfterMinutes,
       );
 
   Map<String, dynamic> toJson() => {
@@ -428,6 +434,7 @@ class AppConfig {
         'backupWgInstance': backupWgInstance,
         'serverCities': serverCities,
         'autoBestNightly': autoBestNightly,
+        'lockAfterMinutes': lockAfterMinutes,
       };
 
   factory AppConfig.fromJson(Map<String, dynamic> j) {
@@ -523,6 +530,7 @@ class AppConfig {
       backupWgInstance: s('backupWgInstance', d.backupWgInstance),
       serverCities: s('serverCities', d.serverCities),
       autoBestNightly: b('autoBestNightly', d.autoBestNightly),
+      lockAfterMinutes: i('lockAfterMinutes', d.lockAfterMinutes),
     );
   }
 

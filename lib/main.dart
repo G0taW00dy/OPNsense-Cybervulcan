@@ -44,7 +44,7 @@ Future<void> main(List<String> args) async {
     supportsPcMode: Platform.isWindows || Platform.isAndroid,
   );
 
-  final appLock = AppLock();
+  final appLock = AppLock(store: controller.secrets, context: () => navigatorKey.currentContext);
   controller.authorizer = appLock.authorize;
 
   final notifier = Notifier();

@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.0.2 (pre-release)
+
+### Changed
+
+* **App lock works like a banking app**: unlock once when the app opens
+  (fingerprint, face, device PIN / Windows Hello, or the new app PIN), then
+  it stays unlocked until the app has been in the background (or the PC
+  window hidden in the tray) for 1, 5 or 15 minutes. Turning the lock off,
+  changing or removing the app PIN, and changing VPN servers always ask.
+  Tray / widget / tile shortcuts that go off the VPN ask unless the app was
+  unlocked a moment ago. Going back on the VPN never asks.
+* **App PIN** (Settings > Security & privacy): a backup for prompts that only
+  offer a fingerprint, or devices without a screen lock / Windows Hello.
+  Stored as a salted hash; 5 wrong tries cancel.
+
+### Fixed
+
+* The app lock could be switched off without unlocking.
+* The system prompt now explicitly allows the device PIN, not only biometrics.
+
 ## 2.0.1 (pre-release)
 
 ### Changed

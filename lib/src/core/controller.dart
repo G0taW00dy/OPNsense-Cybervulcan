@@ -55,20 +55,78 @@ class CybervulcanController extends ChangeNotifier {
   String? lastActionError;
   String? lastActionInfo;
 
-  /// Set by the UI: asks for fingerprint / face / device PIN. Used for the
-  /// risky direction only (going off the VPN, server changes, settings) when
-  /// "App lock" is on. Returning to the VPN never needs it.
+  /// Set by the UI: asks for fingerprint / face / PIN (system, then the
+  /// app's backup PIN). Returns true when the person proved it is them.
   Future<bool> Function(String reason)? authorizer;
 
-  Future<bool> authorize(String reason) async {
-    if (!config.appLock) return true;
+  // ---- App lock session (v2.0.2): unlock once when the app opens; it locks
+  // again after [AppConfig.lockAfterMinutes] in the background. Turning the
+  // lock off and changing VPN servers always ask. Going back on the VPN never
+  // asks.
+  bool _unlocked = false;
+  DateTime? _backgroundSince;
+
+  Duration get _lockAfter => Duration(minutes: config.lockAfterMinutes.clamp(1, 240));
+
+  bool get _sessionValid {
+    if (!_unlocked) return false;
+    final b = _backgroundSince;
+    if (b != null && clock().difference(b) >= _lockAfter) {
+      _unlocked = false;
+      return false;
+    }
+    return true;
+  }
+
+  /// The app lock is on and nobody has unlocked this session.
+  bool get locked => config.appLock && !_sessionValid;
+
+  /// The window was hidden / the app went to the background.
+  void appBackgrounded() => _backgroundSince ??= clock();
+
+  /// Back in the foreground: locks if it was away long enough.
+  void appForegrounded() {
+    final wasLocked = locked;
+    final b = _backgroundSince;
+    _backgroundSince = null;
+    if (b != null && clock().difference(b) >= _lockAfter) _unlocked = false;
+    if (wasLocked != locked) notifyListeners();
+  }
+
+  /// Locks now (e.g. a "Lock" button).
+  void lockNow() {
+    _unlocked = false;
+    notifyListeners();
+  }
+
+  Future<bool> _prompt(String reason) async {
     final a = authorizer;
-    if (a == null) return true;
-    final ok = await a(reason);
-    if (!ok) {
-      lastActionError = 'Not unlocked - nothing was changed.';
+    return a == null ? true : await a(reason);
+  }
+
+  /// Unlocks the app session (lock screen).
+  Future<bool> unlock() async {
+    final ok = await _prompt('Unlock Cybervulcan');
+    if (ok) {
+      _unlocked = true;
+      _backgroundSince = null;
       notifyListeners();
     }
+    return ok;
+  }
+
+  /// Checks the person before a risky action. Inside an unlocked session it
+  /// passes straight away unless [always] (lock off, server changes).
+  Future<bool> authorize(String reason, {bool always = false}) async {
+    if (!config.appLock) return true;
+    if (!always && _sessionValid) return true;
+    final ok = await _prompt(reason);
+    if (ok) {
+      _unlocked = true;
+    } else {
+      lastActionError = 'Not unlocked - nothing was changed.';
+    }
+    notifyListeners();
     return ok;
   }
 
@@ -316,7 +374,7 @@ class CybervulcanController extends ChangeNotifier {
   /// Points the main or backup tunnel at [server].
   Future<bool> moveTunnel({required bool main, required ProtonServer server}) async {
     if (serverBusy) return false;
-    if (!await authorize('Change the ${main ? 'main' : 'backup'} VPN server')) return false;
+    if (!await authorize('Change the ${main ? 'main' : 'backup'} VPN server', always: true)) return false;
     final sw = _newSwitcher();
     if (sw == null) return false;
     serverBusy = true;
@@ -335,7 +393,7 @@ class CybervulcanController extends ChangeNotifier {
   Future<BestServerPlan?> findBestServer(List<ProtonServer> candidates, void Function(String) log,
       {bool skipLock = false}) async {
     if (serverBusy || candidates.isEmpty) return null;
-    if (!skipLock && !await authorize('Find and switch to the best VPN server')) return null;
+    if (!skipLock && !await authorize('Find and switch to the best VPN server', always: true)) return null;
     final sw = _switcher = _newSwitcher();
     if (sw == null) return null;
     serverBusy = true;

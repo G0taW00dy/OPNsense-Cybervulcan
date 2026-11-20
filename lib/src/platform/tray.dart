@@ -47,6 +47,7 @@ class TrayController with TrayListener, WindowListener {
   Future<void> showWindow() async {
     await windowManager.show();
     await windowManager.focus();
+    controller.appForegrounded();
   }
 
   Future<void> _sync() async {
@@ -162,5 +163,6 @@ class TrayController with TrayListener, WindowListener {
       }
     }
     await windowManager.hide();
+    controller.appBackgrounded();
   }
 }
