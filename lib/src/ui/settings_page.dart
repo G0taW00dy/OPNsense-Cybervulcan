@@ -795,14 +795,33 @@ class _SettingsPageState extends State<SettingsPage> {
                     'clearly better (at least 10 %). Takes about 5 minutes. You get a notification with the result.'),
           ],
           SubSection(title: 'Shaper (lag control)', children: [
-            InfoLine(c.shaperPipes == null
-                ? (c.tuner.lastReason ?? 'Reading the router\'s shaper limits ...')
-                : c.shaperPipes!.isEmpty
-                    ? 'The router has no shaper limits set up (Firewall > Shaper).'
-                    : 'Limits now: ${c.shaperPipes!.map((p) => '${p.description} ${p.mbit.round()}').join(' · ')} Mbit/s.'
-                        '${c.tuner.lastReason == null ? '' : ' Last check: ${c.tuner.lastReason}'}'),
+            if (c.shaperPipes == null)
+              InfoLine(c.tuner.lastReason ?? 'Reading the router\'s shaper limits ...')
+            else if (c.shaperPipes!.isEmpty)
+              const InfoLine('The router has no shaper limits set up (Firewall > Shaper).')
+            else ...[
+              Text('Limits on the router now', style: Theme.of(context).textTheme.labelLarge),
+              const SizedBox(height: 4),
+              for (final p in shaperDisplayOrder(c.shaperPipes!))
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 2),
+                  child: Row(children: [
+                    Expanded(child: Text(p.description.isEmpty ? 'Pipe ${p.number ?? ''}' : p.description)),
+                    Text('${p.mbit.round()} Mbit/s', style: const TextStyle(fontFeatures: [FontFeature.tabularFigures()])),
+                    SizedBox(
+                        width: 84,
+                        child: Text(p.looksVpnDownload || p.looksVpnUpload
+                            ? (_cfg.shaperAutoTune ? '  auto-tuned' : '  fixed')
+                            : '  fixed',
+                            style: Theme.of(context).textTheme.bodySmall)),
+                  ]),
+                ),
+              if (c.tuner.lastReason != null) InfoLine('Last check: ${c.tuner.lastReason}'),
+              const SizedBox(height: 8),
+            ],
             _switch('Auto-tune the shaper', _cfg.shaperAutoTune, (v) => _set(_cfg.copyWith(shaperAutoTune: v)),
-                subtitle: 'Lower the VPN limits when lag rises under load, raise them when it\'s clear.',
+                subtitle: 'Moves only the VPN limits: lower when lag rises under load, higher when it\'s clear. '
+                    'CLEAR limits stay as set on the router.',
                 help: 'Mobile lines change speed all the time, so a fixed shaper limit is either too high (lag) or '
                     'too low (wasted speed). Auto-tune watches the tunnel\'s ping (the router\'s gateway monitor) and '
                     'how busy each direction is, and moves the VPN limits within the range below - about every '
@@ -813,14 +832,14 @@ class _SettingsPageState extends State<SettingsPage> {
                     'them back, and the app does so by itself if tuning keeps failing.'),
             if (_cfg.shaperAutoTune) ...[
               Row(children: [
-                Expanded(child: _field('shaperMinDown', 'Download min', number: true, note: 'Mbit/s')),
+                Expanded(child: _field('shaperMinDown', 'VPN download min', number: true, note: 'Mbit/s')),
                 const SizedBox(width: 12),
-                Expanded(child: _field('shaperMaxDown', 'Download max', number: true, note: 'Mbit/s')),
+                Expanded(child: _field('shaperMaxDown', 'VPN download max', number: true, note: 'Mbit/s')),
               ]),
               Row(children: [
-                Expanded(child: _field('shaperMinUp', 'Upload min', number: true, note: 'Mbit/s')),
+                Expanded(child: _field('shaperMinUp', 'VPN upload min', number: true, note: 'Mbit/s')),
                 const SizedBox(width: 12),
-                Expanded(child: _field('shaperMaxUp', 'Upload max', number: true, note: 'Mbit/s')),
+                Expanded(child: _field('shaperMaxUp', 'VPN upload max', number: true, note: 'Mbit/s')),
               ]),
             ],
             Wrap(spacing: 8, runSpacing: 8, children: [

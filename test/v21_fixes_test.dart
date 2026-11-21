@@ -10,6 +10,12 @@ import 'fake_router.dart';
 
 /// Regression tests for the bugs found while testing v2.0.4 on 20 Nov 2026.
 void main() {
+  test('shaper display order: VPN first, download before upload, disabled hidden', () {
+    ShaperPipe p(String d, {bool on = true}) => ShaperPipe(uuid: d, number: 1, description: d, mbit: 10, enabled: on);
+    final order = shaperDisplayOrder([p('CLEAR upload'), p('VPN upload'), p('Old', on: false), p('CLEAR download'), p('VPN download')]);
+    expect(order.map((e) => e.description), ['VPN download', 'VPN upload', 'CLEAR download', 'CLEAR upload']);
+  });
+
   GatewayStatus gw(String name, double delay, double jitter, double loss) => GatewayStatus.fromJson({
         ...FakeRouter.gw(name, 'none', '$delay ms', '$loss %'),
         'stddev': '$jitter ms',

@@ -3,6 +3,7 @@
 ## 2.1.8 (pre-release)
 - Away: the connection no longer drops right after unlocking. The fingerprint prompt briefly counts as "background" on Android and the app stopped Tailscale at once; it now waits 15 seconds in the background before stopping remote access.
 - Settings > Shaper: if the limits could not be read (router not reachable yet), the app tries again after the next good router check instead of showing the error until Settings is reopened.
+- Settings > Shaper lists every limit on the router (VPN and CLEAR, download and upload) with whether auto-tune moves it. The min/max boxes now say they are for VPN only.
 
 ## 2.1.7 (pre-release)
 - Away, after the app was in the background: no more "router not visible" for a few seconds while Tailscale restarts. The app now waits for Tailscale's device list before deciding.

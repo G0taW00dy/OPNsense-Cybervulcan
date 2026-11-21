@@ -81,3 +81,18 @@ Map<int, int> shaperBytesFromStatistics(Map<String, dynamic> json) {
   }
   return out;
 }
+
+/// Enabled pipes for display: VPN first, then the rest; download before upload.
+List<ShaperPipe> shaperDisplayOrder(List<ShaperPipe> pipes) {
+  int rank(ShaperPipe p) {
+    final d = p.description.toLowerCase();
+    return (d.contains('vpn') ? 0 : 2) + (d.contains('up') && !d.contains('down') ? 1 : 0);
+  }
+
+  final list = pipes.where((p) => p.enabled).toList();
+  list.sort((a, b) {
+    final r = rank(a).compareTo(rank(b));
+    return r != 0 ? r : a.description.compareTo(b.description);
+  });
+  return list;
+}
