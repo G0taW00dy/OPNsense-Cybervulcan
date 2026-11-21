@@ -147,7 +147,11 @@ TestStatus classifyResolver(
   switch (expected) {
     case ExpectedPath.vpn:
       if (cc == null) return TestStatus.info;
-      if (vpn.contains(cc) || quad9) return TestStatus.pass;
+      if (quad9) return TestStatus.pass;
+      // Home-country resolver that isn't a VPN network: a leak, even when a
+      // tunnel server is in the same country (review 22 Nov).
+      if (cc == cfg.homeCountryCode.toUpperCase() && !looksLikeVpnNetwork(org)) return TestStatus.fail;
+      if (vpn.contains(cc)) return TestStatus.pass;
       // A VPN provider's resolver elsewhere: this device's own VPN app.
       if (looksLikeVpnNetwork(org)) return TestStatus.warn;
       if (cc == cfg.homeCountryCode.toUpperCase()) return TestStatus.fail;
@@ -398,9 +402,6 @@ Future<SecurityTestResult> _ipv6(TestEnv env) async {
   final cc = g?.countryCode?.toUpperCase();
   final where = '$v6 - ${g?.country ?? 'unknown country'}${g?.org != null ? ' (${g!.org})' : ''}';
   if (env.expected == ExpectedPath.vpn) {
-    if (env.vpnSet.contains(cc) && looksLikeVpnNetwork(g?.org)) {
-      return _r(t, TestStatus.pass, 'IPv6 goes through the VPN too.', [where]);
-    }
     if (cc == env.config.homeCountryCode.toUpperCase() && !looksLikeVpnNetwork(g?.org)) {
       return _r(t, TestStatus.fail, 'IPv6 LEAK: IPv6 traffic leaves via your ISP, around the VPN.', [where]);
     }

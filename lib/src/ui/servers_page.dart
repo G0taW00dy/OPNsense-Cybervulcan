@@ -294,7 +294,7 @@ class _ServersPageState extends State<ServersPage> {
 
   Future<void> _remove(ProtonServer s) async {
     _servers = _servers.where((x) => x.entryIp != s.entryIp).toList();
-    await c.saveServers(_servers);
+    await c.removeServer(s);
     if (mounted) {
       setState(() => _message = 'Removed ${s.name} from the list${_whereSaved()}. The tunnels are not changed.');
     }

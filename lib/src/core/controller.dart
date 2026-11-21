@@ -465,24 +465,73 @@ class CybervulcanController extends ChangeNotifier {
     } on OpnsenseException catch (e) {
       serverListNote = 'Showing this device\'s copy - the router\'s list could not be read (${_listError(e)}).';
       return local;
+    } on Object catch (e) {
+      serverListNote = 'Showing this device\'s copy - $e';
+      return local;
     }
   }
 
-  /// Saves the list on this device and, when switched on, on the router.
+  /// Saves the list on this device and, when switched on, adds / updates
+  /// its servers in the router list. Never deletes another device's entries
+  /// (review 22 Nov: a stale copy could wipe them) - use [removeServer].
   Future<void> saveServers(List<ProtonServer> servers) async {
     await _saveLocalServers(servers);
+    if (!config.serverListOnRouter || _client == null) return;
+    serverListNote = null;
+    await _addToRouterList(servers, replace: true);
+  }
+
+  /// Removes [server] from this device's list and from the router list.
+  Future<void> removeServer(ProtonServer server) async {
+    await _saveLocalServers(
+        [for (final s in cachedServers()) if (!s.sameEndpoint(server.entryIp, server.publicKey)) s]);
     final c = _client;
     if (!config.serverListOnRouter || c == null) return;
     try {
-      await _syncRouterList(c, await c.wgPeers(), servers);
+      for (final p in await c.wgPeers()) {
+        if (isListPeer(p) && p.publicKey == server.publicKey.trim()) await c.deleteWgPeer(p.uuid);
+      }
       serverListNote = null;
-    } on OpnsenseException catch (e) {
-      serverListNote = 'Saved on this device only - the router: ${_listError(e)}.';
+    } on Object catch (e) {
+      serverListNote = 'Removed on this device only - ${e is OpnsenseException ? _listError(e) : e}';
+    }
+  }
+
+  /// Adds [servers] to the router list (and this device's copy) without
+  /// removing anything: for background saves (after a switch, Find best).
+  /// Servers a tunnel uses are skipped by [planListSync].
+  Future<void> _addToRouterList(List<ProtonServer> servers, {bool replace = false}) async {
+    final c = _client;
+    if (!config.serverListOnRouter || c == null || servers.isEmpty) return;
+    try {
+      final peers = await c.wgPeers();
+      final onRouter = [for (final p in peers) ?serverFromListPeer(p)];
+      // Everything already on the router stays. With [replace] (an edit on
+      // the VPN servers page) a server given here replaces its own entry (new
+      // city or name); background adds never overwrite a better-named entry.
+      final merged = replace
+          ? [
+              for (final r in onRouter)
+                if (!servers.any((s) => s.sameEndpoint(r.entryIp, r.publicKey))) r,
+              ...servers,
+            ]
+          : [
+              ...onRouter,
+              for (final s in servers)
+                if (!onRouter.any((r) => r.sameEndpoint(s.entryIp, s.publicKey))) s,
+            ];
+      await _syncRouterList(c, peers, merged);
+      final local = cachedServers();
+      final add = [for (final s in merged) if (!local.any((x) => x.sameEndpoint(s.entryIp, s.publicKey))) s];
+      if (add.isNotEmpty) await _saveLocalServers([...local, ...add]);
+    } on Object catch (e) {
+      serverListNote = 'Server list on the router not updated: ${e is OpnsenseException ? _listError(e) : e}';
     }
   }
 
   /// Makes the router's list peers match [wanted]. Only switched-off,
   /// unlinked CVL_ peers are ever deleted; the live tunnels are not touched.
+  /// Deleting is only right after a fresh read (the VPN servers page).
   Future<void> _syncRouterList(OpnsenseClient c, List<WgPeer> peers, List<ProtonServer> wanted) async {
     final plan = planListSync(peers, wanted);
     final failed = <String>[];
@@ -500,6 +549,9 @@ class CybervulcanController extends ChangeNotifier {
         await c.addWgListPeer(name: listPeerName(s), address: s.entryIp, port: s.port, publicKey: s.publicKey);
         added++;
       } on OpnsenseException catch (e) {
+        failed.add('${s.name}: ${e.message}');
+      } on ArgumentError catch (e) {
+        // e.g. a hand-made peer with a host name endpoint: skip it, keep going.
         failed.add('${s.name}: ${e.message}');
       }
     }
@@ -538,17 +590,21 @@ class CybervulcanController extends ChangeNotifier {
       final (m, b) = await sw.peers();
       final peer = main ? m : b;
       final label = main ? config.mainLabel : config.backupLabel;
-      final old = ProtonServer(
+      final known = peer.match(cachedServers());
+      final old = known ?? ProtonServer(
           name: 'Former $label server',
           entryIp: peer.serverAddress,
           publicKey: peer.publicKey,
           port: peer.serverPort,
-          // The tunnel's name is usually its city (that is what the switch
-          // renames it to); "Main"/"Backup" are not.
-          city: label == 'Main' || label == 'Backup' ? null : label);
+          // With "names follow city" on, the tunnel's name is its city;
+          // otherwise it may be a custom name ("Gaming"), not a city.
+          city: !config.namesFollowCity || label == 'Main' || label == 'Backup' ? null : label);
       try {
         await sw.apply(peer, server, main: main);
       } on Object catch (err) {
+        // apply() may already have removed the target's list entry: put it
+        // back (review 22 Nov), whatever happens next.
+        if (config.serverListOnRouter) unawaited(_addToRouterList([server]));
         // Any failure after the save (reconfigure timeout, lost router...)
         // leaves the peer on an unverified server: roll back for all of them.
         final e = err is ServerSwitchException
@@ -577,7 +633,7 @@ class CybervulcanController extends ChangeNotifier {
       if (!cached.any((s) => s.sameEndpoint(old.entryIp, old.publicKey))) {
         await _saveLocalServers([...cached, old]);
       }
-      if (config.serverListOnRouter) unawaited(saveServers(cachedServers()));
+      if (config.serverListOnRouter) unawaited(_addToRouterList([old]));
       return true;
     },
         done: '${main ? config.mainLabel : config.backupLabel} tunnel now uses ${server.name} (handshake confirmed)',
@@ -596,6 +652,17 @@ class CybervulcanController extends ChangeNotifier {
     if (sw == null) return null;
     serverBusy = true;
     notifyListeners();
+    final before = <ProtonServer>[];
+    try {
+      final (m0, b0) = await sw.peers();
+      for (final (label, p) in [(config.mainLabel, m0), (config.backupLabel, b0)]) {
+        before.add(p.match(cachedServers()) ??
+            ProtonServer(name: 'Former $label server', entryIp: p.serverAddress, publicKey: p.publicKey,
+                port: p.serverPort));
+      }
+    } on Object {
+      // Only used to keep the list complete afterwards.
+    }
     try {
       final plan = await sw.findBest(candidates, log);
       if (plan != null) {
@@ -627,9 +694,11 @@ class CybervulcanController extends ChangeNotifier {
       _switcher = null;
       notifyListeners();
       unawaited(_refreshAfterChange());
-      // Candidates tried on the backup left the list while in use: put back
-      // every server no tunnel uses now.
-      if (config.serverListOnRouter) unawaited(saveServers(cachedServers()));
+      // Candidates tried on the backup (and the servers the tunnels used
+      // before) go back into the router list - ADD only: a background save of
+      // this device's older copy must never delete what another device added
+      // (review 22 Nov).
+      if (config.serverListOnRouter) unawaited(_addToRouterList([...candidates, ...before]));
     }
   }
 
@@ -927,6 +996,12 @@ class CybervulcanController extends ChangeNotifier {
     if (c == null) return;
     if (wan == null) {
       clearTuner.lastReason = 'No WAN gateway found - set it in Settings (router: System > Gateways).';
+      return;
+    }
+    final mon = wan.monitor?.trim() ?? '';
+    if (mon.isEmpty || mon == '~' || wan.delayMs == null) {
+      // Without a monitor IP the router reports no real delay for the line.
+      clearTuner.lastReason = 'The WAN gateway has no monitor IP - set one (e.g. 9.9.9.9) under System > Gateways.';
       return;
     }
     try {

@@ -42,12 +42,13 @@ enum Verdict { ok, mismatch, inconclusive, warn }
 /// A VPN provider's or hosting network (where VPN servers live), not a home
 /// ISP. Used to tell "this device's own VPN app is on" apart from a leak.
 bool looksLikeVpnNetwork(String? org) {
-  final o = (org ?? '').toLowerCase();
+  final o = ' ${(org ?? '').toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), ' ')} ';
+  // Whole words only (review 22 Nov: "31173" matched AS131173).
   return const [
-    'datacamp', 'proton', 'mullvad', '31173', 'm247', 'host universal', 'packethub', 'tefincom',
-    'leaseweb', 'cdn77', 'zenlayer', 'choopa', 'vultr', 'the constant company', 'ovh', 'hetzner',
-    'digitalocean', 'quadranet', 'performive', 'xtom', 'clouvider', 'gsl networks',
-  ].any(o.contains);
+    'datacamp', 'proton ag', 'proton vpn', 'mullvad', 'm247', 'host universal', 'packethub', 'tefincom',
+    'leaseweb', 'cdn77', 'zenlayer', 'choopa', 'vultr', 'the constant company', 'ovh sas', 'ovhcloud', 'hetzner',
+    'digitalocean', 'quadranet', 'performive', 'xtom', 'clouvider', 'gsl networks', '31173 services',
+  ].any((w) => o.contains(' $w '));
 }
 
 /// Countries the house VPN may exit in: the "VPN country" setting plus the
@@ -78,7 +79,13 @@ ExitCheckResult evaluateExit(ExitInfo info, ExpectedPath expected, AppConfig cfg
   final vpnWords = vpn.join(' / ');
   switch (expected) {
     case ExpectedPath.vpn:
-      if (vpn.contains(cc) && (vpnNet || info.org == null)) {
+      // Home country: only a known VPN network may pass, never an unknown
+      // org (review 22 Nov: a tunnel server in AU must not hide an ISP leak).
+      if (cc == home && !vpnNet) {
+        return ExitCheckResult(info, expected, Verdict.mismatch,
+            'Expected a ${cfg.vpnName} exit ($vpnWords) but traffic leaves via a $home network - possible leak.');
+      }
+      if (vpn.contains(cc) && (vpnNet || (info.org == null && cc != home))) {
         return ExitCheckResult(info, expected, Verdict.ok, 'Exit is in $cc on ${cfg.vpnName}, matching the house tunnels.');
       }
       if (vpnNet) {
