@@ -795,6 +795,15 @@ class _SettingsPageState extends State<SettingsPage> {
                           'candidates on this one, so the house never loses its main tunnel while testing.',
                       validator: _required)),
             ]),
+            _switch('Keep the server list on the router', _cfg.serverListOnRouter,
+                (v) => _set(_cfg.copyWith(serverListOnRouter: v)),
+                subtitle: 'Add servers once - every device with your key sees the same list.',
+                help: 'Each server in the list is saved on the router as a WireGuard peer that is switched OFF and '
+                    'not linked to any tunnel, named "CVL_<server>_<city>". It never carries traffic, and adding or '
+                    'removing one does not touch the live tunnels. You will see them under VPN > WireGuard > Peers - '
+                    'leave them switched off.\n\nThe first time, this device\'s list is added to the router. After '
+                    'that the router\'s list is the master copy. Needs "VPN: WireGuard" on YOUR app user (the same '
+                    'privilege as the server switcher).'),
             _field('serverCities', 'Cities to choose from',
                 help: 'Comma-separated cities "find best" may pick, e.g. "Chicago, New York". Empty = any. '
                     'Keeps streaming regions predictable.',

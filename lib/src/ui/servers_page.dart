@@ -148,9 +148,30 @@ class _ServersPageState extends State<ServersPage> {
     super.initState();
     _servers = c.cachedServers();
     unawaited(_loadPeers());
+    unawaited(_loadList());
     if (widget.autoStartBest) {
       WidgetsBinding.instance.addPostFrameCallback((_) => unawaited(_findBest()));
     }
+  }
+
+  /// " (on the router - every device sees it)" / a failure note / "".
+  String _whereSaved() => !c.config.serverListOnRouter
+      ? ''
+      : c.serverListNote != null
+          ? ' - ${c.serverListNote}'
+          : ' (on the router - your other devices see it too)';
+
+  /// Reads the shared list from the router (when switched on in Settings).
+  Future<void> _loadList() async {
+    if (!c.config.serverListOnRouter) return;
+    setState(() => _loading = true);
+    final list = await c.loadServerList();
+    if (!mounted) return;
+    setState(() {
+      _loading = false;
+      _servers = list;
+      if (c.serverListNote != null) _message = c.serverListNote;
+    });
   }
 
   /// What each tunnel uses on the router now (null until read / unreadable).
@@ -243,7 +264,7 @@ class _ServersPageState extends State<ServersPage> {
         name: s.name, entryIp: s.entryIp, publicKey: s.publicKey, port: s.port, city: city, country: c.config.vpnCountryCode);
     _servers = [..._servers.where((x) => x.entryIp != server.entryIp), server];
     await c.saveServers(_servers);
-    if (mounted) setState(() => _message = 'Added ${server.name}. (Any private key in it was ignored.)');
+    if (mounted) setState(() => _message = 'Added ${server.name}${_whereSaved()}. (Any private key in it was ignored.)');
   }
 
   Future<void> _setCity(ProtonServer s) async {
@@ -258,13 +279,15 @@ class _ServersPageState extends State<ServersPage> {
             : x,
     ];
     await c.saveServers(_servers);
-    if (mounted) setState(() => _message = '${s.name} is now listed in $city.');
+    if (mounted) setState(() => _message = '${s.name} is now listed in $city${_whereSaved()}.');
   }
 
   Future<void> _remove(ProtonServer s) async {
     _servers = _servers.where((x) => x.entryIp != s.entryIp).toList();
     await c.saveServers(_servers);
-    if (mounted) setState(() => _message = 'Removed ${s.name} from the list (the router is not changed).');
+    if (mounted) {
+      setState(() => _message = 'Removed ${s.name} from the list${_whereSaved()}. The tunnels are not changed.');
+    }
   }
 
   Future<String?> _askCity(ProtonServer s) async {

@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import '../api/models.dart';
 import '../api/opnsense_client.dart';
 import '../api/shaper_models.dart';
+import '../api/wireguard_models.dart';
 import '../net/router_link.dart';
 import '../net/tailscale_engine.dart';
 import '../net/tunnel.dart';
@@ -23,6 +24,7 @@ import 'shaper_tuner.dart';
 import 'change_journal.dart';
 import 'diagnostics.dart';
 import 'updater.dart' show appVersion;
+import 'router_server_list.dart';
 import 'server_switcher.dart';
 import 'storage.dart';
 import 'wg_keys.dart' as wg;
@@ -421,8 +423,75 @@ class CybervulcanController extends ChangeNotifier {
     }
   }
 
-  Future<void> saveServers(List<ProtonServer> servers) =>
+  Future<void> _saveLocalServers(List<ProtonServer> servers) =>
       prefs.setString(serverCacheKey, jsonEncode([for (final s in servers) s.toJson()]));
+
+  static const _listSeededKey = 'server_list_seeded_v1';
+
+  /// Why the router-stored list was not used last time (shown on the page).
+  String? serverListNote;
+
+  String _listError(OpnsenseException e) => e.kind == ApiErrorKind.forbidden
+      ? 'needs the "VPN: WireGuard" privilege on your app user'
+      : e.message;
+
+  /// The server list: from the router when [AppConfig.serverListOnRouter] is
+  /// on (the router is the master copy; this device keeps a copy for when the
+  /// router can't be reached), else this device's own list. The first time
+  /// after switching it on, this device's servers are added to the router.
+  Future<List<ProtonServer>> loadServerList() async {
+    final local = cachedServers();
+    final c = _client;
+    if (!config.serverListOnRouter || c == null) return local;
+    try {
+      final peers = await c.wgPeers();
+      var list = [for (final p in peers) ?serverFromListPeer(p)];
+      if (!prefs.flag(_listSeededKey)) {
+        list = [
+          ...list,
+          for (final s in local)
+            if (!list.any((r) => r.sameEndpoint(s.entryIp, s.publicKey))) s,
+        ];
+        await _syncRouterList(c, peers, list);
+        await prefs.setFlag(_listSeededKey);
+      }
+      await _saveLocalServers(list);
+      serverListNote = null;
+      return list;
+    } on OpnsenseException catch (e) {
+      serverListNote = 'Showing this device\'s copy - the router\'s list could not be read (${_listError(e)}).';
+      return local;
+    }
+  }
+
+  /// Saves the list on this device and, when switched on, on the router.
+  Future<void> saveServers(List<ProtonServer> servers) async {
+    await _saveLocalServers(servers);
+    final c = _client;
+    if (!config.serverListOnRouter || c == null) return;
+    try {
+      await _syncRouterList(c, await c.wgPeers(), servers);
+      serverListNote = null;
+    } on OpnsenseException catch (e) {
+      serverListNote = 'Saved on this device only - the router: ${_listError(e)}.';
+    }
+  }
+
+  /// Makes the router's list peers match [wanted]. Only switched-off,
+  /// unlinked CVL_ peers are ever deleted; the live tunnels are not touched.
+  Future<void> _syncRouterList(OpnsenseClient c, List<WgPeer> peers, List<ProtonServer> wanted) async {
+    final plan = planListSync(peers, wanted);
+    for (final uuid in plan.delete) {
+      await c.deleteWgPeer(uuid);
+    }
+    for (final s in plan.add) {
+      await c.addWgListPeer(name: listPeerName(s), address: s.entryIp, port: s.port, publicKey: s.publicKey);
+    }
+    if (plan.delete.isNotEmpty || plan.add.isNotEmpty) {
+      await journal.add('Server list on the router: ${plan.add.length} added, ${plan.delete.length} removed', ok: true,
+          detail: 'Switched-off entries only - the tunnels were not changed.');
+    }
+  }
 
   ServerSwitcher? _newSwitcher() {
     final c = _client;
@@ -1008,6 +1077,9 @@ class CybervulcanController extends ChangeNotifier {
 
   Future<void> saveSettings(AppConfig cfg, {ApiCredentials? credentials}) async {
     final pollChanged = cfg.pollInterval != config.pollInterval;
+    // Switching the router list off and on again later merges this device's
+    // list into the router's once more.
+    if (config.serverListOnRouter && !cfg.serverListOnRouter) await prefs.remove(_listSeededKey);
     config = cfg;
     await prefs.saveConfig(cfg);
     if (credentials != null) {

@@ -69,6 +69,7 @@ class AppConfig {
     this.schedMinutes = 180,
     this.backupReminderDays = 0,
     this.serverSwitcherEnabled = false,
+    this.serverListOnRouter = false,
     this.mainWgInstance = 'Proton_VPN_Main',
     this.backupWgInstance = 'Proton_VPN_Failover',
     this.serverCities = '',
@@ -206,6 +207,10 @@ class AppConfig {
 
   /// Show the Proton server switcher (needs the "VPN: WireGuard" privilege).
   final bool serverSwitcherEnabled;
+
+  /// Keep the server list on the router (switched-off WireGuard peers named
+  /// CVL_...), shared by every device with the owner's key.
+  final bool serverListOnRouter;
 
   /// WireGuard instance behind the main gateway.
   final String mainWgInstance;
@@ -421,6 +426,7 @@ class AppConfig {
     int? schedMinutes,
     int? backupReminderDays,
     bool? serverSwitcherEnabled,
+    bool? serverListOnRouter,
     String? mainWgInstance,
     String? backupWgInstance,
     String? serverCities,
@@ -496,6 +502,7 @@ class AppConfig {
         schedMinutes: schedMinutes ?? this.schedMinutes,
         backupReminderDays: backupReminderDays ?? this.backupReminderDays,
         serverSwitcherEnabled: serverSwitcherEnabled ?? this.serverSwitcherEnabled,
+        serverListOnRouter: serverListOnRouter ?? this.serverListOnRouter,
         mainWgInstance: mainWgInstance ?? this.mainWgInstance,
         backupWgInstance: backupWgInstance ?? this.backupWgInstance,
         serverCities: serverCities ?? this.serverCities,
@@ -572,6 +579,7 @@ class AppConfig {
         'schedMinutes': schedMinutes,
         'backupReminderDays': backupReminderDays,
         'serverSwitcherEnabled': serverSwitcherEnabled,
+        'serverListOnRouter': serverListOnRouter,
         'mainWgInstance': mainWgInstance,
         'backupWgInstance': backupWgInstance,
         'serverCities': serverCities,
@@ -691,6 +699,7 @@ class AppConfig {
       schedMinutes: i('schedMinutes', d.schedMinutes),
       backupReminderDays: i('backupReminderDays', d.backupReminderDays, min: 0),
       serverSwitcherEnabled: b('serverSwitcherEnabled', d.serverSwitcherEnabled),
+      serverListOnRouter: b('serverListOnRouter', d.serverListOnRouter),
       mainWgInstance: s('mainWgInstance', d.mainWgInstance),
       backupWgInstance: s('backupWgInstance', d.backupWgInstance),
       serverCities: s('serverCities', d.serverCities),

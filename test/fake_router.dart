@@ -60,6 +60,7 @@ class FakeRouter {
   /// Gateway delay (ms) reported while a tunnel points at this server IP.
   Map<String, double> delayByServer = {};
   int wgReconfigures = 0;
+  final List<String> deletedClients = [];
 
   /// WireGuard instances (uuid -> name).
   Map<String, String> wgInstanceNames = {
@@ -143,6 +144,21 @@ class FakeRouter {
     }
     if (path == '/api/wireguard/client/search_client') {
       return json({'total': wgClients.length, 'rowCount': wgClients.length, 'current': 1, 'rows': wgClients});
+    }
+    if (path == '/api/wireguard/client/add_client') {
+      final body = ((jsonDecode(r.body) as Map)['client'] as Map).cast<String, dynamic>();
+      final n = wgClients.length + 1;
+      final uuid = '00000000-0000-4000-8000-${n.toString().padLeft(12, '0')}';
+      final servers = '${body.remove('servers') ?? ''}';
+      wgClients.add({...body, 'uuid': uuid, '%servers': servers});
+      return json({'result': 'saved', 'uuid': uuid});
+    }
+    final delClient = RegExp(r'^/api/wireguard/client/del_client/([0-9a-f-]{36})$').firstMatch(path);
+    if (delClient != null) {
+      final before = wgClients.length;
+      wgClients.removeWhere((x) => x['uuid'] == delClient.group(1));
+      deletedClients.add(delClient.group(1)!);
+      return json({'result': wgClients.length < before ? 'deleted' : 'not found'});
     }
     final setClient = RegExp(r'^/api/wireguard/client/set_client/([0-9a-f-]{36})$').firstMatch(path);
     if (setClient != null) {

@@ -370,6 +370,51 @@ class OpnsenseClient {
     }
   }
 
+  /// Adds a switched-off peer linked to no instance (the router-stored server
+  /// list). The live tunnels are not reconfigured. Returns the new uuid.
+  Future<String> addWgListPeer(
+      {required String name, required String address, required int port, required String publicKey}) async {
+    if (!RegExp(r'^[A-Za-z0-9._-]{1,64}$').hasMatch(name)) throw ArgumentError.value(name, 'name');
+    if (InternetAddress.tryParse(address.trim()) == null) {
+      throw ArgumentError.value(address, 'address', 'not an IP address');
+    }
+    if (port < 1 || port > 65535) throw ArgumentError.value(port, 'port');
+    if (!RegExp(r'^[A-Za-z0-9+/]{43}=$').hasMatch(publicKey.trim())) {
+      throw ArgumentError.value('(key)', 'publicKey', 'not a WireGuard public key');
+    }
+    const ep = '/api/wireguard/client/add_client';
+    final map = _asMap(
+        await _send('POST', ep, body: {
+          'client': {
+            'enabled': '0',
+            'name': name,
+            'pubkey': publicKey.trim(),
+            'serveraddress': address.trim(),
+            'serverport': '$port',
+            'tunneladdress': '192.0.2.1/32',
+            'servers': '',
+          },
+        }),
+        ep);
+    if (map['result'] != 'saved') {
+      final v = map['validations'];
+      throw OpnsenseException(ApiErrorKind.server,
+          'Router did not save the server${v is Map && v.isNotEmpty ? ': ${v.values.join('; ')}' : ''}',
+          endpoint: ep);
+    }
+    return '${map['uuid'] ?? ''}';
+  }
+
+  /// Deletes a peer. Callers only pass switched-off list peers.
+  Future<void> deleteWgPeer(String uuid) async {
+    if (!_uuidRe.hasMatch(uuid)) throw ArgumentError.value(uuid, 'uuid', 'not a UUID');
+    final ep = '/api/wireguard/client/del_client/$uuid';
+    final map = _asMap(await _send('POST', ep, body: const {}), ep);
+    if (map['result'] != 'deleted') {
+      throw OpnsenseException(ApiErrorKind.server, 'Router did not delete the server entry', endpoint: ep);
+    }
+  }
+
   /// UUIDs of the instances a peer is linked to (from get_client's option map).
   Future<List<String>> _wgPeerInstanceUuids(String uuid) async {
     final ep = '/api/wireguard/client/get_client/$uuid';
