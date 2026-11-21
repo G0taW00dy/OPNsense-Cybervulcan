@@ -1,6 +1,11 @@
 # Changelog
 
 ## 2.1.10 (pre-release)
+- Tests: the expected exit country comes from the servers the tunnels use now (JP#153 -> Japan), so a Tokyo exit and Proton's Japanese DNS pass instead of "neither AU nor US".
+- Tests: an exit or DNS on a VPN provider's network that is not one of the router's tunnels (e.g. the device's own Proton app) is a warning - "this device's own VPN app is probably on" - not a leak.
+- Tests on PC: lists other network connections (e.g. a second Wi-Fi) that may carry the internet instead of the router; networks other than VPN/CLEAR are described ("goes straight to the internet") instead of "can't reason about".
+- Bufferbloat: smaller upload pieces (slow far-away uploads were under-measured); advice no longer blames a limit that is below the measured speed, and on an unshaped network (e.g. MGMT) says so.
+- VPN servers: no "Only my cities" chip when no cities are chosen.
 - After a server switch the tunnel's name follows the new server's city (Status title, widget, tray, alerts) - unless you gave it your own name.
 - VPN servers: the server each tunnel uses is always listed (on every device), tagged "(main) now" / "(backup) now" - name it with Set city. After a switch, the server the tunnel left goes into the list (and the router list), even on a device that never had it.
 

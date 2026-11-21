@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 
+import '../core/config.dart';
 import '../core/controller.dart';
 import '../core/network_map.dart';
 import '../core/pc_mode.dart';
@@ -60,7 +61,21 @@ class _TestsPageState extends State<TestsPage> {
       bypassActive: c.snapshot.bypassActive,
       pcClear: c.supportsPcMode ? c.snapshot.pcClear : null,
     );
+    // Countries of the servers the tunnels use now (JP#153 -> JP).
+    final names = <String>[];
+    try {
+      final (m, b) = await c.tunnelPeers();
+      final list = c.cachedServers();
+      for (final p in [m, b]) {
+        final s = p.match(list);
+        if (s != null) names.add(s.name);
+      }
+    } on Object {
+      // Without peers the "VPN country" setting is used alone.
+    }
     return TestEnv(
+      vpnCountries: vpnCountriesFor(c.config, names),
+      otherConnections: await otherConnectionsFor(c.config),
       config: c.config,
       web: _http,
       client: c.routerClient,
@@ -405,5 +420,33 @@ class _TestTile extends StatelessWidget {
           ),
       ],
     );
+  }
+}
+
+/// Desktop only: this device's IPv4 connections outside the house networks
+/// (e.g. a second Wi-Fi). Its internet may go that way instead of the router
+/// (21 Nov: PC on "Cabin 2 WiFi" next to the router link).
+Future<List<String>> otherConnectionsFor(AppConfig cfg) async {
+  if (!(Platform.isWindows || Platform.isLinux || Platform.isMacOS)) return const [];
+  try {
+    final out = <String>[];
+    for (final i in await NetworkInterface.list(type: InternetAddressType.IPv4)) {
+      final n = i.name.toLowerCase();
+      if (const ['wintun', 'tailscale', 'wireguard', 'proton', 'vethernet', 'vmware', 'virtualbox', 'loopback', 'docker']
+          .any(n.contains)) {
+        continue;
+      }
+      for (final a in i.addresses) {
+        final ip = a.address;
+        if (ip.startsWith('169.254.') || ip.startsWith('127.')) continue;
+        final o = ip.split('.').map(int.tryParse).toList();
+        if (o.length == 4 && o[0] == 100 && (o[1] ?? 0) >= 64 && (o[1] ?? 0) < 128) continue; // Tailscale CGNAT
+        if (networkNameFor(ip, cfg.networks) != null) continue;
+        out.add('${i.name} ($ip)');
+      }
+    }
+    return out;
+  } on Object {
+    return const [];
   }
 }

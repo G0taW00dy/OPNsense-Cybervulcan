@@ -80,7 +80,18 @@ class TestEnv {
     this.target,
     this.route,
     this.atHome = false,
+    this.vpnCountries = const {},
+    this.otherConnections = const [],
   });
+
+  /// Countries of the servers the tunnels use now (see [vpnCountriesFor]).
+  final Set<String> vpnCountries;
+
+  /// This device's other network connections that are not the house
+  /// networks (e.g. a second Wi-Fi): the internet may go that way instead.
+  final List<String> otherConnections;
+
+  Set<String> get vpnSet => {config.vpnCountryCode.toUpperCase(), ...vpnCountries};
 
   final AppConfig config;
 
@@ -123,15 +134,23 @@ String _expectWord(ExpectedPath p) => switch (p) {
     };
 
 /// Classifies one DNS resolver against what this device should be using.
-TestStatus classifyResolver({required String? countryCode, required String? org, required ExpectedPath expected, required AppConfig cfg}) {
+TestStatus classifyResolver(
+    {required String? countryCode,
+    required String? org,
+    required ExpectedPath expected,
+    required AppConfig cfg,
+    Set<String>? vpnCountries}) {
   final cc = countryCode?.toUpperCase();
   final o = (org ?? '').toLowerCase();
   final quad9 = isQuad9Org(o);
+  final vpn = vpnCountries ?? {cfg.vpnCountryCode.toUpperCase()};
   switch (expected) {
     case ExpectedPath.vpn:
       if (cc == null) return TestStatus.info;
-      if (cc == cfg.homeCountryCode.toUpperCase() && !quad9) return TestStatus.fail;
-      if (cc == cfg.vpnCountryCode.toUpperCase() || quad9) return TestStatus.pass;
+      if (vpn.contains(cc) || quad9) return TestStatus.pass;
+      // A VPN provider's resolver elsewhere: this device's own VPN app.
+      if (looksLikeVpnNetwork(org)) return TestStatus.warn;
+      if (cc == cfg.homeCountryCode.toUpperCase()) return TestStatus.fail;
       return TestStatus.warn;
     case ExpectedPath.direct:
       if (quad9) return TestStatus.pass;
@@ -251,15 +270,18 @@ Future<SecurityTestResult> runSecurityTest(SecurityTest t, TestEnv env) async {
 Future<SecurityTestResult> _exitTest(TestEnv env) async {
   final t = _t('exit');
   final info = await env.quick.exitInfo();
-  final r = evaluateExit(info, env.expected, env.config);
+  final r = evaluateExit(info, env.expected, env.config, vpnCountries: env.vpnSet);
   final st = switch (r.verdict) {
     Verdict.ok => TestStatus.pass,
     Verdict.mismatch => TestStatus.fail,
+    Verdict.warn => TestStatus.warn,
     Verdict.inconclusive => TestStatus.info,
   };
   return _r(t, st, r.explanation, [
     'Exit ${info.ip} - ${[info.city, info.country].whereType<String>().join(', ')}${info.org != null ? ' (${info.org})' : ''}',
     'This device: ${env.deviceIp ?? 'not on a house network'} - expected ${_expectWord(env.expected)}',
+    if (env.otherConnections.isNotEmpty)
+      'This device also has ${env.otherConnections.join(', ')} - its internet may go that way instead of the router.',
   ]);
 }
 
@@ -339,7 +361,8 @@ Future<SecurityTestResult> _dnsLeak(TestEnv env) async {
     } on Object {
       g = null;
     }
-    final v = classifyResolver(countryCode: g?.countryCode, org: g?.org, expected: env.expected, cfg: env.config);
+    final v = classifyResolver(
+        countryCode: g?.countryCode, org: g?.org, expected: env.expected, cfg: env.config, vpnCountries: env.vpnSet);
     verdicts.add(v);
     lines.add('${v.name.toUpperCase().padRight(4)} $ip - ${g?.country ?? '?'}${g?.org != null ? ' (${g!.org})' : ''}');
   }
@@ -348,7 +371,10 @@ Future<SecurityTestResult> _dnsLeak(TestEnv env) async {
     TestStatus.fail => 'DNS LEAK: a resolver in ${env.config.homeCountryCode} answered while this device should be on the VPN.',
     TestStatus.warn => env.expected == ExpectedPath.direct
         ? 'Direct mode is using a resolver other than the router\'s encrypted DNS.'
-        : 'Some resolvers are in an unexpected place - check the details.',
+        : verdicts.isNotEmpty && seen.isNotEmpty
+            ? 'Some resolvers are not where the house tunnels are (${env.vpnSet.join(' / ')}) - if they belong to a '
+                'VPN provider, this device\'s own VPN app is probably on.'
+            : 'Some resolvers are in an unexpected place - check the details.',
     TestStatus.pass => 'No leak: all ${seen.length} resolver(s) match the expected path (${_expectWord(env.expected)}).',
     _ => 'Resolvers listed - this device is not on a house network the app can judge.',
   };
@@ -372,10 +398,13 @@ Future<SecurityTestResult> _ipv6(TestEnv env) async {
   final cc = g?.countryCode?.toUpperCase();
   final where = '$v6 - ${g?.country ?? 'unknown country'}${g?.org != null ? ' (${g!.org})' : ''}';
   if (env.expected == ExpectedPath.vpn) {
-    if (cc == env.config.homeCountryCode.toUpperCase()) {
+    if (env.vpnSet.contains(cc) && looksLikeVpnNetwork(g?.org)) {
+      return _r(t, TestStatus.pass, 'IPv6 goes through the VPN too.', [where]);
+    }
+    if (cc == env.config.homeCountryCode.toUpperCase() && !looksLikeVpnNetwork(g?.org)) {
       return _r(t, TestStatus.fail, 'IPv6 LEAK: IPv6 traffic leaves via your ISP, around the VPN.', [where]);
     }
-    if (cc == env.config.vpnCountryCode.toUpperCase()) {
+    if (env.vpnSet.contains(cc)) {
       return _r(t, TestStatus.pass, 'IPv6 goes through the VPN too.', [where]);
     }
     return _r(t, TestStatus.warn, 'IPv6 works and exits somewhere unexpected.', [where]);
@@ -528,7 +557,7 @@ Future<SecurityTestResult> _latency(TestEnv env) async {
     TestStatus.warn => 'Some latency / jitter - fine for browsing, noticeable in games.',
     TestStatus.fail => 'Poor tunnel quality - try "Find best server".',
     _ => 'No tunnel measurements available.',
-  }, [...lines, 'Measured by the router to the tunnel monitor IPs (US servers: ~150-260 ms from AU is normal).']);
+  }, [...lines, 'Measured by the router to each tunnel\'s monitor IP. Far-away servers add distance delay - that alone is not a fault.']);
 }
 
 /// Both tunnels degraded alike (delay within 15 % and both jittery or both
@@ -647,12 +676,15 @@ Future<SecurityTestResult> _bufferbloat(TestEnv env) async {
           }
         }
       }));
-  final piece = List<int>.filled(1 << 20, 0x61);
+  // 256 KB pieces: each POST only counts once it is finished, and 1 MB pieces
+  // over a slow, far-away upload rarely finished in time (21 Nov: 0.6 Mbit/s
+  // measured on a 10 Mbit/s limit).
+  final piece = List<int>.filled(256 << 10, 0x61);
   final up = await loaded((count, stop) => streams(() async {
         while (!stop()) {
           final r = await env.web
               .post(Uri.parse('https://speed.cloudflare.com/__up'), body: piece)
-              .timeout(const Duration(seconds: 10));
+              .timeout(const Duration(seconds: 20));
           if (r.statusCode >= 400) throw Exception('upload HTTP ${r.statusCode}');
           count(piece.length);
         }
@@ -719,6 +751,12 @@ String shaperAdvice(List<ShaperPipe>? pipes, ExpectedPath path,
   final active = pipes?.where((p) => p.enabled).toList() ?? const <ShaperPipe>[];
   if (pipes == null) return 'An FQ-CoDel shaper on the router fixes this (Settings > VPN tunnels > Shaper).';
   if (active.isEmpty) return 'Set up the FQ-CoDel shaper on the router (Firewall > Shaper).';
+  if (path == ExpectedPath.unknown) {
+    // 21 Nov: the PC on MGMT was told to lower the VPN/CLEAR limits, which
+    // don't apply to it at all.
+    return 'This device is not on the VPN or CLEAR network, and the shaper only covers those - move it to one of '
+        'them (or add a shaper rule for its network).';
+  }
   bool isVpn(ShaperPipe p) => p.description.toLowerCase().contains('vpn');
   bool isDown(ShaperPipe p) => p.description.toLowerCase().contains('down');
   final candidates = active.where((p) => switch (path) {
@@ -726,8 +764,15 @@ String shaperAdvice(List<ShaperPipe>? pipes, ExpectedPath path,
         ExpectedPath.direct => !isVpn(p),
         ExpectedPath.unknown => true,
       });
-  final dir = candidates.where((p) => isDown(p) == lagDown).toList();
   final measured = lagDown ? downMbps : upMbps;
+  final inDir = candidates.where((p) => isDown(p) == lagDown).toList();
+  // Only limits that are actually above what the line gave (21 Nov: a 10
+  // Mbit/s limit was listed as "above" 17.2 Mbit/s).
+  final dir = inDir.where((p) => p.mbit > measured).toList();
+  if (inDir.isNotEmpty && dir.isEmpty) {
+    return 'The ${lagDown ? 'download' : 'upload'} limit is already below what the line gave - the lag may come '
+        'from another device or the line itself at that moment. Run the test again.';
+  }
   final suggest = (measured * 0.85).floor().clamp(1, 100000);
   if (dir.isEmpty) {
     return 'The shaper is on, but no ${lagDown ? 'download' : 'upload'} limit covers this path.';

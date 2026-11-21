@@ -2,6 +2,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:opnsense_cybervulcan/src/api/wireguard_models.dart';
 import 'package:opnsense_cybervulcan/src/core/router_server_list.dart';
 import 'package:opnsense_cybervulcan/src/core/config.dart';
+import 'package:opnsense_cybervulcan/src/core/quick_tests.dart';
+import 'package:opnsense_cybervulcan/src/core/security_tests.dart';
+import 'package:opnsense_cybervulcan/src/api/shaper_models.dart';
 import 'package:opnsense_cybervulcan/src/core/server_switcher.dart';
 import 'package:opnsense_cybervulcan/src/ui/servers_page.dart' show knownCities, withTunnelServers;
 
@@ -112,5 +115,35 @@ void main() {
     final out = withTunnelServers(const [sj, la], peers, cfg);
     expect(out.length, 3); // backup already listed (sj has _k1), main added
     expect(out.first.name, 'San Jose tunnel server');
+  });
+
+  group('21 Nov PC test results', () {
+    const cfg = AppConfig();
+    final vpn = vpnCountriesFor(cfg, ['JP#153', 'US-CA#742']);
+    test('tunnel countries come from the servers in use', () => expect(vpn, {'US', 'JP'}));
+    test('Tokyo exit on Datacamp passes when main is JP#153', () {
+      const tokyo = ExitInfo(ip: '37.19.205.236', countryCode: 'JP', org: 'Datacamp Limited');
+      expect(evaluateExit(tokyo, ExpectedPath.vpn, cfg, vpnCountries: vpn).verdict, Verdict.ok);
+      expect(classifyResolver(countryCode: 'JP', org: 'Datacamp Limited', expected: ExpectedPath.vpn, cfg: cfg,
+          vpnCountries: vpn), TestStatus.pass);
+    });
+    test('the device\'s own Proton app (a local city, Host Universal) is a warning, not a leak', () {
+      const adl = ExitInfo(ip: '103.25.57.57', countryCode: 'AU', org: 'Host Universal Pty Ltd');
+      expect(evaluateExit(adl, ExpectedPath.vpn, cfg, vpnCountries: vpn).verdict, Verdict.warn);
+      expect(classifyResolver(countryCode: 'AU', org: 'Host Universal', expected: ExpectedPath.vpn, cfg: cfg,
+          vpnCountries: vpn), TestStatus.warn);
+    });
+    test('a real ISP exit at home is still a leak', () {
+      const isp = ExitInfo(ip: '1.2.3.4', countryCode: 'AU', org: 'ExampleTel');
+      expect(evaluateExit(isp, ExpectedPath.vpn, cfg, vpnCountries: vpn).verdict, Verdict.mismatch);
+    });
+    test('MGMT (unknown path) gets no shaper-limit advice', () {
+      const p = [ShaperPipe(uuid: 'a', number: 1, description: 'VPN upload', mbit: 10, enabled: true)];
+      expect(shaperAdvice(p, ExpectedPath.unknown, downMbps: 40, upMbps: 17, lagDown: false), contains('not on the VPN or CLEAR'));
+    });
+    test('a limit below the measured speed is not blamed', () {
+      const p = [ShaperPipe(uuid: 'a', number: 1, description: 'VPN upload', mbit: 10, enabled: true)];
+      expect(shaperAdvice(p, ExpectedPath.vpn, downMbps: 40, upMbps: 17.2, lagDown: false), contains('already below'));
+    });
   });
 }
