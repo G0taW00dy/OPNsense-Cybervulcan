@@ -590,7 +590,7 @@ class CybervulcanController extends ChangeNotifier {
       final (m, b) = await sw.peers();
       final peer = main ? m : b;
       final label = main ? config.mainLabel : config.backupLabel;
-      final known = peer.match(cachedServers());
+      final known = cachedServers().where((x) => x.sameEndpoint(peer.serverAddress, peer.publicKey)).firstOrNull;
       final old = known ?? ProtonServer(
           name: 'Former $label server',
           entryIp: peer.serverAddress,
@@ -656,7 +656,7 @@ class CybervulcanController extends ChangeNotifier {
     try {
       final (m0, b0) = await sw.peers();
       for (final (label, p) in [(config.mainLabel, m0), (config.backupLabel, b0)]) {
-        before.add(p.match(cachedServers()) ??
+        before.add(cachedServers().where((x) => x.sameEndpoint(p.serverAddress, p.publicKey)).firstOrNull ??
             ProtonServer(name: 'Former $label server', entryIp: p.serverAddress, publicKey: p.publicKey,
                 port: p.serverPort));
       }
