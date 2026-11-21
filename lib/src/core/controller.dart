@@ -445,7 +445,11 @@ class CybervulcanController extends ChangeNotifier {
     if (!config.serverListOnRouter || c == null) return local;
     try {
       final peers = await c.wgPeers();
-      var list = [for (final p in peers) ?serverFromListPeer(p)];
+      var list = [
+        for (final p in peers) ?serverFromListPeer(p),
+        // Servers a tunnel uses now live in that tunnel's peer, not the list.
+        ...inUseByTunnels(peers, local),
+      ];
       if (!prefs.flag(_listSeededKey)) {
         list = [
           ...list,
@@ -481,15 +485,31 @@ class CybervulcanController extends ChangeNotifier {
   /// unlinked CVL_ peers are ever deleted; the live tunnels are not touched.
   Future<void> _syncRouterList(OpnsenseClient c, List<WgPeer> peers, List<ProtonServer> wanted) async {
     final plan = planListSync(peers, wanted);
+    final failed = <String>[];
     for (final uuid in plan.delete) {
-      await c.deleteWgPeer(uuid);
+      try {
+        await c.deleteWgPeer(uuid);
+      } on OpnsenseException catch (e) {
+        failed.add('remove: ${e.message}');
+      }
     }
+    var added = 0;
     for (final s in plan.add) {
-      await c.addWgListPeer(name: listPeerName(s), address: s.entryIp, port: s.port, publicKey: s.publicKey);
+      // One rejected entry must not stop the rest.
+      try {
+        await c.addWgListPeer(name: listPeerName(s), address: s.entryIp, port: s.port, publicKey: s.publicKey);
+        added++;
+      } on OpnsenseException catch (e) {
+        failed.add('${s.name}: ${e.message}');
+      }
     }
     if (plan.delete.isNotEmpty || plan.add.isNotEmpty) {
-      await journal.add('Server list on the router: ${plan.add.length} added, ${plan.delete.length} removed', ok: true,
-          detail: 'Switched-off entries only - the tunnels were not changed.');
+      await journal.add('Server list on the router: $added added, ${plan.delete.length} removed',
+          ok: failed.isEmpty,
+          detail: failed.isEmpty ? 'Switched-off entries only - the tunnels were not changed.' : failed.join('; '));
+    }
+    if (failed.isNotEmpty) {
+      throw OpnsenseException(ApiErrorKind.server, 'some servers were not saved (${failed.join('; ')})');
     }
   }
 
@@ -546,6 +566,8 @@ class CybervulcanController extends ChangeNotifier {
       await journal.add('${main ? 'Main' : 'Backup'} tunnel -> ${server.name}', ok: true,
           detail: 'Handshake confirmed${sw.monitorWarning == null ? '' : '; monitor not refreshed'}');
       tuner.pathChanged();
+      // The server the tunnel left can go (back) into the router list now.
+      if (config.serverListOnRouter) unawaited(saveServers(cachedServers()));
       return true;
     },
         done: '${main ? config.mainLabel : config.backupLabel} tunnel now uses ${server.name} (handshake confirmed)',
@@ -592,6 +614,9 @@ class CybervulcanController extends ChangeNotifier {
       _switcher = null;
       notifyListeners();
       unawaited(_refreshAfterChange());
+      // Candidates tried on the backup left the list while in use: put back
+      // every server no tunnel uses now.
+      if (config.serverListOnRouter) unawaited(saveServers(cachedServers()));
     }
   }
 
