@@ -17,7 +17,7 @@ const routerListPrefix = 'CVL_';
 /// someone switched one on by hand, it would route nothing real.
 const routerListAllowedIps = '192.0.2.1/32';
 
-String _enc(String s) => s.trim().replaceAll('#', '.').replaceAll(RegExp(r'[^A-Za-z0-9.\-]+'), '-');
+String _enc(String s) => s.trim().replaceAll('#', '.').replaceAll(RegExp(r'\s+'), '--').replaceAll(RegExp(r'[^A-Za-z0-9.\-]+'), '-');
 
 /// Peer name for [s]: `CVL_<name>_<city>` using only letters, digits, `.`
 /// and `-` (OPNsense's name rule), at most 64 characters.
@@ -36,8 +36,9 @@ ProtonServer? serverFromListPeer(WgPeer p) {
   if (!isListPeer(p) || !isWgPublicKey(p.publicKey) || p.serverAddress.isEmpty) return null;
   final rest = p.name.substring(routerListPrefix.length);
   final i = rest.indexOf('_');
-  final name = (i < 0 ? rest : rest.substring(0, i)).replaceAll('.', '#');
-  final city = i < 0 ? null : rest.substring(i + 1).replaceAll('-', ' ').trim();
+  // "--" is a space (v2.1.12); a single "-" stays (US-CA#742).
+  final name = (i < 0 ? rest : rest.substring(0, i)).replaceAll('--', ' ').replaceAll('.', '#');
+  final city = i < 0 ? null : rest.substring(i + 1).replaceAll('--', ' ').replaceAll('-', ' ').trim();
   return ProtonServer(
     name: name.isEmpty ? p.serverAddress : name,
     entryIp: p.serverAddress,

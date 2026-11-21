@@ -537,11 +537,15 @@ class CybervulcanController extends ChangeNotifier {
     final r = await _action((c) async {
       final (m, b) = await sw.peers();
       final peer = main ? m : b;
+      final label = main ? config.mainLabel : config.backupLabel;
       final old = ProtonServer(
-          name: 'Former ${main ? config.mainLabel : config.backupLabel} server',
+          name: 'Former $label server',
           entryIp: peer.serverAddress,
           publicKey: peer.publicKey,
-          port: peer.serverPort);
+          port: peer.serverPort,
+          // The tunnel's name is usually its city (that is what the switch
+          // renames it to); "Main"/"Backup" are not.
+          city: label == 'Main' || label == 'Backup' ? null : label);
       try {
         await sw.apply(peer, server, main: main);
       } on Object catch (err) {
@@ -633,14 +637,13 @@ class CybervulcanController extends ChangeNotifier {
   /// Status title, widget, tray and alerts use it) - but only when the name is
   /// a city or the default, never a name the person chose ("Streaming").
   Future<void> _followCity(bool main, ProtonServer server) async {
+    // 21 Nov: guessing whether the old name "was a city" failed on a device
+    // that never had that city in its list - now a plain setting (default on).
+    if (!config.namesFollowCity) return;
     final city = server.city?.trim();
     if (city == null || city.isEmpty) return;
     final old = (main ? config.mainLabel : config.backupLabel).trim();
-    final cities = {
-      for (final c in [...config.serverCityList, for (final s in cachedServers()) ?s.city]) c.trim().toLowerCase(),
-    };
-    final isCityOrDefault = old.isEmpty || old == 'Main' || old == 'Backup' || cities.contains(old.toLowerCase());
-    if (!isCityOrDefault || old.toLowerCase() == city.toLowerCase()) return;
+    if (old.toLowerCase() == city.toLowerCase()) return;
     config = main ? config.copyWith(mainLabel: city) : config.copyWith(backupLabel: city);
     await prefs.saveConfig(config);
     notifyListeners();

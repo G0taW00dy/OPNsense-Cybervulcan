@@ -146,4 +146,15 @@ void main() {
       expect(shaperAdvice(p, ExpectedPath.vpn, downMbps: 40, upMbps: 17.2, lagDown: false), contains('already below'));
     });
   });
+
+  test('server names with spaces survive the router list', () {
+    const s = ProtonServer(name: 'Former Los Angeles server', entryIp: '149.102.228.1', publicKey: _k1, city: 'Los Angeles');
+    final p = WgPeer(uuid: 'u', name: listPeerName(s), enabled: false, serverAddress: s.entryIp, serverPort: 51820,
+        publicKey: _k1, instanceNames: const []);
+    final back = serverFromListPeer(p)!;
+    expect(back.name, 'Former Los Angeles server');
+    expect(back.city, 'Los Angeles');
+    expect(serverFromListPeer(WgPeer(uuid: 'u', name: listPeerName(sj), enabled: false, serverAddress: sj.entryIp,
+        serverPort: 51820, publicKey: _k1, instanceNames: const []))!.name, 'US-CA#742');
+  });
 }
