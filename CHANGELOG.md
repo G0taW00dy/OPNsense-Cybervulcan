@@ -5,6 +5,7 @@
 - Settings > Shaper: if the limits could not be read (router not reachable yet), the app tries again after the next good router check instead of showing the error until Settings is reopened.
 - Settings > Shaper lists every limit on the router (VPN and CLEAR, download and upload) with whether auto-tune moves it. The min/max boxes now say which network they are for.
 - New: "Auto-tune CLEAR too" tunes the direct internet line's limits against the WAN gateway's ping (off by default). Restore puts both VPN and CLEAR limits back.
+- VPN servers page: marks the server each tunnel uses now, says when a tunnel's server is not in the list, and no longer shows a grey "offline-looking" dot for servers without a load figure.
 
 ## 2.1.7 (pre-release)
 - Away, after the app was in the background: no more "router not visible" for a few seconds while Tailscale restarts. The app now waits for Tailscale's device list before deciding.

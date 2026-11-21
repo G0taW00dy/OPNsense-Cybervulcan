@@ -147,9 +147,31 @@ class _ServersPageState extends State<ServersPage> {
   void initState() {
     super.initState();
     _servers = c.cachedServers();
+    unawaited(_loadPeers());
     if (widget.autoStartBest) {
       WidgetsBinding.instance.addPostFrameCallback((_) => unawaited(_findBest()));
     }
+  }
+
+  /// What each tunnel uses on the router now (null until read / unreadable).
+  (WgPeerInfo, WgPeerInfo)? _peers;
+
+  Future<void> _loadPeers() async {
+    try {
+      final p = await c.tunnelPeers();
+      if (mounted) setState(() => _peers = p);
+    } on Object {
+      // The tile tags are a nicety; the page still works without them.
+    }
+  }
+
+  /// "main" / "backup" when [s] is what that tunnel uses now.
+  String? _inUse(ProtonServer s) {
+    final p = _peers;
+    if (p == null) return null;
+    if (s.sameEndpoint(p.$1.address, p.$1.publicKey)) return 'main';
+    if (s.sameEndpoint(p.$2.address, p.$2.publicKey)) return 'backup';
+    return null;
   }
 
   @override
@@ -415,6 +437,14 @@ class _ServersPageState extends State<ServersPage> {
           Expanded(child: Text('Servers (${visible.length})', style: t.titleMedium)),
           if (_loading) const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
         ]),
+        if (_peers != null)
+          for (final (label, peer) in [(c.config.mainLabel, _peers!.$1), (c.config.backupLabel, _peers!.$2)])
+            if (peer.match(_servers) == null)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text('$label uses ${peer.address} now - not in this list. Paste its config to name it.',
+                    style: t.bodySmall),
+              ),
         const SizedBox(height: 8),
         Wrap(spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
           if (_profile.hasServerList)
@@ -459,8 +489,15 @@ class _ServersPageState extends State<ServersPage> {
               for (final s in visible.take(60))
                 ListTile(
                   dense: true,
-                  leading: _LoadDot(load: s.load),
-                  title: Text(s.name),
+                  // No load figure (Proton no longer publishes it): a plain
+                  // server icon, not a grey dot that reads as "offline".
+                  leading: s.load == null ? const Icon(Icons.dns_outlined, size: 20) : _LoadDot(load: s.load),
+                  title: Text.rich(TextSpan(text: s.name, children: [
+                    if (_inUse(s) != null)
+                      TextSpan(
+                          text: '   ${_inUse(s) == 'main' ? c.config.mainLabel : c.config.backupLabel} (${_inUse(s)}) now',
+                          style: t.labelMedium?.copyWith(color: OpnColors.glassCyan)),
+                  ])),
                   subtitle: Text([s.city ?? '?', s.entryIp, if (s.load != null) '${s.load}% load'].join(' - ')),
                   trailing: PopupMenuButton<String>(
                     enabled: !_running && !_loading,
