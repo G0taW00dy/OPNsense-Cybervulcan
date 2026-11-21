@@ -9,6 +9,7 @@ import '../core/events.dart';
 import '../core/house_state.dart';
 import '../core/config.dart';
 import '../core/storage.dart';
+import '../net/router_link.dart';
 import '../ui/format.dart';
 import 'notifications.dart';
 
@@ -20,6 +21,11 @@ class WidgetKeys {
   static const bypass = 'cv_bypass'; // "1" | "0" | "?"
   static const bypassUntil = 'cv_bypass_until'; // "HH:MM" or ""
   static const updated = 'cv_updated'; // "HH:MM"
+  static const status = 'cv_status'; // "PROTECTED", "LAST KNOWN", ...
+  static const title = 'cv_title'; // big line: exit city
+  static const detail = 'cv_detail'; // "VPN OK - 247 ms - backup online"
+  static const where = 'cv_where'; // "Away - via Tailscale - 15:13"
+  static const lastGood = 'cv_last_good'; // "HH:MM" of the last fresh status
 }
 
 const androidWidgetProvider = 'ExitWidgetProvider';
@@ -30,21 +36,90 @@ const bypassOffUri = 'cybervulcan://bypass/off';
 const refreshUri = 'cybervulcan://refresh';
 
 Future<void> pushWidgetState(HouseSnapshot s, AppConfig cfg) async {
+  if (!s.configured) {
+    await _save({
+      WidgetKeys.status: 'NOT SET UP',
+      WidgetKeys.title: 'Cybervulcan',
+      WidgetKeys.detail: 'Open the app to connect it to your router.',
+      WidgetKeys.where: '',
+      WidgetKeys.health: 'notConfigured',
+      WidgetKeys.bypass: '?',
+    });
+    return;
+  }
+  // Router out of reach (away with the app paused, or no remote access): keep
+  // the last real status on the widget, greyed, instead of a red "unreachable".
+  final outOfReach = !s.reachable && (s.link == null || s.link!.state == LinkState.notHome);
+  if (outOfReach) {
+    await markWidgetOutOfReach();
+    return;
+  }
   final bypass = s.bypassActive;
-  final exit = s.error != null
-      ? 'Router unreachable'
+  final g = s.activeGateway;
+  final backupUp = s.backup?.health.isUp;
+  final detail = !s.reachable
+      ? headline(s, cfg)
       : (bypass ?? false)
-          ? 'Direct (bypass)'
-          : exitLabel(s.exit, cfg);
-  await HomeWidget.saveWidgetData<String>(WidgetKeys.exit, exit);
-  await HomeWidget.saveWidgetData<String>(WidgetKeys.health, s.health.name);
-  await HomeWidget.saveWidgetData<String>(
-      WidgetKeys.bypass, bypass == null ? '?' : (bypass ? '1' : '0'));
-  await HomeWidget.saveWidgetData<String>(WidgetKeys.bypassUntil,
-      s.bypassExpiresAt != null && (bypass ?? false) && !isNoLimitExpiry(s.bypassExpiresAt)
-          ? formatClock(s.bypassExpiresAt!)
-          : '');
-  await HomeWidget.saveWidgetData<String>(WidgetKeys.updated, formatClock(s.fetchedAt));
+          ? headline(s, cfg)
+          : [
+              switch (s.exit) {
+                ProtonExit.main => 'VPN OK',
+                ProtonExit.backup => 'On the backup tunnel',
+                ProtonExit.none => 'Both tunnels down',
+                ProtonExit.unknown => 'Tunnels unknown',
+              },
+              if (g?.delayMs != null) '${g!.delayMs!.toStringAsFixed(0)} ms',
+              if (s.exit == ProtonExit.main && backupUp != null) backupUp ? 'backup ready' : 'backup down',
+            ].join('  ·  ');
+  final link = s.link;
+  final where = [
+    if (link == null || !link.remote)
+      'Home'
+    else
+      'Away · ${link.viaTailscale ? 'via Tailscale' : 'via remote tunnel'}',
+    formatClock(s.fetchedAt),
+  ].join('  ·  ');
+  await _save({
+    WidgetKeys.status: heroLabel(s).toUpperCase(),
+    WidgetKeys.title: heroTitle(s, cfg),
+    WidgetKeys.detail: detail,
+    WidgetKeys.where: where,
+    WidgetKeys.health: s.health.name,
+    WidgetKeys.bypass: bypass == null ? '?' : (bypass ? '1' : '0'),
+    WidgetKeys.bypassUntil: s.bypassExpiresAt != null && (bypass ?? false) && !isNoLimitExpiry(s.bypassExpiresAt)
+        ? formatClock(s.bypassExpiresAt!)
+        : '',
+    WidgetKeys.updated: formatClock(s.fetchedAt),
+    WidgetKeys.lastGood: s.reachable ? formatClock(s.fetchedAt) : '',
+    // The Quick Settings tile still reads this one.
+    WidgetKeys.exit: s.error != null
+        ? 'Router unreachable'
+        : (bypass ?? false)
+            ? 'Direct (bypass)'
+            : exitLabel(s.exit, cfg),
+  });
+}
+
+/// Greys the widget out with the last real status ("last seen 15:13").
+Future<void> markWidgetOutOfReach() async {
+  final last = await HomeWidget.getWidgetData<String>(WidgetKeys.lastGood);
+  final hadStatus = last != null && last.isNotEmpty;
+  await _save({
+    WidgetKeys.status: 'LAST KNOWN',
+    if (!hadStatus) WidgetKeys.title: 'Out of reach',
+    if (!hadStatus) WidgetKeys.detail: 'The router has not answered yet.',
+    WidgetKeys.where: hadStatus
+        ? 'Router out of reach · last seen $last · open the app to refresh'
+        : 'Open the app to connect',
+    WidgetKeys.health: 'stale',
+    WidgetKeys.bypass: '?', // no bypass button while the router can't be reached
+  });
+}
+
+Future<void> _save(Map<String, String> values) async {
+  for (final e in values.entries) {
+    await HomeWidget.saveWidgetData<String>(e.key, e.value);
+  }
   await HomeWidget.updateWidget(androidName: androidWidgetProvider);
 }
 
@@ -84,9 +159,9 @@ Future<void> widgetBackgroundCallback(Uri? uri) async {
       cfg,
     );
   } on Exception catch (_) {
-    await HomeWidget.saveWidgetData<String>(WidgetKeys.exit, 'Router unreachable');
-    await HomeWidget.saveWidgetData<String>(WidgetKeys.health, Health.problem.name);
-    await HomeWidget.updateWidget(androidName: androidWidgetProvider);
+    // The widget's refresh can only try the home address (no Tailscale in
+    // the background): away, that is expected - show the last known status.
+    await markWidgetOutOfReach();
   } finally {
     client.close();
   }

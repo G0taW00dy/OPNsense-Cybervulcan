@@ -7,6 +7,7 @@
 - New: "Auto-tune CLEAR too" tunes the direct internet line's limits against the WAN gateway's ping (off by default). Restore puts both VPN and CLEAR limits back.
 - VPN servers page: marks the server each tunnel uses now, says when a tunnel's server is not in the list, and no longer shows a grey "offline-looking" dot for servers without a load figure.
 - New: "Keep the server list on the router" (Settings > VPN tunnels, off by default). Servers you add are saved on the router as switched-off, unlinked WireGuard peers (CVL_...), so every device with your key shares one list. The live tunnels are never touched by it.
+- Home-screen widget redesigned in the Cybervulcan style (status word, exit city, ping and backup state, where you are, the peak-and-circuit art). Away or with the app paused it keeps the last known status, greyed, with "last seen", instead of a red "Router unreachable".
 
 ## 2.1.7 (pre-release)
 - Away, after the app was in the background: no more "router not visible" for a few seconds while Tailscale restarts. The app now waits for Tailscale's device list before deciding.

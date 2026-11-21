@@ -191,35 +191,10 @@ class _HeaderCard extends StatelessWidget {
   final CybervulcanController controller;
 
   /// Short uppercase status line above the big exit name.
-  static String _label(HouseSnapshot s) {
-    if (!s.configured) return 'Not set up';
-    if (s.link?.state == LinkState.notHome) return 'Not home';
-    if (s.link?.state == LinkState.wrongCertificate) return 'Wrong certificate';
-    if (!s.reachable) return 'Router unreachable';
-    if (s.bypassActive ?? false) return 'VPN bypass on';
-    if (s.killSwitch.tripped) return 'Kill switch tripped';
-    if (s.killSwitchArmed == false) return 'Kill switch not armed';
-    if (s.busy) return 'Changing...';
-    if (s.failoverActive) return 'Failover active';
-    return switch (s.health) {
-      Health.ok => 'Protected',
-      Health.warning => 'Slow tunnel',
-      _ => 'Problem',
-    };
-  }
+  static String _label(HouseSnapshot s) => heroLabel(s);
 
   /// The big line: where the house's traffic leaves right now.
-  static String _exitName(HouseSnapshot s, CybervulcanController c) {
-    if (s.link?.state == LinkState.wrongCertificate) return 'Not your router?';
-    if (!s.reachable) return 'No connection';
-    if (s.bypassActive ?? false) return c.config.directLabel;
-    return switch (s.exit) {
-      ProtonExit.main => c.config.mainLabel,
-      ProtonExit.backup => c.config.backupLabel,
-      ProtonExit.none => 'No exit',
-      ProtonExit.unknown => 'Unknown',
-    };
-  }
+  static String _exitName(HouseSnapshot s, CybervulcanController c) => heroTitle(s, c.config);
 
   @override
   Widget build(BuildContext context) {

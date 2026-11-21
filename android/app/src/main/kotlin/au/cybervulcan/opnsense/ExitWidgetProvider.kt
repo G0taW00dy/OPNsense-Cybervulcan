@@ -28,7 +28,11 @@ class ExitWidgetProvider : HomeWidgetProvider() {
         appWidgetIds: IntArray,
         widgetData: SharedPreferences,
     ) {
-        val exit = widgetData.getString(KEY_EXIT, null) ?: "Open app to set up"
+        val title = widgetData.getString(KEY_TITLE, null)
+            ?: widgetData.getString(KEY_EXIT, null) ?: "Cybervulcan"
+        val status = widgetData.getString(KEY_STATUS, null) ?: "OPEN THE APP"
+        val detail = widgetData.getString(KEY_DETAIL, null) ?: ""
+        val where = widgetData.getString(KEY_WHERE, null)
         val health = widgetData.getString(KEY_HEALTH, null) ?: "notConfigured"
         val bypass = widgetData.getString(KEY_BYPASS, "?")
         val until = widgetData.getString(KEY_BYPASS_UNTIL, "") ?: ""
@@ -36,12 +40,19 @@ class ExitWidgetProvider : HomeWidgetProvider() {
 
         appWidgetIds.forEach { id ->
             val views = RemoteViews(context.packageName, R.layout.exit_widget).apply {
-                setTextViewText(R.id.widget_exit, exit)
-                setInt(R.id.widget_dot, "setColorFilter", healthColor(health))
+                val color = healthColor(health)
+                setTextViewText(R.id.widget_exit, title)
+                setTextViewText(R.id.widget_status, status)
+                setTextColor(R.id.widget_status, color)
+                setInt(R.id.widget_dot, "setColorFilter", color)
+                setTextViewText(R.id.widget_detail, detail)
+                setViewVisibility(R.id.widget_detail, if (detail.isEmpty()) View.GONE else View.VISIBLE)
                 setTextViewText(
                     R.id.widget_updated,
-                    if (updated.isNotEmpty()) "Updated $updated" else "",
+                    where ?: if (updated.isNotEmpty()) "Updated $updated" else "",
                 )
+                // Greyed art while the router is out of reach.
+                setInt(R.id.widget_art, "setImageAlpha", if (health == "stale") 90 else 255)
 
                 // Tapping the widget body opens the app.
                 setOnClickPendingIntent(
@@ -54,7 +65,7 @@ class ExitWidgetProvider : HomeWidgetProvider() {
                         setViewVisibility(R.id.widget_bypass, View.VISIBLE)
                         setTextViewText(
                             R.id.widget_bypass,
-                            if (until.isNotEmpty()) "Bypass ON until $until - tap to end" else "Bypass ON - tap to end",
+                            if (until.isNotEmpty()) "Bypass on until $until · tap to end" else "Bypass on · tap to end",
                         )
                         setOnClickPendingIntent(
                             R.id.widget_bypass,
@@ -63,7 +74,7 @@ class ExitWidgetProvider : HomeWidgetProvider() {
                     }
                     "0" -> {
                         setViewVisibility(R.id.widget_bypass, View.VISIBLE)
-                        setTextViewText(R.id.widget_bypass, "VPN bypass (whole house)...")
+                        setTextViewText(R.id.widget_bypass, "VPN bypass…")
                         setOnClickPendingIntent(
                             R.id.widget_bypass,
                             HomeWidgetLaunchIntent.getActivity(
@@ -94,6 +105,10 @@ class ExitWidgetProvider : HomeWidgetProvider() {
         const val KEY_BYPASS = "cv_bypass"
         const val KEY_BYPASS_UNTIL = "cv_bypass_until"
         const val KEY_UPDATED = "cv_updated"
+        const val KEY_STATUS = "cv_status"
+        const val KEY_TITLE = "cv_title"
+        const val KEY_DETAIL = "cv_detail"
+        const val KEY_WHERE = "cv_where"
 
         const val URI_BYPASS_CONFIRM = "cybervulcan://bypass/confirm"
         const val URI_BYPASS_OFF = "cybervulcan://bypass/off"
@@ -102,8 +117,8 @@ class ExitWidgetProvider : HomeWidgetProvider() {
         fun healthColor(health: String): Int = when (health) {
             "ok" -> Color.parseColor("#2ECC71")
             "warning" -> Color.parseColor("#F5A623")
-            "problem" -> Color.parseColor("#E5484D")
-            "bypass" -> Color.parseColor("#9B5DE5")
+            "problem" -> Color.parseColor("#FF6B6F")
+            "bypass" -> Color.parseColor("#B794F4")
             else -> Color.parseColor("#8A8F98")
         }
     }
