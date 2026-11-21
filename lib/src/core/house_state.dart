@@ -1,5 +1,7 @@
 import '../api/models.dart';
+import 'config.dart';
 import '../api/opnsense_client.dart';
+import '../net/router_link.dart';
 
 /// Which Proton tunnel the house is currently leaving through.
 enum ProtonExit { main, backup, none, unknown }
@@ -48,7 +50,14 @@ class HouseSnapshot {
     this.killSwitchArmed,
     this.killSwitchDetail,
     this.busy = false,
+    this.link,
+    this.bypassNoRouterDeadline = false,
+    this.wanDown,
   });
+
+  /// The internet line itself (the WAN gateway) is down. null = unknown -
+  /// the WAN gateway has no monitor IP, so the router can't tell.
+  final bool? wanDown;
 
   final DateTime fetchedAt;
   final bool configured;
@@ -70,6 +79,13 @@ class HouseSnapshot {
 
   /// A user-initiated change is in flight.
   final bool busy;
+
+  /// How the router was reached (direct / remote tunnel) or why not.
+  final LinkStatus? link;
+
+  /// Bypass is on but the router has no deadline marker for it, so the
+  /// router-side timer cannot end it by itself.
+  final bool bypassNoRouterDeadline;
 
   static HouseSnapshot unconfigured(DateTime now) =>
       HouseSnapshot(fetchedAt: now, configured: false);
@@ -132,6 +148,9 @@ class HouseSnapshot {
         killSwitchArmed: killSwitchArmed,
         killSwitchDetail: killSwitchDetail,
         busy: busy ?? this.busy,
+        link: link,
+        bypassNoRouterDeadline: bypassNoRouterDeadline,
+        wanDown: wanDown,
       );
 }
 
@@ -164,4 +183,23 @@ GatewayStatus? findGateway(List<GatewayStatus> all, String name) {
     armed: true,
     detail: '${r.description?.isNotEmpty == true ? r.description : 'Block tagged $tag'}$hits',
   );
+}
+
+/// The direct internet line's gateway: [AppConfig.wanGateway] when set, else
+/// the first gateway named like "WAN" that is not one of the VPN gateways.
+GatewayStatus? pickWanGateway(List<GatewayStatus> all, AppConfig cfg) {
+  final want = cfg.wanGateway.trim();
+  if (want.isNotEmpty) return findGateway(all, want);
+  final vpn = {cfg.mainGateway, cfg.backupGateway};
+  return all.where((g) => !vpn.contains(g.name) && g.name.toUpperCase().contains('WAN')).firstOrNull;
+}
+
+/// [HouseSnapshot.wanDown] from the router's gateways: only trusted when the
+/// WAN gateway has a monitor IP (without one the router always says "online").
+bool? wanDownFrom(List<GatewayStatus> all, AppConfig cfg) {
+  final g = pickWanGateway(all, cfg);
+  final m = g?.monitor?.trim() ?? '';
+  if (g == null || m.isEmpty || m == '~') return null;
+  if (g.health == GatewayHealth.down || g.health == GatewayHealth.forcedDown) return true;
+  return g.health.isUp ? false : null;
 }

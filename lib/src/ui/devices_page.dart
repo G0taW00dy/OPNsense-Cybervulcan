@@ -82,7 +82,7 @@ class _DevicesPageState extends State<DevicesPage> {
           child: ListView(
             padding: const EdgeInsets.all(16),
             children: [
-              Text('${leases.length} devices with a DHCP lease',
+              Text('${leases.length} device${leases.length == 1 ? '' : 's'} with a DHCP lease',
                   style: Theme.of(context).textTheme.titleMedium),
               const SizedBox(height: 4),
               Text('Devices with static IPs and no lease are not listed.',

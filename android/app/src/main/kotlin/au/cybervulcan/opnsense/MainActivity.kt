@@ -5,16 +5,28 @@ import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import androidx.core.content.FileProvider
-import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
 
-class MainActivity : FlutterActivity() {
+// FragmentActivity: required by local_auth (app lock).
+class MainActivity : FlutterFragmentActivity() {
+    // v2.1 remote modes: system VPN + reminder (see VpnChannel.kt).
+    private var vpnChannel: VpnChannel? = null
+
+    @Deprecated("Needed for VpnService.prepare's consent screen")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (vpnChannel?.onActivityResult(requestCode, resultCode) == true) return
+        @Suppress("DEPRECATION")
+        super.onActivityResult(requestCode, resultCode, data)
+    }
+
     private fun updatesDir(): File = File(cacheDir, "updates").apply { mkdirs() }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        vpnChannel = VpnChannel(this, flutterEngine.dartExecutor.binaryMessenger)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "au.cybervulcan.opnsense/updater")
             .setMethodCallHandler { call, result ->
                 when (call.method) {

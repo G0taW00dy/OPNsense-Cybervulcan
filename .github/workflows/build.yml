@@ -1,13 +1,15 @@
 name: build
 
-# - Every push / PR to main: analyze + unit tests.
-# - Tag v* (e.g. v1.0.0) or manual dispatch: also build the Windows installer
-#   (.exe, Inno Setup) and the Android APK, upload them as artifacts, and on a
-#   tag publish a GitHub Release with both attached.
+# - Every push / PR to main: analyze + unit tests, Go tests of the native
+#   remote-access library, and build the Windows installer (.exe, Inno Setup)
+#   and the Android APK as workflow artifacts.
+# - Tag v* (e.g. v1.0.0): additionally publish a GitHub Release with both.
 
 on:
   push:
-    branches: [main]
+    # prerelease/** : publish the pubspec version as a GitHub *pre-release*
+    # (test channel; the in-app updater ignores it until promoted).
+    branches: [main, 'prerelease/**']
     tags: ['v*']
   pull_request:
     branches: [main]
@@ -34,8 +36,83 @@ jobs:
       - run: flutter analyze --no-fatal-infos
       - run: flutter test
 
+  # Remote access: wireguard-go + gVisor netstack as a C shared library
+  # (libcvwg.so per Android ABI, cvwg.dll for Windows), loaded via dart:ffi.
+  # v2.1: plus the built-in Tailscale engine (tsnet). The Go version comes
+  # from go.mod (tailscale.com needs Go 1.27). CVWG_TAGS leave out Tailscale
+  # features the app never uses (smaller library, no log upload code).
+  native:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: native/cvwg
+    env:
+      CVWG_TAGS: >-
+        ts_omit_ace,ts_omit_appconnectors,ts_omit_aws,ts_omit_bird,ts_omit_c2n,ts_omit_capture,
+        ts_omit_captiveportal,ts_omit_clientupdate,ts_omit_completion,ts_omit_conn25,ts_omit_cli,
+        ts_omit_cliconndiag,ts_omit_cloud,ts_omit_colorable,ts_omit_dbus,ts_omit_debugeventbus,
+        ts_omit_debugportmapper,ts_omit_doctor,ts_omit_drive,ts_omit_flashappliance,ts_omit_hujsonconf,
+        ts_omit_identityfederation,ts_omit_iptables,ts_omit_kube,ts_omit_linuxdnsfight,ts_omit_linkspeed,
+        ts_omit_logtail,ts_omit_netlog,ts_omit_networkmanager,ts_omit_oauthkey,ts_omit_osrouter,
+        ts_omit_portlist,ts_omit_posture,ts_omit_qrcodes,ts_omit_relayserver,ts_omit_remoteconfig,
+        ts_omit_resolved,ts_omit_sdnotify,ts_omit_serviceclientprefs,ts_omit_favorites,ts_omit_ssh,
+        ts_omit_synology,ts_omit_syslog,ts_omit_systray,ts_omit_taildrop,ts_omit_tap,ts_omit_tpm,
+        ts_omit_tundevstats,ts_omit_wakeonlan,ts_omit_webbrowser,ts_omit_webclient,
+        ts_omit_advertiseexitnode,ts_omit_advertiseroutes,ts_omit_outboundproxy,ts_omit_dnsresolvecache
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: native/cvwg/go.mod
+          cache-dependency-path: native/cvwg/go.sum
+      - name: Verify modules (go.sum is committed; checked against sum.golang.org)
+        run: |
+          go mod download
+          go mod verify
+          go mod tidy -diff
+      - name: Go tests (end-to-end WireGuard tunnel; Tailscale login/forwarder against a local test control server)
+        run: |
+          go vet ./... && go test -count=1 ./...
+          # The trimmed feature set must still compile.
+          go vet -tags "$(echo $CVWG_TAGS | tr -d ' ')" . ./forward ./tunnel
+      - name: Android (arm64-v8a, armeabi-v7a, x86_64)
+        shell: bash
+        run: |
+          NDK="${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}"
+          TC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          ls "$TC" | grep -E 'android[0-9]+-clang$' | head -3
+          pick() { for api in 21 22 23 24 26; do [ -x "$TC/$1$api-clang" ] && { echo "$TC/$1$api-clang"; return; }; done; exit 1; }
+          build() { # abi goarch triple [goarm]
+            mkdir -p "out/android/$1"
+            CGO_ENABLED=1 GOOS=android GOARCH=$2 GOARM=${4:-} CC="$(pick $3)" \
+              go build -trimpath -buildmode=c-shared -tags "$(echo $CVWG_TAGS | tr -d ' ')" \
+              -ldflags='-s -w -buildid= -extldflags=-Wl,-z,max-page-size=16384' \
+              -o "out/android/$1/libcvwg.so" .
+            rm -f "out/android/$1/libcvwg.h"
+          }
+          build arm64-v8a arm64 aarch64-linux-android
+          build armeabi-v7a arm armv7a-linux-androideabi 7
+          build x86_64 amd64 x86_64-linux-android
+          ls -la out/android/*
+      - name: Windows (x64 DLL, cross-compiled with MinGW)
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq gcc-mingw-w64-x86-64
+          mkdir -p out/windows
+          CGO_ENABLED=1 GOOS=windows GOARCH=amd64 CC=x86_64-w64-mingw32-gcc \
+            go build -trimpath -buildmode=c-shared -tags "$(echo $CVWG_TAGS | tr -d ' ')" \
+            -ldflags='-s -w -buildid=' -o out/windows/cvwg.dll .
+          rm -f out/windows/cvwg.h
+          ls -la out/windows
+          # Windows-only code (home link helper) is not covered by the Linux vet above.
+          CGO_ENABLED=1 GOOS=windows GOARCH=amd64 CC=x86_64-w64-mingw32-gcc \
+            go vet -tags "$(echo $CVWG_TAGS | tr -d ' ')" ./...
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cvwg-native
+          path: native/cvwg/out/
+          if-no-files-found: error
+
   version:
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     outputs:
       name: ${{ steps.v.outputs.name }}
@@ -56,7 +133,7 @@ jobs:
           echo "name=$name" >> "$GITHUB_OUTPUT"
 
   android:
-    needs: [test, version]
+    needs: [test, version, native]
     runs-on: ubuntu-latest
     env:
       # Only a flag at job level; the secrets themselves are scoped to the one
@@ -124,15 +201,25 @@ jobs:
       - name: Note debug signing
         if: env.HAS_KEYSTORE != 'true'
         run: echo "::notice::No ANDROID_KEYSTORE_BASE64 secret - APK is signed with the debug key."
+      - uses: actions/download-artifact@v4
+        with:
+          name: cvwg-native
+          path: native-out
+      - name: Add the remote-access library (jniLibs)
+        run: |
+          mkdir -p android/app/src/main/jniLibs
+          cp -r native-out/android/* android/app/src/main/jniLibs/
+          find android/app/src/main/jniLibs -type f
       - run: flutter pub get
       - run: >
           flutter build apk --release
           --build-name="$APP_VERSION"
           --dart-define=APP_VERSION="$APP_VERSION"
           --build-number=${{ github.run_number }}
-      - name: Rename APK
+      - name: Rename APK (and check the native library is inside)
         run: |
           mkdir -p dist
+          unzip -l build/app/outputs/flutter-apk/app-release.apk | grep libcvwg.so
           cp build/app/outputs/flutter-apk/app-release.apk "dist/Cybervulcan-$APP_VERSION.apk"
       - name: Remove signing material
         if: always()
@@ -144,7 +231,7 @@ jobs:
           if-no-files-found: error
 
   windows:
-    needs: [test, version]
+    needs: [test, version, native]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -160,10 +247,41 @@ jobs:
           --build-name=${{ needs.version.outputs.name }}
           --dart-define=APP_VERSION=${{ needs.version.outputs.name }}
           --build-number=${{ github.run_number }}
-      - name: Bundle the VC++ runtime next to the exe (app-local deployment)
+      - uses: actions/download-artifact@v4
+        with:
+          name: cvwg-native
+          path: native-out
+      # Home link (remote access modes "home" / "everything"): the official,
+      # signed Wintun prebuilt from wintun.net, redistributable unmodified
+      # under its licence (shipped as wintun-LICENSE.txt). Never committed;
+      # the download must match the pinned checksum.
+      - name: Fetch Wintun (pinned SHA-256)
+        shell: pwsh
+        env:
+          WINTUN_URL: https://www.wintun.net/builds/wintun-0.14.1.zip
+          WINTUN_SHA256: 07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51
+        run: |
+          $zip = Join-Path $env:RUNNER_TEMP "wintun.zip"
+          Invoke-WebRequest -Uri $env:WINTUN_URL -OutFile $zip -ErrorAction Stop
+          $got = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
+          if ($got -ne $env:WINTUN_SHA256) {
+            Write-Error "wintun zip checksum mismatch: got $got"; exit 1
+          }
+          $out = Join-Path $env:RUNNER_TEMP "wintun"
+          Expand-Archive $zip -DestinationPath $out -Force
+          $dll = Join-Path $out "wintun\bin\amd64\wintun.dll"
+          $sig = Get-AuthenticodeSignature $dll
+          if ($sig.Status -ne 'Valid') { Write-Error "wintun.dll signature: $($sig.Status)"; exit 1 }
+          Write-Host "wintun.dll signed by: $($sig.SignerCertificate.Subject)"
+          New-Item -ItemType Directory -Force wintun-out | Out-Null
+          Copy-Item $dll wintun-out\wintun.dll -ErrorAction Stop
+          Copy-Item (Join-Path $out "wintun\LICENSE.txt") wintun-out\wintun-LICENSE.txt -ErrorAction Stop
+      - name: Bundle the VC++ runtime, the remote-access DLL and Wintun next to the exe
         shell: pwsh
         run: |
           $dest = "build\windows\x64\runner\Release"
+          Copy-Item "native-out\windows\cvwg.dll" $dest -ErrorAction Stop
+          Copy-Item "wintun-out\wintun.dll", "wintun-out\wintun-LICENSE.txt" $dest -ErrorAction Stop
           foreach ($dll in 'msvcp140.dll','vcruntime140.dll','vcruntime140_1.dll') {
             Copy-Item "$env:WINDIR\System32\$dll" $dest -ErrorAction Stop
           }
@@ -190,7 +308,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/heads/prerelease/')
     needs: [android, windows, version]
     runs-on: ubuntu-latest
     permissions:
@@ -203,6 +321,12 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           name: Cybervulcan ${{ needs.version.outputs.name }}
+          # A prerelease/** branch (or "[prerelease]" in a tagged commit's
+          # message) publishes a test build: the in-app updater ignores
+          # pre-releases until they are promoted to a full release.
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('v{0}', needs.version.outputs.name) }}
+          target_commitish: ${{ github.sha }}
+          prerelease: ${{ startsWith(github.ref, 'refs/heads/prerelease/') || contains(github.event.head_commit.message, '[prerelease]') }}
           files: |
             dist/*.exe
             dist/*.apk

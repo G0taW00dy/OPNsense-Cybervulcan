@@ -2,6 +2,7 @@ import '../api/opnsense_client.dart';
 import '../core/bypass.dart';
 import '../core/config.dart';
 import '../core/house_state.dart';
+import '../net/router_link.dart';
 
 String formatDuration(Duration d) {
   if (d.isNegative) d = Duration.zero;
@@ -14,12 +15,23 @@ String formatDuration(Duration d) {
 }
 
 /// Label for a bypass duration choice.
-String bypassDurationLabel(Duration d) =>
-    isNoLimitDuration(d) ? 'Until I turn it off' : formatDuration(d);
+String bypassDurationLabel(Duration d) {
+  if (isNoLimitDuration(d)) return 'Until I turn it off';
+  final h = d.inHours, m = d.inMinutes.remainder(60);
+  if (h == 0) return '${d.inMinutes} min';
+  return m == 0 ? '$h h' : '$h h $m min';
+}
 
 String formatClock(DateTime t) {
   final l = t.toLocal();
   return '${l.hour.toString().padLeft(2, '0')}:${l.minute.toString().padLeft(2, '0')}';
+}
+
+/// "14 Nov 21:35" (local).
+String formatWhen(DateTime t) {
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  final l = t.toLocal();
+  return '${l.day} ${months[l.month - 1]} ${formatClock(l)}';
 }
 
 String exitLabel(ProtonExit e, AppConfig cfg) => switch (e) {
@@ -33,9 +45,12 @@ String errorHint(OpnsenseException e) => switch (e.kind) {
       ApiErrorKind.unauthorized => 'API key/secret rejected - check Settings.',
       ApiErrorKind.forbidden => 'The API user is missing a privilege (${e.endpoint}).',
       ApiErrorKind.notFound => 'Endpoint not found - check the base URL / OPNsense version.',
-      ApiErrorKind.untrustedCertificate =>
-        'Router certificate not trusted - re-run "Trust certificate" in Settings.',
-      ApiErrorKind.network => 'Router unreachable: ${e.message}',
+      ApiErrorKind.untrustedCertificate => e.message.startsWith('Wrong certificate')
+          ? e.message
+          : 'Wrong certificate - not your router, or its certificate changed. '
+              'Check the certificate name (or pin) in Settings.',
+      ApiErrorKind.network =>
+        e.message.startsWith('Not home') ? e.message : 'Router unreachable: ${e.message}',
       ApiErrorKind.server => 'Router error: ${e.message}',
       ApiErrorKind.badResponse => e.message,
     };
@@ -43,6 +58,13 @@ String errorHint(OpnsenseException e) => switch (e.kind) {
 /// One-line summary used by the tray tooltip, widget and header.
 String headline(HouseSnapshot s, AppConfig cfg) {
   if (!s.configured) return 'Not set up';
+  final link = s.link;
+  if (link != null && link.state == LinkState.notHome) {
+    return link.remoteTried ? 'Not home - remote access failed' : 'Not home - router unreachable';
+  }
+  if (link != null && link.state == LinkState.wrongCertificate) {
+    return 'Wrong certificate - not your router? API key not sent';
+  }
   final err = s.error;
   if (err != null) return errorHint(err);
   if (s.bypassActive ?? false) {
@@ -55,7 +77,42 @@ String headline(HouseSnapshot s, AppConfig cfg) {
   return switch (s.exit) {
     ProtonExit.main => 'VPN OK via ${cfg.mainLabel}$ping',
     ProtonExit.backup => 'FAILOVER: via ${cfg.backupLabel}$ping',
-    ProtonExit.none => 'Both tunnels DOWN - kill switch tripped',
+    // 22 Nov: the modem dropped and this only said "both tunnels down".
+    ProtonExit.none => s.wanDown == true
+        ? 'INTERNET LINE DOWN - check the modem and the router\'s WAN cable (kill switch holding)'
+        : 'Both tunnels DOWN - kill switch tripped. If both dropped together, check the internet line '
+            '(modem / WAN cable) first',
     ProtonExit.unknown => 'Gateways ${cfg.mainGateway}/${cfg.backupGateway} not found',
+  };
+}
+
+/// The small status word over the big line (Status page and widget).
+String heroLabel(HouseSnapshot s) {
+  if (!s.configured) return 'Not set up';
+  if (s.link?.state == LinkState.notHome) return 'Not home';
+  if (s.link?.state == LinkState.wrongCertificate) return 'Wrong certificate';
+  if (!s.reachable) return 'Router unreachable';
+  if (s.bypassActive ?? false) return 'VPN bypass on';
+  if (s.killSwitch.tripped) return s.wanDown == true ? 'Internet line down' : 'Kill switch tripped';
+  if (s.killSwitchArmed == false) return 'Kill switch not armed';
+  if (s.busy) return 'Changing...';
+  if (s.failoverActive) return 'Failover active';
+  return switch (s.health) {
+    Health.ok => 'Protected',
+    Health.warning => 'Slow tunnel',
+    _ => 'Problem',
+  };
+}
+
+/// The big line: where the house's traffic leaves right now.
+String heroTitle(HouseSnapshot s, AppConfig cfg) {
+  if (s.link?.state == LinkState.wrongCertificate) return 'Not your router?';
+  if (!s.reachable) return 'No connection';
+  if (s.bypassActive ?? false) return cfg.directLabel;
+  return switch (s.exit) {
+    ProtonExit.main => cfg.mainLabel,
+    ProtonExit.backup => cfg.backupLabel,
+    ProtonExit.none => 'No exit',
+    ProtonExit.unknown => 'Unknown',
   };
 }
