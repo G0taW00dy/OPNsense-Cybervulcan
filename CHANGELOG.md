@@ -1,5 +1,7 @@
 # Changelog
 
+## 2.1.11 (pre-release) - includes everything below from 2.1.10 onwards
+
 ## 2.1.10 (pre-release)
 - Tests: the expected exit country comes from the servers the tunnels use now (JP#153 -> Japan), so a Tokyo exit and Proton's Japanese DNS pass instead of "neither AU nor US".
 - Tests: an exit or DNS on a VPN provider's network that is not one of the router's tunnels (e.g. the device's own Proton app) is a warning - "this device's own VPN app is probably on" - not a leak.
