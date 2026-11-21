@@ -2,6 +2,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:opnsense_cybervulcan/src/api/models.dart';
 import 'package:opnsense_cybervulcan/src/api/shaper_models.dart';
 import 'package:opnsense_cybervulcan/src/core/config.dart';
+import 'package:opnsense_cybervulcan/src/core/house_state.dart';
+import 'package:opnsense_cybervulcan/src/core/shaper_tuner.dart';
 import 'package:opnsense_cybervulcan/src/core/quick_tests.dart';
 import 'package:opnsense_cybervulcan/src/core/security_tests.dart';
 import 'package:opnsense_cybervulcan/src/core/server_switcher.dart';
@@ -10,6 +12,32 @@ import 'fake_router.dart';
 
 /// Regression tests for the bugs found while testing v2.0.4 on 20 Nov 2026.
 void main() {
+  group('CLEAR auto-tune', () {
+    ShaperPipe p(String d) => ShaperPipe(uuid: d, number: 1, description: d, mbit: 50, enabled: true);
+    test('finds CLEAR pipes, never the VPN ones', () {
+      final pipes = [p('VPN download'), p('VPN upload'), p('CLEAR download'), p('CLEAR upload')];
+      final c = findClearPipes(pipes)!;
+      expect(c.down.description, 'CLEAR download');
+      expect(c.up.description, 'CLEAR upload');
+      expect(findClearPipes([p('VPN download'), p('VPN upload')]), isNull);
+    });
+    test('WAN gateway: setting wins, else first WAN-named non-VPN gateway', () {
+      GatewayStatus g(String n) => GatewayStatus(name: n, health: GatewayHealth.online, delayMs: 30);
+      const cfg = AppConfig(mainGateway: 'WG_MAIN_GW', backupGateway: 'WG_BACKUP_GW');
+      final all = [g('WG_MAIN_GW'), g('WG_BACKUP_GW'), g('WAN_DHCP')];
+      expect(pickWanGateway(all, cfg)!.name, 'WAN_DHCP');
+      expect(pickWanGateway(all, cfg.copyWith(wanGateway: 'WG_BACKUP_GW'))!.name, 'WG_BACKUP_GW');
+      expect(pickWanGateway([g('WG_MAIN_GW')], cfg), isNull);
+    });
+    test('uses the CLEAR range, not the VPN one', () {
+      const cfg = AppConfig(shaperClearMinDown: 40, shaperClearMaxDown: 100, shaperMaxDown: 80);
+      final d = decideTune(
+          delayMs: 20, baselineMs: 15, rateDownMbit: 95, rateUpMbit: 0, down: 99, up: 10,
+          cfg: cfg, range: TuneRange.clear(cfg), label: 'CLEAR');
+      expect(d.down, 100); // raised within the CLEAR max, above the VPN max of 80
+    });
+  });
+
   test('shaper display order: VPN first, download before upload, disabled hidden', () {
     ShaperPipe p(String d, {bool on = true}) => ShaperPipe(uuid: d, number: 1, description: d, mbit: 10, enabled: on);
     final order = shaperDisplayOrder([p('CLEAR upload'), p('VPN upload'), p('Old', on: false), p('CLEAR download'), p('VPN download')]);

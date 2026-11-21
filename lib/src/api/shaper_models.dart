@@ -49,6 +49,17 @@ class ShaperPipe {
   bool get _vpn => description.toLowerCase().contains('vpn');
   bool get looksVpnDownload => _vpn && description.toLowerCase().contains('down');
   bool get looksVpnUpload => _vpn && description.toLowerCase().contains('up');
+
+  bool get _clear => !_vpn && description.toLowerCase().contains('clear');
+  bool get looksClearDownload => _clear && description.toLowerCase().contains('down');
+  bool get looksClearUpload => _clear && description.toLowerCase().contains('up') && !description.toLowerCase().contains('down');
+}
+
+/// The CLEAR (direct internet) download / upload pipes, by description.
+({ShaperPipe down, ShaperPipe up})? findClearPipes(List<ShaperPipe> pipes) {
+  final d = pipes.where((p) => p.enabled && p.looksClearDownload).firstOrNull;
+  final u = pipes.where((p) => p.enabled && p.looksClearUpload).firstOrNull;
+  return d == null || u == null ? null : (down: d, up: u);
 }
 
 /// The VPN download / upload pipes, found by description ("VPN download",
