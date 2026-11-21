@@ -37,7 +37,26 @@ class ExitInfo {
   final String? org;
 }
 
-enum Verdict { ok, mismatch, inconclusive }
+enum Verdict { ok, mismatch, inconclusive, warn }
+
+/// A VPN provider's or hosting network (where VPN servers live), not a home
+/// ISP. Used to tell "this device's own VPN app is on" apart from a leak.
+bool looksLikeVpnNetwork(String? org) {
+  final o = (org ?? '').toLowerCase();
+  return const [
+    'datacamp', 'proton', 'mullvad', '31173', 'm247', 'host universal', 'packethub', 'tefincom',
+    'leaseweb', 'cdn77', 'zenlayer', 'choopa', 'vultr', 'the constant company', 'ovh', 'hetzner',
+    'digitalocean', 'quadranet', 'performive', 'xtom', 'clouvider', 'gsl networks',
+  ].any(o.contains);
+}
+
+/// Countries the house VPN may exit in: the "VPN country" setting plus the
+/// country of each server a tunnel uses now (JP#153 -> JP, US-CA#742 -> US).
+Set<String> vpnCountriesFor(AppConfig cfg, Iterable<String> tunnelServerNames) => {
+      cfg.vpnCountryCode.toUpperCase(),
+      for (final n in tunnelServerNames)
+        if (RegExp(r'^([A-Z]{2})[#-]').firstMatch(n.trim()) case final m?) m.group(1)!,
+    };
 
 class ExitCheckResult {
   const ExitCheckResult(this.info, this.expected, this.verdict, this.explanation);
@@ -48,30 +67,50 @@ class ExitCheckResult {
   final String explanation;
 }
 
-ExitCheckResult evaluateExit(ExitInfo info, ExpectedPath expected, AppConfig cfg) {
+ExitCheckResult evaluateExit(ExitInfo info, ExpectedPath expected, AppConfig cfg, {Set<String>? vpnCountries}) {
   final cc = info.countryCode?.toUpperCase();
   if (cc == null) {
     return ExitCheckResult(info, expected, Verdict.inconclusive, 'Country lookup failed.');
   }
   final home = cfg.homeCountryCode.toUpperCase();
-  final vpn = cfg.vpnCountryCode.toUpperCase();
+  final vpn = vpnCountries ?? {cfg.vpnCountryCode.toUpperCase()};
+  final vpnNet = looksLikeVpnNetwork(info.org);
+  final vpnWords = vpn.join(' / ');
   switch (expected) {
     case ExpectedPath.vpn:
+      if (vpn.contains(cc) && (vpnNet || info.org == null)) {
+        return ExitCheckResult(info, expected, Verdict.ok, 'Exit is in $cc on ${cfg.vpnName}, matching the house tunnels.');
+      }
+      if (vpnNet) {
+        // A VPN server, but not one of the router's: the device's own VPN app.
+        return ExitCheckResult(info, expected, Verdict.warn,
+            'Exit is a VPN server in $cc that is not one of the router\'s tunnels ($vpnWords) - this device\'s '
+            'own VPN app is probably on. Not a leak, but at home it adds a second VPN layer and lag.');
+      }
       if (cc == home) {
         return ExitCheckResult(info, expected, Verdict.mismatch,
-            'Expected a ${cfg.vpnName} exit ($vpn) but traffic leaves from $home - possible leak.');
+            'Expected a ${cfg.vpnName} exit ($vpnWords) but traffic leaves via a $home network - possible leak.');
       }
-      return ExitCheckResult(info, expected, cc == vpn ? Verdict.ok : Verdict.inconclusive,
-          cc == vpn ? 'Exit is in $vpn, consistent with ${cfg.vpnName}.' : 'Exit country $cc is neither $home nor $vpn.');
+      return ExitCheckResult(info, expected, vpn.contains(cc) ? Verdict.ok : Verdict.inconclusive,
+          vpn.contains(cc) ? 'Exit is in $cc, matching the house tunnels.' : 'Exit country $cc is not where the tunnels are ($vpnWords).');
     case ExpectedPath.direct:
+      if (vpnNet) {
+        return ExitCheckResult(info, expected, Verdict.mismatch,
+            'Expected direct internet but the exit is a VPN server in $cc - still on the VPN, or this device\'s '
+            'own VPN app is on.');
+      }
       if (cc == home) {
         return ExitCheckResult(info, expected, Verdict.ok, 'Direct exit via your ISP ($home), as expected.');
       }
       return ExitCheckResult(info, expected, Verdict.mismatch,
           'Expected direct internet ($home) but the exit is in $cc - still on the VPN?');
     case ExpectedPath.unknown:
-      return ExitCheckResult(info, expected, Verdict.inconclusive,
-          'This device is not on a house network Cybervulcan can reason about.');
+      // Another house network (e.g. MGMT) or not the house at all: describe it.
+      return ExitCheckResult(info, expected, Verdict.inconclusive, vpnNet
+          ? 'This device leaves through a VPN server in $cc${vpn.contains(cc) ? ' (the house tunnels)' : ' (its own VPN app?)'}.'
+          : cc == home
+              ? 'This device goes straight to the internet via a $home network - no VPN on this path.'
+              : 'This device exits in $cc - not a network the app can judge.');
   }
 }
 

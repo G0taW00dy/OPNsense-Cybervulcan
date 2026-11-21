@@ -496,11 +496,14 @@ class _ServersPageState extends State<ServersPage> {
               onPressed: _loading || _running ? null : _addFromConf,
               icon: const Icon(Icons.note_add_outlined),
               label: const Text('Paste config')),
-          FilterChip(
-            label: Text('Only ${c.config.serverCities.isEmpty ? 'my cities' : c.config.serverCities}'),
-            selected: _onlyMyCities,
-            onSelected: (v) => setState(() => _onlyMyCities = v),
-          ),
+          // No cities chosen = nothing to filter: no chip (it showed ticked
+          // but did nothing on the PC).
+          if (c.config.serverCityList.isNotEmpty)
+            FilterChip(
+              label: Text('Only ${c.config.serverCities}'),
+              selected: _onlyMyCities,
+              onSelected: (v) => setState(() => _onlyMyCities = v),
+            ),
         ]),
         if (_message != null)
           Padding(
