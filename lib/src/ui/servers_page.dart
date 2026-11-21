@@ -264,7 +264,12 @@ class _ServersPageState extends State<ServersPage> {
         name: s.name, entryIp: s.entryIp, publicKey: s.publicKey, port: s.port, city: city, country: c.config.vpnCountryCode);
     _servers = [..._servers.where((x) => x.entryIp != server.entryIp), server];
     await c.saveServers(_servers);
-    if (mounted) setState(() => _message = 'Added ${server.name}${_whereSaved()}. (Any private key in it was ignored.)');
+    final hidden = !_visible.any((x) => x.entryIp == server.entryIp);
+    if (mounted) {
+      setState(() => _message = 'Added ${server.name}${_whereSaved()}.'
+          '${hidden ? ' It is hidden by the city filter - tap "Only ..." to show all.' : ''}'
+          ' (Any private key in it was ignored.)');
+    }
   }
 
   Future<void> _setCity(ProtonServer s) async {
@@ -457,7 +462,12 @@ class _ServersPageState extends State<ServersPage> {
         ),
         const SizedBox(height: 16),
         Row(children: [
-          Expanded(child: Text('Servers (${visible.length})', style: t.titleMedium)),
+          Expanded(
+              child: Text(
+                  visible.length == _servers.length
+                      ? 'Servers (${visible.length})'
+                      : 'Servers (${visible.length} of ${_servers.length} - filter on)',
+                  style: t.titleMedium)),
           if (_loading) const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
         ]),
         if (_peers != null)
