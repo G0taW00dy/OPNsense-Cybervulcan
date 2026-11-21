@@ -29,8 +29,6 @@ class _FakeTunnel implements AppTunnel {
     return _wgPort;
   }
 
-  bool _mapped(TailscaleState s) => s == TailscaleState.running && ++_running > mapAfter;
-
   @override
   Future<void> down() async {
     downs++;
@@ -74,20 +72,23 @@ class _FakeTailscale implements TailscaleEngine {
     return status();
   }
 
+  bool _mapped(TailscaleState s) => s == TailscaleState.running && ++_running > mapAfter;
+
   @override
   TailscaleStatus status() {
     if (!_up) return const TailscaleStatus();
     final s = states[_i < states.length ? _i : states.length - 1];
     if (_i < states.length) _i++;
+    final mapped = _mapped(s);
     return TailscaleStatus(
       up: true,
       state: s,
       port: _tsPort,
       authUrl: s == TailscaleState.needsLogin ? 'https://login.example.com/a/xyz' : null,
       tailnetIp: s == TailscaleState.running ? '100.64.0.5' : null,
-      peerFound: peerFound && _mapped(s),
-      peerOnline: peerFound && _mapped(s) ? true : null,
-      peers: _mapped(s) ? const ['opnsense'] : const [],
+      peerFound: peerFound && mapped,
+      peerOnline: peerFound && mapped ? true : null,
+      peers: mapped ? const ['opnsense'] : const [],
     );
   }
 
