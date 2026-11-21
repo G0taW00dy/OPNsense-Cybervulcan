@@ -74,13 +74,21 @@ class _TestsPageState extends State<TestsPage> {
   }
 
   Future<void> _runAll() async {
+    // Mark as running BEFORE the first await: a quick double tap used to
+    // start two runs (two history entries in the same minute).
     if (_running.isNotEmpty) return;
-    await c.refresh();
-    final env = await _env();
     setState(() {
       _running.addAll(allSecurityTests.map((t) => t.id));
       _results.clear();
     });
+    final TestEnv env;
+    try {
+      await c.refresh();
+      env = await _env();
+    } on Object {
+      if (mounted) setState(_running.clear);
+      rethrow;
+    }
     // Router-side checks in parallel; outside checks one after another so
     // they don't skew each other (bufferbloat last: it loads the line).
     final router = allSecurityTests.where((t) => !t.external);
@@ -169,7 +177,21 @@ class _TestsPageState extends State<TestsPage> {
         ],
         const SizedBox(height: 20),
         if (_history.length > 1) ...[
-          Text('History', style: t.titleMedium),
+          Row(children: [
+            Expanded(child: Text('History', style: t.titleMedium)),
+            TextButton.icon(
+              onPressed: busy
+                  ? null
+                  : () async {
+                      // Keep the latest run (it is what the page shows).
+                      final keep = _history.take(1).toList();
+                      await c.prefs.setString(testHistoryKey, encodeHistory(keep));
+                      if (mounted) setState(() => _history = keep);
+                    },
+              icon: const Icon(Icons.delete_sweep_outlined, size: 18),
+              label: const Text('Clear history'),
+            ),
+          ]),
           const SizedBox(height: 8),
           Card(
             child: Column(children: [
