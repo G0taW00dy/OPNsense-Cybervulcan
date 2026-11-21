@@ -1,5 +1,8 @@
 # Changelog
 
+## 2.1.8 (pre-release)
+- Away: the connection no longer drops right after unlocking. The fingerprint prompt briefly counts as "background" on Android and the app stopped Tailscale at once; it now waits 15 seconds in the background before stopping remote access.
+
 ## 2.1.7 (pre-release)
 - Away, after the app was in the background: no more "router not visible" for a few seconds while Tailscale restarts. The app now waits for Tailscale's device list before deciding.
 
