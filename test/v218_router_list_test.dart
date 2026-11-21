@@ -167,4 +167,26 @@ void main() {
     expect(wanDownFrom([wan(GatewayHealth.down, '9.9.9.9')], cfg), isTrue);
     expect(wanDownFrom([wan(GatewayHealth.online, '9.9.9.9')], cfg), isFalse);
   });
+
+  group('review 22 Nov', () {
+    const cfg = AppConfig();
+    final auTunnel = vpnCountriesFor(cfg, ['AU#321', 'JP#153']);
+    test('an ISP exit/DNS in AU is still a leak when a tunnel server is in AU', () {
+      const exampleTel = ExitInfo(ip: '1.2.3.4', countryCode: 'AU', org: 'ExampleTel Limited');
+      const unknown = ExitInfo(ip: '1.2.3.4', countryCode: 'AU');
+      expect(evaluateExit(exampleTel, ExpectedPath.vpn, cfg, vpnCountries: auTunnel).verdict, Verdict.mismatch);
+      expect(evaluateExit(unknown, ExpectedPath.vpn, cfg, vpnCountries: auTunnel).verdict, Verdict.mismatch);
+      expect(classifyResolver(countryCode: 'AU', org: 'ExampleTel', expected: ExpectedPath.vpn, cfg: cfg,
+          vpnCountries: auTunnel), TestStatus.fail);
+    });
+    test('an AU Proton server used by a tunnel passes', () {
+      const adl = ExitInfo(ip: '103.25.57.57', countryCode: 'AU', org: 'Host Universal Pty Ltd');
+      expect(evaluateExit(adl, ExpectedPath.vpn, cfg, vpnCountries: auTunnel).verdict, Verdict.ok);
+    });
+    test('VPN network names match whole words only', () {
+      expect(looksLikeVpnNetwork('AS131173 Example ISP'), isFalse);
+      expect(looksLikeVpnNetwork('Datacamp Limited'), isTrue);
+      expect(looksLikeVpnNetwork('Host Universal Pty Ltd'), isTrue);
+    });
+  });
 }

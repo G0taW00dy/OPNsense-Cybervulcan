@@ -1,6 +1,11 @@
 # Changelog
 
 ## 2.1.12 (pre-release)
+- Review fixes (independent review of the router-writing code - nothing critical found):
+  - Router server list: background saves (after a switch, Find best, the nightly run) only ADD - an older copy on one device can no longer delete servers another device added. Removing is an explicit action on the VPN servers page.
+  - A failed switch puts the target server back in the router list; one bad entry no longer stops the rest.
+  - Leak tests: an exit or DNS resolver on a home-country ISP is always a leak, even when a tunnel server is in the same country; VPN network names match whole words only.
+  - CLEAR auto-tune waits for a monitor IP on the WAN gateway instead of tuning on no data.
 - Both tunnels down: says "Internet line down - check the modem and WAN cable" when the router's WAN gateway is down (needs a monitor IP on the WAN gateway); otherwise suggests checking the line first when both drop together (22 Nov modem dropout).
 - Tests: the bypass timer on the router was verified end to end (expired on time, logged).
 - Tunnel names follow the new server's city after a switch on every device (new setting "Name tunnels after their server's city", on by default) - the old guess failed on a device that didn't know the old name was a city.
