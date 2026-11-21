@@ -15,8 +15,12 @@ String formatDuration(Duration d) {
 }
 
 /// Label for a bypass duration choice.
-String bypassDurationLabel(Duration d) =>
-    isNoLimitDuration(d) ? 'Until I turn it off' : formatDuration(d);
+String bypassDurationLabel(Duration d) {
+  if (isNoLimitDuration(d)) return 'Until I turn it off';
+  final h = d.inHours, m = d.inMinutes.remainder(60);
+  if (h == 0) return '${d.inMinutes} min';
+  return m == 0 ? '$h h' : '$h h $m min';
+}
 
 String formatClock(DateTime t) {
   final l = t.toLocal();
