@@ -1080,6 +1080,7 @@ class CybervulcanController extends ChangeNotifier {
     // Switching the router list off and on again later merges this device's
     // list into the router's once more.
     if (config.serverListOnRouter && !cfg.serverListOnRouter) await prefs.remove(_listSeededKey);
+    final listTurnedOn = !config.serverListOnRouter && cfg.serverListOnRouter;
     config = cfg;
     await prefs.saveConfig(cfg);
     if (credentials != null) {
@@ -1090,6 +1091,16 @@ class CybervulcanController extends ChangeNotifier {
     await link.pause(); // keeps a Tailscale sign-in in progress
     if (pollChanged) _schedule();
     await _refreshAfterChange();
+    // Switching the shared list on copies this device's list to the router
+    // straight away (not only when the VPN servers page opens).
+    if (listTurnedOn) {
+      await loadServerList();
+      lastActionInfo = serverListNote == null
+          ? 'Server list copied to the router - your other devices see it too.'
+          : null;
+      if (serverListNote != null) lastActionError = 'Server list: $serverListNote';
+      notifyListeners();
+    }
   }
 
   /// Makes a new WireGuard keypair for this device. The private key goes
