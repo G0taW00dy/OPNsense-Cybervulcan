@@ -1,7 +1,9 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:opnsense_cybervulcan/src/api/wireguard_models.dart';
 import 'package:opnsense_cybervulcan/src/core/router_server_list.dart';
+import 'package:opnsense_cybervulcan/src/core/config.dart';
 import 'package:opnsense_cybervulcan/src/core/server_switcher.dart';
+import 'package:opnsense_cybervulcan/src/ui/servers_page.dart' show knownCities;
 
 import 'fake_router.dart';
 
@@ -69,5 +71,11 @@ void main() {
     ];
     expect(tunnelsAfter, tunnelsBefore);
     expect(r.wgReconfigures, 0);
+  });
+
+  test('known cities: one spelling each, from the list and Settings, sorted', () {
+    const cfg = AppConfig(serverCities: 'San Jose, los angeles');
+    final c = knownCities(const [sj, la, ProtonServer(name: 'JP#1', entryIp: '1.1.1.1', publicKey: _k1, city: 'Tokyo')], cfg);
+    expect(c, ['los angeles', 'San Jose', 'Tokyo']);
   });
 }

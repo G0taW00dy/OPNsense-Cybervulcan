@@ -6,6 +6,7 @@
 - Tests: "Clear history" (keeps the latest run); a quick double tap on Run all no longer starts two runs.
 - The Quick Settings tile is now called "Cybervulcan bypass" so it is easy to find, and shows the Cybervulcan V instead of a "P".
 - VPN servers: the heading says when the city filter hides servers ("1 of 4 - filter on"), and adding a server the filter hides says so.
+- Cities: when adding a server, pick a city you already have from chips (or type a new one); Settings > "Cities to choose from" gets tap-to-choose chips for every city in your list.
 - Bypass time choices read 30 min · 1 h · 2 h · 4 h.
 
 ## 2.1.8 (pre-release)

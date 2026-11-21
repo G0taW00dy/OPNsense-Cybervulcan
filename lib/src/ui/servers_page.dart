@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
 import '../api/opnsense_client.dart';
+import '../core/config.dart';
 import '../core/controller.dart';
 import '../core/providers.dart';
 import '../core/server_switcher.dart';
@@ -312,13 +313,18 @@ class _ServersPageState extends State<ServersPage> {
               ),
             TextField(
                 controller: ctl,
-                autofocus: true,
-                decoration: const InputDecoration(labelText: 'City', hintText: 'e.g. Los Angeles')),
-            if (c.config.serverCityList.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              Wrap(spacing: 6, children: [
-                for (final city in c.config.serverCityList)
-                  ActionChip(label: Text(city), onPressed: () => setD(() => ctl.text = city)),
+                onChanged: (_) => setD(() {}),
+                decoration: const InputDecoration(labelText: 'New city', hintText: 'e.g. Los Angeles')),
+            if (knownCities(_servers, c.config).isNotEmpty) ...[
+              const SizedBox(height: 10),
+              Text('Or pick one you already have:', style: Theme.of(ctx).textTheme.bodySmall),
+              const SizedBox(height: 4),
+              Wrap(spacing: 6, runSpacing: 6, children: [
+                for (final city in knownCities(_servers, c.config))
+                  ChoiceChip(
+                      label: Text(city),
+                      selected: ctl.text.trim().toLowerCase() == city.toLowerCase(),
+                      onSelected: (_) => setD(() => ctl.text = city)),
               ]),
             ],
           ]),
@@ -580,4 +586,15 @@ class _LoadDot extends StatelessWidget {
                 : OpnColors.red;
     return Container(width: 12, height: 12, decoration: BoxDecoration(color: color, shape: BoxShape.circle));
   }
+}
+
+/// Cities the person already uses (server list + "Cities to choose from"),
+/// one spelling each (first seen wins), sorted.
+List<String> knownCities(List<ProtonServer> servers, AppConfig cfg) {
+  final byKey = <String, String>{};
+  for (final c in [...cfg.serverCityList, for (final s in servers) ?s.city]) {
+    final t = c.trim();
+    if (t.isNotEmpty) byKey.putIfAbsent(t.toLowerCase(), () => t);
+  }
+  return byKey.values.toList()..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
 }
