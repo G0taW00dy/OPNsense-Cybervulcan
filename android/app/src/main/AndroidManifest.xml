@@ -81,7 +81,7 @@
         <!-- Quick Settings tile: whole-house VPN bypass. -->
         <service
             android:name=".BypassTileService"
-            android:label="VPN bypass"
+            android:label="Cybervulcan bypass"
             android:icon="@drawable/ic_tile_bypass"
             android:permission="android.permission.BIND_QUICK_SETTINGS_TILE"
             android:exported="true">

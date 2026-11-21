@@ -3,6 +3,8 @@
 ## 2.1.9 (pre-release)
 - Settings > Diagnostics: the buttons wrap instead of squeezing "Copy diagnostics" onto three lines.
 - Widget: shorter "Out of reach · last seen" line so it no longer runs over the artwork.
+- Tests: "Clear history" (keeps the latest run); a quick double tap on Run all no longer starts two runs.
+- The Quick Settings tile is now called "Cybervulcan bypass" so it is easy to find.
 
 ## 2.1.8 (pre-release)
 - Away: the connection no longer drops right after unlocking. The fingerprint prompt briefly counts as "background" on Android and the app stopped Tailscale at once; it now waits 15 seconds in the background before stopping remote access.
