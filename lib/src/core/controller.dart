@@ -566,6 +566,7 @@ class CybervulcanController extends ChangeNotifier {
       await journal.add('${main ? 'Main' : 'Backup'} tunnel -> ${server.name}', ok: true,
           detail: 'Handshake confirmed${sw.monitorWarning == null ? '' : '; monitor not refreshed'}');
       tuner.pathChanged();
+      await _followCity(main, server);
       // The server the tunnel left goes (back) into the list - also on a
       // device that never had it - and so into the router list.
       final cached = cachedServers();
@@ -596,6 +597,9 @@ class CybervulcanController extends ChangeNotifier {
       if (plan != null) {
         await journal.add('Find best server', ok: true, detail: plan.reason);
         tuner.pathChanged();
+        if (plan.changeMain) await _followCity(true, plan.newMain.server);
+        final nb = plan.newBackup?.server;
+        if (nb != null) await _followCity(false, nb);
       }
       if (plan != null && config.notifyOnFailover) {
         _events.add(AlertEvent(AlertKind.serverChanged,
@@ -623,6 +627,23 @@ class CybervulcanController extends ChangeNotifier {
       // every server no tunnel uses now.
       if (config.serverListOnRouter) unawaited(saveServers(cachedServers()));
     }
+  }
+
+  /// After a switch the tunnel's name follows the new server's city (the
+  /// Status title, widget, tray and alerts use it) - but only when the name is
+  /// a city or the default, never a name the person chose ("Streaming").
+  Future<void> _followCity(bool main, ProtonServer server) async {
+    final city = server.city?.trim();
+    if (city == null || city.isEmpty) return;
+    final old = (main ? config.mainLabel : config.backupLabel).trim();
+    final cities = {
+      for (final c in [...config.serverCityList, for (final s in cachedServers()) ?s.city]) c.trim().toLowerCase(),
+    };
+    final isCityOrDefault = old.isEmpty || old == 'Main' || old == 'Backup' || cities.contains(old.toLowerCase());
+    if (!isCityOrDefault || old.toLowerCase() == city.toLowerCase()) return;
+    config = main ? config.copyWith(mainLabel: city) : config.copyWith(backupLabel: city);
+    await prefs.saveConfig(config);
+    notifyListeners();
   }
 
   void cancelFindBest() => _switcher?.cancel();
