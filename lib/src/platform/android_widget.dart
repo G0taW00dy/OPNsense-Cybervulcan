@@ -109,7 +109,7 @@ Future<void> markWidgetOutOfReach() async {
     if (!hadStatus) WidgetKeys.title: 'Out of reach',
     if (!hadStatus) WidgetKeys.detail: 'The router has not answered yet.',
     WidgetKeys.where: hadStatus
-        ? 'Router out of reach · last seen $last · open the app to refresh'
+        ? 'Out of reach · last seen $last'
         : 'Open the app to connect',
     WidgetKeys.health: 'stale',
     WidgetKeys.bypass: '?', // no bypass button while the router can't be reached

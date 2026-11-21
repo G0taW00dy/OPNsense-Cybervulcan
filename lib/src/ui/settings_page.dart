@@ -1254,18 +1254,15 @@ class _SettingsPageState extends State<SettingsPage> {
                   'where an admin can compare and revert it.'),
             ]),
             SubSection(title: 'Diagnostics', children: [
-              Row(children: [
-                Expanded(
-                  child: OutlinedButton.icon(
+              Wrap(spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                OutlinedButton.icon(
                     onPressed: () async {
                       await Clipboard.setData(ClipboardData(text: c.diagnostics()));
                       _say('Diagnostics copied - paste them into a bug report or a message.');
                     },
                     icon: const Icon(Icons.bug_report_outlined),
                     label: const Text('Copy diagnostics'),
-                  ),
                 ),
-                const SizedBox(width: 8),
                 OutlinedButton.icon(
                   onPressed: c.errorLog.entries.isEmpty
                       ? null
