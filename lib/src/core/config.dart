@@ -70,6 +70,7 @@ class AppConfig {
     this.backupReminderDays = 0,
     this.serverSwitcherEnabled = false,
     this.serverListOnRouter = false,
+    this.namesFollowCity = true,
     this.mainWgInstance = 'Proton_VPN_Main',
     this.backupWgInstance = 'Proton_VPN_Failover',
     this.serverCities = '',
@@ -211,6 +212,10 @@ class AppConfig {
   /// Keep the server list on the router (switched-off WireGuard peers named
   /// CVL_...), shared by every device with the owner's key.
   final bool serverListOnRouter;
+
+  /// After a server switch, rename the tunnel to the new server's city
+  /// (Status title, widget, tray, alerts). Off = keep your own names.
+  final bool namesFollowCity;
 
   /// WireGuard instance behind the main gateway.
   final String mainWgInstance;
@@ -427,6 +432,7 @@ class AppConfig {
     int? backupReminderDays,
     bool? serverSwitcherEnabled,
     bool? serverListOnRouter,
+    bool? namesFollowCity,
     String? mainWgInstance,
     String? backupWgInstance,
     String? serverCities,
@@ -503,6 +509,7 @@ class AppConfig {
         backupReminderDays: backupReminderDays ?? this.backupReminderDays,
         serverSwitcherEnabled: serverSwitcherEnabled ?? this.serverSwitcherEnabled,
         serverListOnRouter: serverListOnRouter ?? this.serverListOnRouter,
+        namesFollowCity: namesFollowCity ?? this.namesFollowCity,
         mainWgInstance: mainWgInstance ?? this.mainWgInstance,
         backupWgInstance: backupWgInstance ?? this.backupWgInstance,
         serverCities: serverCities ?? this.serverCities,
@@ -580,6 +587,7 @@ class AppConfig {
         'backupReminderDays': backupReminderDays,
         'serverSwitcherEnabled': serverSwitcherEnabled,
         'serverListOnRouter': serverListOnRouter,
+        'namesFollowCity': namesFollowCity,
         'mainWgInstance': mainWgInstance,
         'backupWgInstance': backupWgInstance,
         'serverCities': serverCities,
@@ -700,6 +708,7 @@ class AppConfig {
       backupReminderDays: i('backupReminderDays', d.backupReminderDays, min: 0),
       serverSwitcherEnabled: b('serverSwitcherEnabled', d.serverSwitcherEnabled),
       serverListOnRouter: b('serverListOnRouter', d.serverListOnRouter),
+      namesFollowCity: b('namesFollowCity', d.namesFollowCity),
       mainWgInstance: s('mainWgInstance', d.mainWgInstance),
       backupWgInstance: s('backupWgInstance', d.backupWgInstance),
       serverCities: s('serverCities', d.serverCities),

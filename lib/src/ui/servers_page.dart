@@ -368,7 +368,11 @@ class _ServersPageState extends State<ServersPage> {
           ? '${main ? c.config.mainLabel : c.config.backupLabel} tunnel now uses ${s.name}. '
               'Give it a minute for the latency figures to settle.'
           : (c.lastActionError ?? 'Not changed.');
+      // The "(main/backup) now" tags and the server left behind (21 Nov:
+      // tags stayed on the old servers until the page was reopened).
+      if (done) _servers = c.cachedServers();
     });
+    if (done) await _loadPeers();
   }
 
   Future<void> _findBest() async {
@@ -398,7 +402,9 @@ class _ServersPageState extends State<ServersPage> {
       setState(() {
         _running = false;
         _plan = plan;
+        _servers = c.cachedServers();
       });
+      await _loadPeers();
     }
   }
 
