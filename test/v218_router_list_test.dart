@@ -21,7 +21,7 @@ void main() {
 
   test('peer name: OPNsense-safe, round-trips name and city', () {
     final n = listPeerName(sj);
-    expect(n, 'CVL_US-CA.742_San-Jose');
+    expect(n, 'CVL_US-CA.742_San--Jose');
     expect(RegExp(r'^[A-Za-z0-9._-]{1,64}$').hasMatch(n), isTrue);
     final p = WgPeer(
         uuid: 'u', name: n, enabled: false, serverAddress: sj.entryIp, serverPort: 51820, publicKey: _k1, instanceNames: const []);
