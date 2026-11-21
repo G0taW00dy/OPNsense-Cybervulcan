@@ -3,7 +3,7 @@ import 'package:opnsense_cybervulcan/src/api/wireguard_models.dart';
 import 'package:opnsense_cybervulcan/src/core/router_server_list.dart';
 import 'package:opnsense_cybervulcan/src/core/config.dart';
 import 'package:opnsense_cybervulcan/src/core/server_switcher.dart';
-import 'package:opnsense_cybervulcan/src/ui/servers_page.dart' show knownCities;
+import 'package:opnsense_cybervulcan/src/ui/servers_page.dart' show knownCities, withTunnelServers;
 
 import 'fake_router.dart';
 
@@ -104,5 +104,13 @@ void main() {
     final listed = [for (final p in await c.wgPeers()) if (p.name.startsWith('CVL_')) p];
     expect(listed, isEmpty);
     expect((await c.wgPeers()).where((p) => p.publicKey == _k2).length, 1);
+  });
+
+  test('tunnel servers not in the list are shown on every device', () {
+    const cfg = AppConfig(mainLabel: 'San Jose', backupLabel: 'Los Angeles');
+    const peers = (WgPeerInfo('149.36.48.154', 51820, FakeRouter.keyA), WgPeerInfo('149.102.228.1', 51820, _k1));
+    final out = withTunnelServers(const [sj, la], peers, cfg);
+    expect(out.length, 3); // backup already listed (sj has _k1), main added
+    expect(out.first.name, 'San Jose tunnel server');
   });
 }

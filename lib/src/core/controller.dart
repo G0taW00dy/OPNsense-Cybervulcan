@@ -538,7 +538,7 @@ class CybervulcanController extends ChangeNotifier {
       final (m, b) = await sw.peers();
       final peer = main ? m : b;
       final old = ProtonServer(
-          name: '${main ? config.mainLabel : config.backupLabel} (${peer.serverAddress})',
+          name: 'Former ${main ? config.mainLabel : config.backupLabel} server',
           entryIp: peer.serverAddress,
           publicKey: peer.publicKey,
           port: peer.serverPort);
@@ -566,7 +566,12 @@ class CybervulcanController extends ChangeNotifier {
       await journal.add('${main ? 'Main' : 'Backup'} tunnel -> ${server.name}', ok: true,
           detail: 'Handshake confirmed${sw.monitorWarning == null ? '' : '; monitor not refreshed'}');
       tuner.pathChanged();
-      // The server the tunnel left can go (back) into the router list now.
+      // The server the tunnel left goes (back) into the list - also on a
+      // device that never had it - and so into the router list.
+      final cached = cachedServers();
+      if (!cached.any((s) => s.sameEndpoint(old.entryIp, old.publicKey))) {
+        await _saveLocalServers([...cached, old]);
+      }
       if (config.serverListOnRouter) unawaited(saveServers(cachedServers()));
       return true;
     },

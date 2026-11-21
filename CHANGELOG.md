@@ -1,5 +1,8 @@
 # Changelog
 
+## 2.1.10 (pre-release)
+- VPN servers: the server each tunnel uses is always listed (on every device), tagged "(main) now" / "(backup) now" - name it with Set city. After a switch, the server the tunnel left goes into the list (and the router list), even on a device that never had it.
+
 ## 2.1.9 (pre-release)
 - Settings > Diagnostics: the buttons wrap instead of squeezing "Copy diagnostics" onto three lines.
 - Widget: shorter "Out of reach · last seen" line so it no longer runs over the artwork.
