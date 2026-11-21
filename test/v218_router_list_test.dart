@@ -2,6 +2,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:opnsense_cybervulcan/src/api/wireguard_models.dart';
 import 'package:opnsense_cybervulcan/src/core/router_server_list.dart';
 import 'package:opnsense_cybervulcan/src/core/config.dart';
+import 'package:opnsense_cybervulcan/src/core/house_state.dart';
+import 'package:opnsense_cybervulcan/src/api/models.dart';
 import 'package:opnsense_cybervulcan/src/core/quick_tests.dart';
 import 'package:opnsense_cybervulcan/src/core/security_tests.dart';
 import 'package:opnsense_cybervulcan/src/api/shaper_models.dart';
@@ -156,5 +158,13 @@ void main() {
     expect(back.city, 'Los Angeles');
     expect(serverFromListPeer(WgPeer(uuid: 'u', name: listPeerName(sj), enabled: false, serverAddress: sj.entryIp,
         serverPort: 51820, publicKey: _k1, instanceNames: const []))!.name, 'US-CA#742');
+  });
+
+  test('internet line down is only reported when the WAN gateway has a monitor', () {
+    const cfg = AppConfig(mainGateway: 'WG_MAIN_GW', backupGateway: 'WG_BACKUP_GW');
+    GatewayStatus wan(GatewayHealth h, String? mon) => GatewayStatus(name: 'WAN_DHCP', health: h, monitor: mon);
+    expect(wanDownFrom([wan(GatewayHealth.online, '~')], cfg), isNull); // 22 Nov: no monitor -> "online" always
+    expect(wanDownFrom([wan(GatewayHealth.down, '9.9.9.9')], cfg), isTrue);
+    expect(wanDownFrom([wan(GatewayHealth.online, '9.9.9.9')], cfg), isFalse);
   });
 }

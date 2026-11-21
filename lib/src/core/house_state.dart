@@ -52,7 +52,12 @@ class HouseSnapshot {
     this.busy = false,
     this.link,
     this.bypassNoRouterDeadline = false,
+    this.wanDown,
   });
+
+  /// The internet line itself (the WAN gateway) is down. null = unknown -
+  /// the WAN gateway has no monitor IP, so the router can't tell.
+  final bool? wanDown;
 
   final DateTime fetchedAt;
   final bool configured;
@@ -145,6 +150,7 @@ class HouseSnapshot {
         busy: busy ?? this.busy,
         link: link,
         bypassNoRouterDeadline: bypassNoRouterDeadline,
+        wanDown: wanDown,
       );
 }
 
@@ -186,4 +192,14 @@ GatewayStatus? pickWanGateway(List<GatewayStatus> all, AppConfig cfg) {
   if (want.isNotEmpty) return findGateway(all, want);
   final vpn = {cfg.mainGateway, cfg.backupGateway};
   return all.where((g) => !vpn.contains(g.name) && g.name.toUpperCase().contains('WAN')).firstOrNull;
+}
+
+/// [HouseSnapshot.wanDown] from the router's gateways: only trusted when the
+/// WAN gateway has a monitor IP (without one the router always says "online").
+bool? wanDownFrom(List<GatewayStatus> all, AppConfig cfg) {
+  final g = pickWanGateway(all, cfg);
+  final m = g?.monitor?.trim() ?? '';
+  if (g == null || m.isEmpty || m == '~') return null;
+  if (g.health == GatewayHealth.down || g.health == GatewayHealth.forcedDown) return true;
+  return g.health.isUp ? false : null;
 }

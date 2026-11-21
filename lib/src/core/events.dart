@@ -54,8 +54,13 @@ List<AlertEvent> diffSnapshots(HouseSnapshot? prev, HouseSnapshot next, AppConfi
       events.add(AlertEvent(AlertKind.failback, 'Back on ${cfg.mainLabel}',
           '${cfg.mainLabel} tunnel recovered; traffic failed back from ${cfg.backupLabel}.'));
     } else if (b == ProtonExit.none) {
-      events.add(AlertEvent(AlertKind.bothDown, 'Both VPN tunnels down',
-          'Kill switch tripped: the VPN network has no internet until a ${cfg.vpnName} tunnel recovers.'));
+      events.add(next.wanDown == true
+          ? AlertEvent(AlertKind.bothDown, 'Internet line down',
+              'The router\'s internet connection is down - check the modem and the WAN cable. The kill switch '
+              'keeps the VPN network blocked until it is back.')
+          : AlertEvent(AlertKind.bothDown, 'Both VPN tunnels down',
+              'Kill switch tripped: the VPN network has no internet until a ${cfg.vpnName} tunnel recovers. If '
+              'both dropped at the same time, check the internet line (modem / WAN cable) first.'));
     } else if (a == ProtonExit.none) {
       final via = b == ProtonExit.main ? cfg.mainLabel : cfg.backupLabel;
       events.add(AlertEvent(AlertKind.vpnRestored, 'VPN restored',

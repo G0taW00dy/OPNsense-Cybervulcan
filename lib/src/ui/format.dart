@@ -77,7 +77,11 @@ String headline(HouseSnapshot s, AppConfig cfg) {
   return switch (s.exit) {
     ProtonExit.main => 'VPN OK via ${cfg.mainLabel}$ping',
     ProtonExit.backup => 'FAILOVER: via ${cfg.backupLabel}$ping',
-    ProtonExit.none => 'Both tunnels DOWN - kill switch tripped',
+    // 22 Nov: the modem dropped and this only said "both tunnels down".
+    ProtonExit.none => s.wanDown == true
+        ? 'INTERNET LINE DOWN - check the modem and the router\'s WAN cable (kill switch holding)'
+        : 'Both tunnels DOWN - kill switch tripped. If both dropped together, check the internet line '
+            '(modem / WAN cable) first',
     ProtonExit.unknown => 'Gateways ${cfg.mainGateway}/${cfg.backupGateway} not found',
   };
 }
@@ -89,7 +93,7 @@ String heroLabel(HouseSnapshot s) {
   if (s.link?.state == LinkState.wrongCertificate) return 'Wrong certificate';
   if (!s.reachable) return 'Router unreachable';
   if (s.bypassActive ?? false) return 'VPN bypass on';
-  if (s.killSwitch.tripped) return 'Kill switch tripped';
+  if (s.killSwitch.tripped) return s.wanDown == true ? 'Internet line down' : 'Kill switch tripped';
   if (s.killSwitchArmed == false) return 'Kill switch not armed';
   if (s.busy) return 'Changing...';
   if (s.failoverActive) return 'Failover active';

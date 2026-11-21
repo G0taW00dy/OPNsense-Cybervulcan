@@ -1,6 +1,8 @@
 # Changelog
 
 ## 2.1.12 (pre-release)
+- Both tunnels down: says "Internet line down - check the modem and WAN cable" when the router's WAN gateway is down (needs a monitor IP on the WAN gateway); otherwise suggests checking the line first when both drop together (22 Nov modem dropout).
+- Tests: the bypass timer on the router was verified end to end (expired on time, logged).
 - Tunnel names follow the new server's city after a switch on every device (new setting "Name tunnels after their server's city", on by default) - the old guess failed on a device that didn't know the old name was a city.
 - VPN servers: the "(main/backup) now" tags move right after a switch or Find best (no need to reopen the page).
 - The server a tunnel leaves keeps the tunnel's city; names with spaces survive the router list.

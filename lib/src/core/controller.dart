@@ -778,6 +778,7 @@ class CybervulcanController extends ChangeNotifier {
       killSwitchDetail: _cachedArmedDetail,
       link: ls,
       bypassNoRouterDeadline: noRouterDeadline,
+      wanDown: wanDownFrom(gws, config),
     );
   }
 
