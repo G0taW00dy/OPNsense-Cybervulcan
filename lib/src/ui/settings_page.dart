@@ -25,6 +25,7 @@ import 'format.dart';
 import 'help_page.dart';
 import 'remote_access.dart';
 import 'remote_engine_settings.dart';
+import 'servers_page.dart' show knownCities;
 import 'remote_modes_editor.dart';
 import 'theme.dart';
 import 'update_widgets.dart';
@@ -804,9 +805,42 @@ class _SettingsPageState extends State<SettingsPage> {
                     'leave them switched off.\n\nThe first time, this device\'s list is added to the router. After '
                     'that the router\'s list is the master copy. Needs "VPN: WireGuard" on YOUR app user (the same '
                     'privilege as the server switcher).'),
+            Builder(builder: (context) {
+              final known = knownCities(c.cachedServers(), _cfg);
+              final chosen = {
+                for (final x in _v('serverCities').split(','))
+                  if (x.trim().isNotEmpty) x.trim().toLowerCase(),
+              };
+              if (known.isEmpty) return const SizedBox.shrink();
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text('Cities "Find best" may pick (tap to choose)', style: Theme.of(context).textTheme.bodySmall),
+                  const SizedBox(height: 4),
+                  Wrap(spacing: 6, runSpacing: 6, children: [
+                    for (final city in known)
+                      FilterChip(
+                        label: Text(city),
+                        selected: chosen.contains(city.toLowerCase()),
+                        onSelected: (on) {
+                          final list = [
+                            for (final x in _v('serverCities').split(','))
+                              if (x.trim().isNotEmpty && x.trim().toLowerCase() != city.toLowerCase()) x.trim(),
+                            if (on) city,
+                          ];
+                          setState(() {
+                            _t['serverCities']!.text = list.join(', ');
+                            _dirty = true;
+                          });
+                        },
+                      ),
+                  ]),
+                ]),
+              );
+            }),
             _field('serverCities', 'Cities to choose from',
-                help: 'Comma-separated cities "find best" may pick, e.g. "Chicago, New York". Empty = any. '
-                    'Keeps streaming regions predictable.',
+                help: 'Tap the city chips above, or type cities here separated by commas (for a city not in your '
+                    'server list yet). Empty = any city. Keeps streaming regions predictable.',
                 hint: 'Chicago, New York'),
             _switch('Find the best server every night', _cfg.autoBestNightly,
                 (v) => _set(_cfg.copyWith(autoBestNightly: v)),
