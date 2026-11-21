@@ -321,6 +321,15 @@ class ServerSwitcher {
     final instance = main ? config.mainWgInstance : config.backupWgInstance;
     final gateway = main ? config.mainGateway : config.backupGateway;
     final started = DateTime.now();
+    // The router allows each public key on ONE peer only. If the target is in
+    // the router-stored server list (a switched-off CVL_ entry), that entry
+    // goes first; the app puts the server the tunnel leaves back in the list.
+    for (final p in await client.wgPeers()) {
+      if (p.uuid != peer.uuid && !p.enabled && p.instanceNames.isEmpty && p.name.startsWith('CVL_') &&
+          p.publicKey == server.publicKey.trim()) {
+        await client.deleteWgPeer(p.uuid);
+      }
+    }
     await client.setWgPeerServer(peer.uuid,
         address: server.entryIp, port: server.port, publicKey: server.publicKey, instance: instance);
     // The peer must still belong to its instance, or the tunnel goes dark.

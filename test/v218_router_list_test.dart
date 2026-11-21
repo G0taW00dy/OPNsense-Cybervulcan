@@ -78,4 +78,31 @@ void main() {
     final c = knownCities(const [sj, la, ProtonServer(name: 'JP#1', entryIp: '1.1.1.1', publicKey: _k1, city: 'Tokyo')], cfg);
     expect(c, ['los angeles', 'San Jose', 'Tokyo']);
   });
+
+  test('a server a tunnel uses is skipped (router: one peer per public key)', () async {
+    final r = FakeRouter();
+    final c = r.client();
+    const inUse = ProtonServer(name: 'US-CA#742', entryIp: '149.102.228.1', publicKey: FakeRouter.keyB, city: 'Los Angeles');
+    final plan = planListSync(await c.wgPeers(), [inUse, la]);
+    expect(plan.add.map((s) => s.name), ['US-CA#100']);
+    expect(inUseByTunnels(await c.wgPeers(), [inUse, la]).single.name, 'US-CA#742');
+  });
+
+  test('switching a tunnel to a listed server removes its list entry first', () async {
+    final r = FakeRouter();
+    final c = r.client();
+    await c.addWgListPeer(name: listPeerName(la), address: la.entryIp, port: la.port, publicKey: la.publicKey);
+    final sw = ServerSwitcher(client: c, config: const AppConfig(
+        mainGateway: 'WG_MAIN_GW', backupGateway: 'WG_BACKUP_GW',
+        mainWgInstance: 'Proton_VPN_Main', backupWgInstance: 'Proton_VPN_Failover'));
+    final (_, backup) = await sw.peers();
+    try {
+      await sw.apply(backup, la, main: false);
+    } on Object {
+      // The fake may not complete a handshake; the list entry must be gone anyway.
+    }
+    final listed = [for (final p in await c.wgPeers()) if (p.name.startsWith('CVL_')) p];
+    expect(listed, isEmpty);
+    expect((await c.wgPeers()).where((p) => p.publicKey == _k2).length, 1);
+  });
 }
