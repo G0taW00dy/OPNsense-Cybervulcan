@@ -298,6 +298,8 @@ class CybervulcanController extends ChangeNotifier {
             'The whole house goes direct for ${due.inMinutes} min (${describeSchedule(config)}).'));
       }
 
+      _retryShaperRead();
+
       // New devices on the network (every 8th good poll, ~2 min).
       if (config.alertNewDevices && _afterPollCount++ % 8 == 0) await _checkNewDevices();
 
@@ -824,9 +826,12 @@ class CybervulcanController extends ChangeNotifier {
   Future<void> refreshShaperInfo() async {
     final c = _client;
     if (c == null) return;
+    _shaperTriedAt = clock();
     try {
       final pipes = (await c.shaperPipes()).where((p) => p.enabled).toList();
       shaperPipes = pipes;
+      if (tuner.lastReason == _shaperReadError) tuner.lastReason = null;
+      _shaperReadError = null;
       final vpn = findVpnPipes(pipes);
       if (vpn != null) {
         tuner.currentDown = vpn.down.mbit.round();
@@ -834,11 +839,24 @@ class CybervulcanController extends ChangeNotifier {
       }
     } on OpnsenseException catch (e) {
       shaperPipes = null;
-      tuner.lastReason = e.kind == ApiErrorKind.forbidden
+      tuner.lastReason = _shaperReadError = e.kind == ApiErrorKind.forbidden
           ? 'Can\'t read the shaper - the app user needs "Firewall: Shaper".'
-          : 'Router: ${e.message}';
+          : 'Router: ${e.message} - trying again shortly';
     }
     notifyListeners();
+  }
+
+  /// The last shaper read failure shown in Settings (cleared when a read works).
+  String? _shaperReadError;
+  DateTime? _shaperTriedAt;
+
+  /// After a good router check: a failed shaper read (e.g. Settings opened
+  /// while remote access was still reconnecting) is retried, at most every 30 s.
+  void _retryShaperRead() {
+    if (_shaperReadError == null || _shaperReadError!.startsWith('Can\'t')) return;
+    final t = _shaperTriedAt;
+    if (t != null && clock().difference(t) < const Duration(seconds: 30)) return;
+    unawaited(refreshShaperInfo());
   }
 
   /// Puts the limits from before auto-tune back on the router.
