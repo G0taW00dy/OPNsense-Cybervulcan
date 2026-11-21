@@ -344,6 +344,7 @@ class CybervulcanController extends ChangeNotifier {
 
       // Shaper auto-tune (this device only; best on the always-on PC).
       if (config.shaperAutoTune) await _tuneShaper();
+      if (config.shaperClearAutoTune) await _tuneClear();
 
       // Nightly "find best server".
       final lastBest = DateTime.tryParse(prefs.getString(_bestRunKey) ?? '');
@@ -574,6 +575,7 @@ class CybervulcanController extends ChangeNotifier {
     OpnsenseException? gwError;
     try {
       gws = await client.gatewayStatus();
+      allGateways = gws;
     } on OpnsenseException catch (e) {
       gwError = e;
     }
@@ -778,6 +780,51 @@ class CybervulcanController extends ChangeNotifier {
         lastError: lastActionError,
       );
   late final ShaperTuner tuner = ShaperTuner(clock: clock);
+  late final ShaperTuner clearTuner = ShaperTuner.clear(clock: clock);
+
+  /// Every router gateway from the last good poll (WAN included).
+  List<GatewayStatus> allGateways = const [];
+
+  /// Saves [pipes]' limits as "original" unless already saved (merged, so
+  /// VPN and CLEAR originals live side by side).
+  Future<void> _saveOriginal(({ShaperPipe down, ShaperPipe up}) pipes) async {
+    final orig = shaperOriginal ?? {};
+    if (orig.containsKey(pipes.down.uuid) && orig.containsKey(pipes.up.uuid)) return;
+    orig.putIfAbsent(pipes.down.uuid, () => pipes.down.mbit.round());
+    orig.putIfAbsent(pipes.up.uuid, () => pipes.up.mbit.round());
+    await prefs.setString(shaperOriginalKey, jsonEncode(orig));
+  }
+
+  int _clearTuneErrors = 0;
+
+  Future<void> _tuneClear() async {
+    final c = _client;
+    final wan = pickWanGateway(allGateways, config);
+    if (c == null) return;
+    if (wan == null) {
+      clearTuner.lastReason = 'No WAN gateway found - set it in Settings (router: System > Gateways).';
+      return;
+    }
+    try {
+      final p = findClearPipes(await c.shaperPipes());
+      if (p == null) {
+        clearTuner.lastReason = 'No CLEAR shaper pipes found (descriptions with "CLEAR" and "download"/"upload").';
+        return;
+      }
+      await _saveOriginal(p);
+      final d = await clearTuner.tick(c, config, wan.delayMs);
+      _clearTuneErrors = 0;
+      if (d != null) {
+        await journal.add('CLEAR shaper ${clearTuner.currentDown}/${clearTuner.currentUp} Mbit/s', ok: true, detail: d.reason);
+        notifyListeners();
+      }
+    } on OpnsenseException catch (e) {
+      clearTuner.lastReason = e.kind == ApiErrorKind.forbidden
+          ? 'Needs the router privilege "Firewall: Shaper" on this app user.'
+          : 'Router: ${e.message}';
+      if (++_clearTuneErrors == 3 && config.routerSafetyNet) await restoreShaperOriginal(reason: 'CLEAR auto-tune kept failing');
+    }
+  }
   static const shaperOriginalKey = 'shaper_original_v1';
   int _tuneErrors = 0;
 
@@ -796,13 +843,13 @@ class CybervulcanController extends ChangeNotifier {
     final gw = snapshot.activeGateway;
     if (c == null || gw == null) return;
     try {
-      if (shaperOriginal == null) {
-        final p = findVpnPipes(await c.shaperPipes());
-        if (p == null) {
-          tuner.lastReason = 'No VPN shaper pipes found on the router.';
-          return;
-        }
-        await prefs.setString(shaperOriginalKey, jsonEncode({p.down.uuid: p.down.mbit.round(), p.up.uuid: p.up.mbit.round()}));
+      final p = findVpnPipes(await c.shaperPipes());
+      if (p == null) {
+        tuner.lastReason = 'No VPN shaper pipes found on the router.';
+        return;
+      }
+      {
+        await _saveOriginal(p);
       }
       final d = await tuner.tick(c, config, gw.delayMs);
       _tuneErrors = 0;
@@ -870,9 +917,11 @@ class CybervulcanController extends ChangeNotifier {
       }
       await c.shaperReconfigure();
       await prefs.remove(shaperOriginalKey);
-      tuner.pathChanged();
-      tuner.currentDown = null;
-      tuner.currentUp = null;
+      for (final t in [tuner, clearTuner]) {
+        t.pathChanged();
+        t.currentDown = null;
+        t.currentUp = null;
+      }
       await journal.add('Shaper back to the original limits', ok: true, detail: reason);
       lastActionInfo = 'Shaper limits restored (${orig.values.join(' / ')} Mbit/s).';
       notifyListeners();
@@ -892,9 +941,7 @@ class CybervulcanController extends ChangeNotifier {
     await _action((c) async {
       final p = findVpnPipes(await c.shaperPipes());
       if (p == null) throw OpnsenseException(ApiErrorKind.notFound, 'No VPN shaper pipes found on the router');
-      if (shaperOriginal == null) {
-        await prefs.setString(shaperOriginalKey, jsonEncode({p.down.uuid: p.down.mbit.round(), p.up.uuid: p.up.mbit.round()}));
-      }
+      await _saveOriginal(p);
       final down = ((config.shaperMinDown + config.shaperMaxDown) / 2).round();
       final up = ((config.shaperMinUp + config.shaperMaxUp) / 2).round();
       await c.setPipeBandwidth(p.down.uuid, down);
@@ -904,6 +951,19 @@ class CybervulcanController extends ChangeNotifier {
       tuner.currentDown = down;
       tuner.currentUp = up;
       await journal.add('Shaper re-tune from $down/$up Mbit/s', ok: true);
+      final cp = config.shaperClearAutoTune ? findClearPipes(await c.shaperPipes()) : null;
+      if (cp != null) {
+        await _saveOriginal(cp);
+        final cd = ((config.shaperClearMinDown + config.shaperClearMaxDown) / 2).round();
+        final cu = ((config.shaperClearMinUp + config.shaperClearMaxUp) / 2).round();
+        await c.setPipeBandwidth(cp.down.uuid, cd);
+        await c.setPipeBandwidth(cp.up.uuid, cu);
+        await c.shaperReconfigure();
+        clearTuner.pathChanged();
+        clearTuner.currentDown = cd;
+        clearTuner.currentUp = cu;
+        await journal.add('CLEAR shaper re-tune from $cd/$cu Mbit/s', ok: true);
+      }
       return true;
     }, done: 'Shaper re-tune started - auto-tune adjusts it under load');
   }

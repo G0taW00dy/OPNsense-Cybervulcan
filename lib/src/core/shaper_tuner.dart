@@ -29,6 +29,15 @@ const tuneClearMs = 30.0;
 /// A direction is "busy" above this share of its limit.
 const tuneBusyShare = 0.7;
 
+/// Min/max limits (Mbit/s) one tuner may move its pipes between.
+class TuneRange {
+  const TuneRange(this.minDown, this.maxDown, this.minUp, this.maxUp);
+  TuneRange.vpn(AppConfig c) : this(c.shaperMinDown, c.shaperMaxDown, c.shaperMinUp, c.shaperMaxUp);
+  TuneRange.clear(AppConfig c)
+      : this(c.shaperClearMinDown, c.shaperClearMaxDown, c.shaperClearMinUp, c.shaperClearMaxUp);
+  final int minDown, maxDown, minUp, maxUp;
+}
+
 class TuneDecision {
   const TuneDecision({this.down, this.up, required this.reason});
   final int? down;
@@ -45,17 +54,20 @@ TuneDecision decideTune({
   required int down,
   required int up,
   required AppConfig cfg,
+  TuneRange? range,
+  String label = 'VPN',
 }) {
+  final r = range ?? TuneRange.vpn(cfg);
   final bloat = delayMs - baselineMs;
   final busyDown = rateDownMbit > tuneBusyShare * down;
   final busyUp = rateUpMbit > tuneBusyShare * up;
-  int clampDown(double v) => v.round().clamp(cfg.shaperMinDown, max(cfg.shaperMinDown, cfg.shaperMaxDown));
-  int clampUp(double v) => v.round().clamp(cfg.shaperMinUp, max(cfg.shaperMinUp, cfg.shaperMaxUp));
+  int clampDown(double v) => v.round().clamp(r.minDown, max(r.minDown, r.maxDown));
+  int clampUp(double v) => v.round().clamp(r.minUp, max(r.minUp, r.maxUp));
   int? changed(int now, int next) => next == now ? null : next;
 
   if (bloat > tuneBloatMs) {
     if (!busyDown && !busyUp) {
-      return TuneDecision(reason: 'Lag +${bloat.round()} ms without much VPN traffic - not the shaper\'s doing; no change.');
+      return TuneDecision(reason: 'Lag +${bloat.round()} ms without much $label traffic - not the shaper\'s doing; no change.');
     }
     return TuneDecision(
       // Never let the clamp move a limit the other way (a pipe already below
@@ -95,7 +107,23 @@ class DelayBaseline {
 /// Router side of the tuner. One instance per controller; [tick] is called
 /// after each good status poll while auto-tune is on.
 class ShaperTuner {
-  ShaperTuner({DateTime Function()? clock, this.minGap = const Duration(seconds: 30)}) : _clock = clock ?? DateTime.now;
+  ShaperTuner({
+    DateTime Function()? clock,
+    this.minGap = const Duration(seconds: 30),
+    this.label = 'VPN',
+    ({ShaperPipe down, ShaperPipe up})? Function(List<ShaperPipe>)? find,
+    TuneRange Function(AppConfig)? range,
+  })  : _clock = clock ?? DateTime.now,
+        _find = find ?? findVpnPipes,
+        _range = range ?? TuneRange.vpn;
+
+  /// The CLEAR (direct internet) tuner.
+  ShaperTuner.clear({DateTime Function()? clock, Duration minGap = const Duration(seconds: 30)})
+      : this(clock: clock, minGap: minGap, label: 'CLEAR', find: findClearPipes, range: TuneRange.clear);
+
+  final String label;
+  final ({ShaperPipe down, ShaperPipe up})? Function(List<ShaperPipe>) _find;
+  final TuneRange Function(AppConfig) _range;
 
   final DateTime Function() _clock;
   final Duration minGap;
@@ -124,10 +152,10 @@ class ShaperTuner {
     if (delayMs == null) return null;
     final now = _clock();
     if (_pipes == null || _pipesAt == null || now.difference(_pipesAt!) > const Duration(minutes: 10)) {
-      _pipes = findVpnPipes(await client.shaperPipes());
+      _pipes = _find(await client.shaperPipes());
       _pipesAt = now;
       if (_pipes == null) {
-        lastReason = 'No VPN shaper pipes found (descriptions with "VPN" and "download"/"upload").';
+        lastReason = 'No $label shaper pipes found (descriptions with "$label" and "download"/"upload").';
         return null;
       }
     }
@@ -163,7 +191,9 @@ class ShaperTuner {
         rateUpMbit: up,
         down: currentDown!,
         up: currentUp!,
-        cfg: cfg);
+        cfg: cfg,
+        range: _range(cfg),
+        label: label);
     lastReason = d.reason;
     if (!d.changes) return null;
     if (_lastChange != null && now.difference(_lastChange!) < minGap) return null;

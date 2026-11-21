@@ -1,4 +1,5 @@
 import '../api/models.dart';
+import 'config.dart';
 import '../api/opnsense_client.dart';
 import '../net/router_link.dart';
 
@@ -176,4 +177,13 @@ GatewayStatus? findGateway(List<GatewayStatus> all, String name) {
     armed: true,
     detail: '${r.description?.isNotEmpty == true ? r.description : 'Block tagged $tag'}$hits',
   );
+}
+
+/// The direct internet line's gateway: [AppConfig.wanGateway] when set, else
+/// the first gateway named like "WAN" that is not one of the VPN gateways.
+GatewayStatus? pickWanGateway(List<GatewayStatus> all, AppConfig cfg) {
+  final want = cfg.wanGateway.trim();
+  if (want.isNotEmpty) return findGateway(all, want);
+  final vpn = {cfg.mainGateway, cfg.backupGateway};
+  return all.where((g) => !vpn.contains(g.name) && g.name.toUpperCase().contains('WAN')).firstOrNull;
 }

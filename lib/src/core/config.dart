@@ -86,6 +86,12 @@ class AppConfig {
     this.shaperMaxDown = 80,
     this.shaperMinUp = 3,
     this.shaperMaxUp = 15,
+    this.shaperClearAutoTune = false,
+    this.shaperClearMinDown = 20,
+    this.shaperClearMaxDown = 100,
+    this.shaperClearMinUp = 3,
+    this.shaperClearMaxUp = 20,
+    this.wanGateway = '',
     this.protonReminder = false,
     this.routerSafetyNet = true,
   });
@@ -251,6 +257,17 @@ class AppConfig {
 
   /// Auto-tune: highest VPN upload limit, Mbit/s.
   final int shaperMaxUp;
+
+  /// Also tune the CLEAR (direct internet) limits, against the WAN gateway's ping.
+  final bool shaperClearAutoTune;
+  final int shaperClearMinDown;
+  final int shaperClearMaxDown;
+  final int shaperClearMinUp;
+  final int shaperClearMaxUp;
+
+  /// Router gateway of the direct internet line, for CLEAR tuning. Empty = the
+  /// first gateway with "WAN" in its name that is not a VPN gateway.
+  final String wanGateway;
 
   /// Phone only: remind to turn the provider app off at home and on when away.
   final bool protonReminder;
@@ -421,6 +438,12 @@ class AppConfig {
     int? shaperMaxDown,
     int? shaperMinUp,
     int? shaperMaxUp,
+    bool? shaperClearAutoTune,
+    int? shaperClearMinDown,
+    int? shaperClearMaxDown,
+    int? shaperClearMinUp,
+    int? shaperClearMaxUp,
+    String? wanGateway,
     bool? protonReminder,
     bool? routerSafetyNet,
   }) =>
@@ -490,6 +513,12 @@ class AppConfig {
         shaperMaxDown: shaperMaxDown ?? this.shaperMaxDown,
         shaperMinUp: shaperMinUp ?? this.shaperMinUp,
         shaperMaxUp: shaperMaxUp ?? this.shaperMaxUp,
+        shaperClearAutoTune: shaperClearAutoTune ?? this.shaperClearAutoTune,
+        shaperClearMinDown: shaperClearMinDown ?? this.shaperClearMinDown,
+        shaperClearMaxDown: shaperClearMaxDown ?? this.shaperClearMaxDown,
+        shaperClearMinUp: shaperClearMinUp ?? this.shaperClearMinUp,
+        shaperClearMaxUp: shaperClearMaxUp ?? this.shaperClearMaxUp,
+        wanGateway: wanGateway ?? this.wanGateway,
         protonReminder: protonReminder ?? this.protonReminder,
         routerSafetyNet: routerSafetyNet ?? this.routerSafetyNet,
       );
@@ -560,6 +589,12 @@ class AppConfig {
         'shaperMaxDown': shaperMaxDown,
         'shaperMinUp': shaperMinUp,
         'shaperMaxUp': shaperMaxUp,
+        'shaperClearAutoTune': shaperClearAutoTune,
+        'shaperClearMinDown': shaperClearMinDown,
+        'shaperClearMaxDown': shaperClearMaxDown,
+        'shaperClearMinUp': shaperClearMinUp,
+        'shaperClearMaxUp': shaperClearMaxUp,
+        'wanGateway': wanGateway,
         'protonReminder': protonReminder,
         'routerSafetyNet': routerSafetyNet,
       };
@@ -682,6 +717,12 @@ class AppConfig {
       shaperMaxDown: i('shaperMaxDown', d.shaperMaxDown, min: 0),
       shaperMinUp: i('shaperMinUp', d.shaperMinUp, min: 0),
       shaperMaxUp: i('shaperMaxUp', d.shaperMaxUp, min: 0),
+      shaperClearAutoTune: b('shaperClearAutoTune', d.shaperClearAutoTune),
+      shaperClearMinDown: i('shaperClearMinDown', d.shaperClearMinDown, min: 0),
+      shaperClearMaxDown: i('shaperClearMaxDown', d.shaperClearMaxDown, min: 0),
+      shaperClearMinUp: i('shaperClearMinUp', d.shaperClearMinUp, min: 0),
+      shaperClearMaxUp: i('shaperClearMaxUp', d.shaperClearMaxUp, min: 0),
+      wanGateway: s('wanGateway', d.wanGateway),
       protonReminder: b('protonReminder', d.protonReminder),
       routerSafetyNet: b('routerSafetyNet', d.routerSafetyNet),
     );

@@ -225,6 +225,7 @@ class _SettingsPageState extends State<SettingsPage> {
     'pollSeconds', 'homeCountryCode', 'vpnCountryCode', 'tailscaleAddress', 'mainWgInstance',
     'backupWgInstance', 'serverCities', 'schedStart', 'schedMinutes', 'mainKeyExpiry', 'backupKeyExpiry',
     'shaperMinDown', 'shaperMaxDown', 'shaperMinUp', 'shaperMaxUp',
+    'shaperClearMinDown', 'shaperClearMaxDown', 'shaperClearMinUp', 'shaperClearMaxUp', 'wanGateway',
   ];
 
   @override
@@ -279,6 +280,11 @@ class _SettingsPageState extends State<SettingsPage> {
         shaperMaxDown: int.tryParse(_v('shaperMaxDown')) ?? _cfg.shaperMaxDown,
         shaperMinUp: int.tryParse(_v('shaperMinUp')) ?? _cfg.shaperMinUp,
         shaperMaxUp: int.tryParse(_v('shaperMaxUp')) ?? _cfg.shaperMaxUp,
+        shaperClearMinDown: int.tryParse(_v('shaperClearMinDown')) ?? _cfg.shaperClearMinDown,
+        shaperClearMaxDown: int.tryParse(_v('shaperClearMaxDown')) ?? _cfg.shaperClearMaxDown,
+        shaperClearMinUp: int.tryParse(_v('shaperClearMinUp')) ?? _cfg.shaperClearMinUp,
+        shaperClearMaxUp: int.tryParse(_v('shaperClearMaxUp')) ?? _cfg.shaperClearMaxUp,
+        wanGateway: _v('wanGateway'),
       );
 
   /// Refills every text field from [_cfg] (start, after an import).
@@ -318,6 +324,11 @@ class _SettingsPageState extends State<SettingsPage> {
       'shaperMaxDown': '${cfg.shaperMaxDown}',
       'shaperMinUp': '${cfg.shaperMinUp}',
       'shaperMaxUp': '${cfg.shaperMaxUp}',
+      'shaperClearMinDown': '${cfg.shaperClearMinDown}',
+      'shaperClearMaxDown': '${cfg.shaperClearMaxDown}',
+      'shaperClearMinUp': '${cfg.shaperClearMinUp}',
+      'shaperClearMaxUp': '${cfg.shaperClearMaxUp}',
+      'wanGateway': cfg.wanGateway,
     };
     for (final e in m.entries) {
       _t[e.key]!.text = e.value;
@@ -810,9 +821,12 @@ class _SettingsPageState extends State<SettingsPage> {
                     Text('${p.mbit.round()} Mbit/s', style: const TextStyle(fontFeatures: [FontFeature.tabularFigures()])),
                     SizedBox(
                         width: 84,
-                        child: Text(p.looksVpnDownload || p.looksVpnUpload
-                            ? (_cfg.shaperAutoTune ? '  auto-tuned' : '  fixed')
-                            : '  fixed',
+                        child: Text(
+                            (p.looksVpnDownload || p.looksVpnUpload)
+                                ? (_cfg.shaperAutoTune ? '  auto-tuned' : '  fixed')
+                                : (p.looksClearDownload || p.looksClearUpload)
+                                    ? (_cfg.shaperClearAutoTune ? '  auto-tuned' : '  fixed')
+                                    : '  fixed',
                             style: Theme.of(context).textTheme.bodySmall)),
                   ]),
                 ),
@@ -820,8 +834,7 @@ class _SettingsPageState extends State<SettingsPage> {
               const SizedBox(height: 8),
             ],
             _switch('Auto-tune the shaper', _cfg.shaperAutoTune, (v) => _set(_cfg.copyWith(shaperAutoTune: v)),
-                subtitle: 'Moves only the VPN limits: lower when lag rises under load, higher when it\'s clear. '
-                    'CLEAR limits stay as set on the router.',
+                subtitle: 'Moves the VPN limits: lower when lag rises under load, higher when it\'s clear.',
                 help: 'Mobile lines change speed all the time, so a fixed shaper limit is either too high (lag) or '
                     'too low (wasted speed). Auto-tune watches the tunnel\'s ping (the router\'s gateway monitor) and '
                     'how busy each direction is, and moves the VPN limits within the range below - about every '
@@ -841,6 +854,30 @@ class _SettingsPageState extends State<SettingsPage> {
                 const SizedBox(width: 12),
                 Expanded(child: _field('shaperMaxUp', 'VPN upload max', number: true, note: 'Mbit/s')),
               ]),
+            ],
+            _switch('Auto-tune CLEAR too', _cfg.shaperClearAutoTune,
+                (v) => _set(_cfg.copyWith(shaperClearAutoTune: v)),
+                subtitle: 'Same for the direct internet line (gaming), watching the WAN gateway\'s ping.',
+                help: 'Moves the CLEAR download/upload limits within the range below, using the ping of the router\'s '
+                    'direct internet gateway (System > Gateways - its monitor IP should be a public address such as '
+                    'Quad9 9.9.9.9). Like the VPN tuner it reads everything from the router, so the device running '
+                    'it can be on any network, or away. Run it on ONE device only. Needs shaper pipes named with '
+                    '"CLEAR" and "download"/"upload".'),
+            if (_cfg.shaperClearAutoTune) ...[
+              Row(children: [
+                Expanded(child: _field('shaperClearMinDown', 'CLEAR download min', number: true, note: 'Mbit/s')),
+                const SizedBox(width: 12),
+                Expanded(child: _field('shaperClearMaxDown', 'CLEAR download max', number: true, note: 'Mbit/s')),
+              ]),
+              Row(children: [
+                Expanded(child: _field('shaperClearMinUp', 'CLEAR upload min', number: true, note: 'Mbit/s')),
+                const SizedBox(width: 12),
+                Expanded(child: _field('shaperClearMaxUp', 'CLEAR upload max', number: true, note: 'Mbit/s')),
+              ]),
+              _field('wanGateway', 'WAN gateway (optional)',
+                  hint: 'empty = find it', help: 'Name of the direct internet gateway (System > Gateways), e.g. '
+                      'WAN_DHCP. Empty: the first gateway with "WAN" in its name.'),
+              if (c.clearTuner.lastReason != null) InfoLine('CLEAR: ${c.clearTuner.lastReason}'),
             ],
             Wrap(spacing: 8, runSpacing: 8, children: [
               OutlinedButton.icon(
