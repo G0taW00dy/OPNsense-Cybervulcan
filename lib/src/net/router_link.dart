@@ -626,7 +626,10 @@ class RouterLink {
     await _startTailscaleEngine(cfg, target);
     final until = DateTime.now().add(tailscaleTimeout);
     var st = tailscale.status();
-    while (st.state == TailscaleState.starting && DateTime.now().isBefore(until)) {
+    // "Running" arrives a few seconds before the first network map: with no
+    // peers at all yet, keep waiting instead of reporting "router not visible".
+    while ((st.state == TailscaleState.starting || (st.state == TailscaleState.running && st.peers.isEmpty)) &&
+        DateTime.now().isBefore(until)) {
       await Future<void>.delayed(pollStep);
       st = tailscale.status();
     }

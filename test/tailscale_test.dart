@@ -29,6 +29,8 @@ class _FakeTunnel implements AppTunnel {
     return _wgPort;
   }
 
+  bool _mapped(TailscaleState s) => s == TailscaleState.running && ++_running > mapAfter;
+
   @override
   Future<void> down() async {
     downs++;
@@ -42,7 +44,11 @@ class _FakeTunnel implements AppTunnel {
 /// Built-in Tailscale stand-in: [states] are reported one per status() call
 /// after a start (the last one repeats).
 class _FakeTailscale implements TailscaleEngine {
-  _FakeTailscale({this.states = const [TailscaleState.running], this.available = true, this.peerFound = true});
+  _FakeTailscale({this.states = const [TailscaleState.running], this.available = true, this.peerFound = true, this.mapAfter = 0});
+
+  /// Status calls while running before the first network map (peers) arrives.
+  final int mapAfter;
+  int _running = 0;
 
   List<TailscaleState> states;
   final bool available;
@@ -79,8 +85,9 @@ class _FakeTailscale implements TailscaleEngine {
       port: _tsPort,
       authUrl: s == TailscaleState.needsLogin ? 'https://login.example.com/a/xyz' : null,
       tailnetIp: s == TailscaleState.running ? '100.64.0.5' : null,
-      peerFound: peerFound,
-      peerOnline: peerFound ? true : null,
+      peerFound: peerFound && _mapped(s),
+      peerOnline: peerFound && _mapped(s) ? true : null,
+      peers: _mapped(s) ? const ['opnsense'] : const [],
     );
   }
 
@@ -280,6 +287,20 @@ void main() {
           probeBy(probed, ts: ProbeKind.unreachable));
       final s = await link.check(cfgWith(transport: 'tailscale'), _secrets);
       expect(s.detail, contains('subnet route'));
+    });
+
+    test('running before the network map arrives: waits for peers, then connects', () async {
+      var seenPeers = false;
+      final ts = _FakeTailscale(mapAfter: 3);
+      final base = probeBy(probed);
+      final link = _linkWith(_FakeTunnel(), ts, (target, route, timeout) async {
+        if (route.viaTunnel && route.port != _wgPort) seenPeers = ts.status().peers.isNotEmpty;
+        return base(target, route, timeout);
+      });
+      final s = await link.check(cfgWith(transport: 'tailscale'), _secrets);
+      expect(seenPeers, isTrue);
+      expect(s.connected, isTrue);
+      expect(s.builtInTailscale, isTrue);
     });
 
     test('wrong certificate through Tailscale: reported, engine stopped', () async {

@@ -1,5 +1,8 @@
 # Changelog
 
+## 2.1.7 (pre-release)
+- Away, after the app was in the background: no more "router not visible" for a few seconds while Tailscale restarts. The app now waits for Tailscale's device list before deciding.
+
 ## 2.1.6 (pre-release)
 - Settings > Test now works away from home: when the home address does not answer, it tests through the remote route the app is already connected on (Tailscale or the in-app tunnel) and says so.
 - "Router's Tailscale address" rejects this device's own Tailscale name.
