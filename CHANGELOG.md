@@ -1,6 +1,7 @@
 # Changelog
 
 ## 2.1.10 (pre-release)
+- After a server switch the tunnel's name follows the new server's city (Status title, widget, tray, alerts) - unless you gave it your own name.
 - VPN servers: the server each tunnel uses is always listed (on every device), tagged "(main) now" / "(backup) now" - name it with Set city. After a switch, the server the tunnel left goes into the list (and the router list), even on a device that never had it.
 
 ## 2.1.9 (pre-release)
