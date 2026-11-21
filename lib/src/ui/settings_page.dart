@@ -1265,6 +1265,19 @@ class _SettingsPageState extends State<SettingsPage> {
                     label: const Text('Copy diagnostics'),
                   ),
                 ),
+                const SizedBox(width: 8),
+                OutlinedButton.icon(
+                  onPressed: c.errorLog.entries.isEmpty
+                      ? null
+                      : () async {
+                          await c.errorLog.clear();
+                          if (!mounted) return;
+                          setState(() {});
+                          _say('Old app errors cleared - new ones will be recorded from now on.');
+                        },
+                  icon: const Icon(Icons.delete_sweep_outlined),
+                  label: Text('Clear errors (${c.errorLog.entries.length})'),
+                ),
                 const HelpButton(
                     title: 'Copy diagnostics',
                     text: 'Copies what a bug report needs: app version, settings that matter, tunnel status, the '

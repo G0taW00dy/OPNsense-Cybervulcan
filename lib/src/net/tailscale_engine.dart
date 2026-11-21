@@ -357,19 +357,35 @@ class TailscaleCrashGuard {
 
   static Future<void> starting() async => store?.setString(_marker, DateTime.now().toUtc().toIso8601String());
 
+  static const _strikes = 'ts_unsurvived_v1';
+
   /// Called once the engine has run for a while without taking the app down.
-  static Future<void> survived() async => store?.remove(_marker);
+  static Future<void> survived() async {
+    await store?.remove(_marker);
+    await store?.remove(_strikes);
+  }
 
   static Future<void> unblock() async {
     await store?.remove(_blocked);
     await store?.remove(_marker);
+    await store?.remove(_strikes);
   }
 
-  /// At launch: true when the previous start never survived (app closed).
-  static Future<bool> checkAtLaunch() async {
+  /// At launch: true when the engine is now paused. A start that never
+  /// "survived" is not proof of a crash by itself - Android also closes apps
+  /// in the background, and people swipe them away (21 Nov false alarm). So
+  /// pause only with real evidence: the Go library's crash file
+  /// ([nativeCrash]), or two such starts in a row.
+  static Future<bool> checkAtLaunch({bool nativeCrash = false}) async {
     final s = store;
     if (s == null || s.getString(_marker) == null) return false;
     await s.remove(_marker);
+    final strikes = (int.tryParse(s.getString(_strikes) ?? '') ?? 0) + 1;
+    if (!nativeCrash && strikes < 2) {
+      await s.setString(_strikes, '$strikes');
+      return false;
+    }
+    await s.remove(_strikes);
     await s.setString(_blocked, '1');
     return true;
   }

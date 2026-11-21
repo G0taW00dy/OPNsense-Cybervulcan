@@ -53,7 +53,7 @@ Future<void> main(List<String> args) async {
   if (nativeCrash != null) {
     await controller.errorLog.add('Native crash on the last run', StackTrace.fromString(nativeCrash));
   }
-  if (await TailscaleCrashGuard.checkAtLaunch()) {
+  if (await TailscaleCrashGuard.checkAtLaunch(nativeCrash: nativeCrash != null)) {
     controller.lastActionError = 'The built-in Tailscale engine closed the app last time, so it is paused. '
         'Settings > Remote access > "Sign in to Tailscale" tries again; Copy diagnostics shows the details.';
   }

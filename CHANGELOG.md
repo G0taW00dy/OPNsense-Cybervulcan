@@ -8,6 +8,8 @@
 - VPN servers page: marks the server each tunnel uses now, says when a tunnel's server is not in the list, and no longer shows a grey "offline-looking" dot for servers without a load figure.
 - New: "Keep the server list on the router" (Settings > VPN tunnels, off by default). Servers you add are saved on the router as switched-off, unlinked WireGuard peers (CVL_...), so every device with your key shares one list. The live tunnels are never touched by it.
 - Home-screen widget redesigned in the Cybervulcan style (status word, exit city, ping and backup state, where you are, the peak-and-circuit art). Away or with the app paused it keeps the last known status, greyed, with "last seen", instead of a red "Router unreachable".
+- Built-in Tailscale is no longer paused after a single unexplained close (Android closing the app in the background looked like a crash). It is paused only on a real native crash, or two failed starts in a row.
+- Settings > Diagnostics: "Clear errors" removes old, already-fixed errors from the diagnostics.
 
 ## 2.1.7 (pre-release)
 - Away, after the app was in the background: no more "router not visible" for a few seconds while Tailscale restarts. The app now waits for Tailscale's device list before deciding.
