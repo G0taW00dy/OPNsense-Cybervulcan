@@ -6,7 +6,7 @@ description: >-
   Proton server switcher. Windows tray app and
   Android app with widget + Quick Settings tile.
 publish_to: 'none'
-version: 2.1.7+16
+version: 2.1.8+17
 
 environment:
   sdk: ^3.8.0

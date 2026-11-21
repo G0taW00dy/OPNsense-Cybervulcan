@@ -1005,16 +1005,34 @@ class CybervulcanController extends ChangeNotifier {
   }
 
   /// Called by the platform layer: no remote tunnel while in the background.
+  ///
+  /// Going to the background is acted on only after [backgroundGrace]: the
+  /// fingerprint prompt, the notification shade or a quick app switch briefly
+  /// report "paused" too, and stopping Tailscale then broke the connection
+  /// right after unlocking.
   void setForeground(bool foreground) {
-    if (_foreground == foreground) return;
-    _foreground = foreground;
-    if (!foreground) {
+    if (foreground) {
+      _backgroundTimer?.cancel();
+      _backgroundTimer = null;
+      if (_foreground) return;
+      _foreground = true;
+      unawaited(refresh());
+      return;
+    }
+    if (!_foreground || _backgroundTimer != null) return;
+    _backgroundTimer = Timer(backgroundGrace, () {
+      _backgroundTimer = null;
+      if (_disposed) return;
+      _foreground = false;
       if (homeLink.keepTunnelInBackground(config)) return; // v2.1: the VPN needs the tunnel
       unawaited(link.pause());
-    } else {
-      unawaited(refresh());
-    }
+    });
   }
+
+  Timer? _backgroundTimer;
+
+  /// How long the app must stay in the background before remote access stops.
+  Duration backgroundGrace = const Duration(seconds: 15);
 
   Future<void> forgetCredentials() async {
     await secrets.clear();
@@ -1027,6 +1045,7 @@ class CybervulcanController extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _timer?.cancel();
+    _backgroundTimer?.cancel();
     _client?.close();
     unawaited(link.close());
     unawaited(_events.close());
