@@ -170,7 +170,7 @@ class _ServersPageState extends State<ServersPage> {
     if (!mounted) return;
     setState(() {
       _loading = false;
-      _servers = list;
+      _servers = _peers == null ? list : withTunnelServers(list, _peers!, c.config);
       if (c.serverListNote != null) _message = c.serverListNote;
     });
   }
@@ -181,7 +181,11 @@ class _ServersPageState extends State<ServersPage> {
   Future<void> _loadPeers() async {
     try {
       final p = await c.tunnelPeers();
-      if (mounted) setState(() => _peers = p);
+      if (!mounted) return;
+      setState(() {
+        _peers = p;
+        _servers = withTunnelServers(_servers, p, c.config);
+      });
     } on Object {
       // The tile tags are a nicety; the page still works without them.
     }
@@ -476,14 +480,6 @@ class _ServersPageState extends State<ServersPage> {
                   style: t.titleMedium)),
           if (_loading) const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
         ]),
-        if (_peers != null)
-          for (final (label, peer) in [(c.config.mainLabel, _peers!.$1), (c.config.backupLabel, _peers!.$2)])
-            if (peer.match(_servers) == null)
-              Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Text('$label uses ${peer.address} now - not in this list. Paste its config to name it.',
-                    style: t.bodySmall),
-              ),
         const SizedBox(height: 8),
         Wrap(spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
           if (_profile.hasServerList)
@@ -597,4 +593,17 @@ List<String> knownCities(List<ProtonServer> servers, AppConfig cfg) {
     if (t.isNotEmpty) byKey.putIfAbsent(t.toLowerCase(), () => t);
   }
   return byKey.values.toList()..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+}
+
+/// [servers] plus the server each tunnel uses now when it is not in the list
+/// (e.g. set up on the router before the app, or chosen on another device):
+/// the router list can't hold those (one peer per key), so every device
+/// shows them from the live tunnels. Name them with "Set city".
+List<ProtonServer> withTunnelServers(List<ProtonServer> servers, (WgPeerInfo, WgPeerInfo) peers, AppConfig cfg) {
+  final out = [...servers];
+  for (final (label, p) in [(cfg.mainLabel, peers.$1), (cfg.backupLabel, peers.$2)]) {
+    if (p.address.isEmpty || p.match(out) != null) continue;
+    out.insert(0, ProtonServer(name: '$label tunnel server', entryIp: p.address, publicKey: p.publicKey, port: p.port));
+  }
+  return out;
 }
