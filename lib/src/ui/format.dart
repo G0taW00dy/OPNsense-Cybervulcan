@@ -77,3 +77,34 @@ String headline(HouseSnapshot s, AppConfig cfg) {
     ProtonExit.unknown => 'Gateways ${cfg.mainGateway}/${cfg.backupGateway} not found',
   };
 }
+
+/// The small status word over the big line (Status page and widget).
+String heroLabel(HouseSnapshot s) {
+  if (!s.configured) return 'Not set up';
+  if (s.link?.state == LinkState.notHome) return 'Not home';
+  if (s.link?.state == LinkState.wrongCertificate) return 'Wrong certificate';
+  if (!s.reachable) return 'Router unreachable';
+  if (s.bypassActive ?? false) return 'VPN bypass on';
+  if (s.killSwitch.tripped) return 'Kill switch tripped';
+  if (s.killSwitchArmed == false) return 'Kill switch not armed';
+  if (s.busy) return 'Changing...';
+  if (s.failoverActive) return 'Failover active';
+  return switch (s.health) {
+    Health.ok => 'Protected',
+    Health.warning => 'Slow tunnel',
+    _ => 'Problem',
+  };
+}
+
+/// The big line: where the house's traffic leaves right now.
+String heroTitle(HouseSnapshot s, AppConfig cfg) {
+  if (s.link?.state == LinkState.wrongCertificate) return 'Not your router?';
+  if (!s.reachable) return 'No connection';
+  if (s.bypassActive ?? false) return cfg.directLabel;
+  return switch (s.exit) {
+    ProtonExit.main => cfg.mainLabel,
+    ProtonExit.backup => cfg.backupLabel,
+    ProtonExit.none => 'No exit',
+    ProtonExit.unknown => 'Unknown',
+  };
+}
