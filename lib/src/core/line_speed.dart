@@ -12,7 +12,7 @@ import 'dart:math';
 import 'package:http/http.dart' as http;
 
 Future<({double down, double up})> measureSpeed(http.Client web,
-    {int streams = 8, Duration each = const Duration(seconds: 10)}) async {
+    {int streams = 16, Duration each = const Duration(seconds: 12)}) async {
   Future<double> run(Future<void> Function(void Function(int) count, bool Function() stop) one) async {
     var bytes = 0;
     final sw = Stopwatch()..start();

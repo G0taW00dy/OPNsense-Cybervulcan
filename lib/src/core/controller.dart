@@ -1068,6 +1068,7 @@ class CybervulcanController extends ChangeNotifier {
     try {
       final all = await c.shaperPipes();
       allShaperPipes = all;
+      shaperMainCity = await mainTunnelCity();
       final pipes = all.where((p) => p.enabled).toList();
       shaperPipes = pipes;
       if (tuner.lastReason == _shaperReadError) tuner.lastReason = null;
@@ -1085,6 +1086,9 @@ class CybervulcanController extends ChangeNotifier {
     }
     notifyListeners();
   }
+
+  /// City of the main tunnel's server as of the last shaper read.
+  String? shaperMainCity;
 
   /// Every pipe as last read, switched on or off (v2.1.13).
   List<ShaperPipe>? allShaperPipes;

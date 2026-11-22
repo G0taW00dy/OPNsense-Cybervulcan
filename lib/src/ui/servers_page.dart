@@ -316,6 +316,7 @@ class _ServersPageState extends State<ServersPage> {
         content: TextField(
             controller: ctl,
             autofocus: true,
+            onSubmitted: (v) => Navigator.pop(ctx, v.trim()),
             decoration: const InputDecoration(labelText: 'Name', hintText: 'e.g. JP#219')),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
@@ -595,8 +596,10 @@ class _ServersPageState extends State<ServersPage> {
                       _ => _remove(s),
                     },
                     itemBuilder: (_) => [
-                      PopupMenuItem(value: 'main', child: Text('Use for ${c.config.mainLabel} (main)')),
-                      PopupMenuItem(value: 'backup', child: Text('Use for ${c.config.backupLabel} (backup)')),
+                      if (_inUse(s) != 'main')
+                        PopupMenuItem(value: 'main', child: Text('Use for ${c.config.mainLabel} (main)')),
+                      if (_inUse(s) != 'backup')
+                        PopupMenuItem(value: 'backup', child: Text('Use for ${c.config.backupLabel} (backup)')),
                       const PopupMenuDivider(),
                       const PopupMenuItem(value: 'rename', child: Text('Rename')),
                       const PopupMenuItem(value: 'city', child: Text('Set city')),

@@ -40,21 +40,30 @@ class _ShaperPanelState extends State<ShaperPanel> {
     unawaited(_refresh());
   }
 
-  String? _city;
+  String? get _city => c.shaperMainCity;
 
   Future<void> _refresh() async {
     await c.refreshShaperInfo();
     await c.checkShaperLayout();
-    _city = await c.mainTunnelCity();
     if (mounted) setState(() {});
   }
 
   Future<void> _run(Future<void> Function() f) async {
     setState(() => _busy = true);
+    c.lastActionInfo = null;
+    c.lastActionError = null;
     try {
       await f();
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) {
+        setState(() => _busy = false);
+        // Feedback here too, not only on Status (23 Nov).
+        final msg = c.lastActionError ?? c.lastActionInfo;
+        if (msg != null) {
+          ScaffoldMessenger.maybeOf(context)
+              ?.showSnackBar(SnackBar(content: Text(msg), duration: const Duration(seconds: 4)));
+        }
+      }
     }
   }
 
@@ -288,6 +297,7 @@ class _ShaperEditDialogState extends State<_ShaperEditDialog> {
   final _mDown = TextEditingController();
   final _mUp = TextEditingController();
   bool _measuring = false;
+  bool _forceLower = false;
   String? _note;
 
   @override
@@ -311,9 +321,22 @@ class _ShaperEditDialogState extends State<_ShaperEditDialog> {
       return;
     }
     final r = recommendedLimits(tunnel: widget.tunnel, downMbps: d, upMbps: u);
+    final lower = r.down < widget.down * 0.9 || r.up < widget.up * 0.9;
+    if (lower && !_forceLower) {
+      // 23 Nov: the app's own test read 258/32 on a tunnel speedtest.net
+      // measured at 413/47 - never cut a working limit on that alone.
+      setState(() {
+        _forceLower = true;
+        _note = 'Recommended ${r.down} / ${r.up} is well below the limits now (${widget.down} / ${widget.up}). '
+            'The app\'s test often reads lower than speedtest.net over a far-away VPN server. If the ping stays '
+            'smooth under load now, keep the current limits - or press "Use recommended" again to use them anyway.';
+      });
+      return;
+    }
     setState(() {
       _down.text = '${r.down}';
       _up.text = '${r.up}';
+      _forceLower = false;
       _note = 'Recommended ${r.down} / ${r.up} - you can still change them before saving.';
     });
   }

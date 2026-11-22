@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.1.15 (pre-release)
+- From the 23 Nov PC test of 2.1.14 (Tests A+ 100, Devices lists all 11 leases, presets, per-city limits, path on/off, rename to the router's tunnel peer all worked):
+  - Shaper Measure: the app's test read 258/32 on a tunnel speedtest.net measured at 413/47, so "Use recommended" no longer lowers working limits by itself - it explains and asks you to press it again. The test now uses 16 streams for 12 s each way.
+  - Shaper actions show their result in Settings too (it only appeared on Status).
+  - The "Saved for <city>" line follows the main tunnel without pressing refresh.
+  - Rename: Enter saves. A server's menu no longer offers the tunnel it is already on.
+
 ## 2.1.14 (pre-release)
 - Shaper presets: save named limits for both paths ("NBN 500", "Boost 1000/100" for a speed-boost day, "Away mode") and put them on the router with one tap. New presets start from the limits on the router now; a preset can hold just one path. Kept on this device.
 - Tunnel limits per city: limits you set for the tunnel are remembered for the main tunnel's city (shown under the tunnel row, with Remember / Update / forget) and go back on the router by themselves when the main tunnel moves to that city - by a switch, Find best or the nightly run.
