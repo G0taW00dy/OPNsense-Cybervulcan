@@ -233,4 +233,19 @@ void main() {
     // Cities ticked that have no servers don't empty the pool.
     expect(pickCandidates(all, const ['San Jose'], max: 3), hasLength(3));
   });
+
+  test('v2.1.18: same-machine names are kept together', () {
+    expect(mergeServerNames('JP#153', 'JP#157', city: 'Tokyo'), 'JP#153 JP#157');
+    expect(mergeServerNames('JP#153 JP#157', 'JP#157', city: 'Tokyo'), 'JP#153 JP#157');
+    expect(mergeServerNames('Former Backup server', 'JP#219'), 'JP#219');
+    final many = ['JP#219', 'JP#203', 'JP#202', 'JP#206', 'JP#207', 'JP#209', 'JP#211', 'JP#212', 'JP#213']
+        .fold('JP#219', (a, b) => mergeServerNames(a, b, city: 'Osaka'));
+    expect(many.startsWith('JP#219 JP#203'), isTrue);
+    expect(listPeerName(ProtonServer(name: many, entryIp: '1.1.1.1', publicKey: _k1, port: 1, city: 'Osaka')).length,
+        lessThan(64));
+    final back = serverFromListPeer(WgPeer(uuid: 'u', name: listPeerName(ProtonServer(name: 'JP#153 JP#157',
+        entryIp: '1.1.1.1', publicKey: _k1, port: 1, city: 'Tokyo')), enabled: false, serverAddress: '1.1.1.1',
+        serverPort: 1, publicKey: _k1, instanceNames: const []))!;
+    expect(back.name, 'JP#153 JP#157');
+  });
 }

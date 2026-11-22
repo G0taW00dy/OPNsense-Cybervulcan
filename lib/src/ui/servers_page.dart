@@ -368,6 +368,24 @@ class _ServersPageState extends State<ServersPage> {
       setState(() => _message = 'No [Peer] with a PublicKey and an IPv4 Endpoint found in that text.');
       return;
     }
+    // Same machine already listed (same address and key): Proton runs several
+    // names on one server - keep both names on one entry, don't replace
+    // (23 Nov: JP#157 overwrote JP#153).
+    final same = _servers.where((x) => x.sameEndpoint(s.entryIp, s.publicKey)).firstOrNull;
+    if (same != null) {
+      final merged = mergeServerNames(same.name, s.name, city: same.city);
+      final updated = ProtonServer(
+          name: merged, entryIp: same.entryIp, publicKey: same.publicKey, port: same.port, city: same.city,
+          country: same.country, load: same.load, score: same.score);
+      _servers = [for (final x in _servers) identical(x, same) ? updated : x];
+      await c.saveServers(_servers);
+      if (_inUse(same) != null) await c.nameTunnelPeer(updated);
+      if (mounted) {
+        setState(() => _message = '${s.name} is the same machine as ${same.name} (same address and key) - '
+            'listed together as "$merged". Testing one tests both. (Any private key in it was ignored.)');
+      }
+      return;
+    }
     final city = await _askCity(s);
     final server = ProtonServer(
         name: s.name, entryIp: s.entryIp, publicKey: s.publicKey, port: s.port, city: city, country: c.config.vpnCountryCode);

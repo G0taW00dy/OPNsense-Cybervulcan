@@ -1,5 +1,8 @@
 # Changelog
 
+## 2.1.18 (pre-release)
+- Scanning a server that is the same machine as one already listed (same address and key - Proton runs several names on one server, e.g. JP#153 and JP#157) keeps both names on one entry ("JP#153 JP#157") and says so, instead of replacing the name. A tunnel using that machine gets the joined name on the router too.
+
 ## 2.1.17 (pre-release)
 - Find best rotates through the list: it remembers when each server was last tested and tries never-tested ones first, then the longest ago - so repeated runs and the nightly run cover every server, not the same few. Candidates: 3, 5, 10 or All (with the time it takes, ~100 s each). It follows the Cities dropdown; ticked cities with no servers are ignored (an old "San Jose, Los Angeles" setting found no candidates).
 - Old "Former <city> server" entries get their city from the name.

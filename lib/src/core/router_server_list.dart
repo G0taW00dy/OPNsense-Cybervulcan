@@ -27,6 +27,27 @@ String listPeerName(ProtonServer s) {
   return full.length <= 64 ? full : full.substring(0, 64);
 }
 
+/// Joins server names that are the same machine (same address + key):
+/// Proton runs several names on one server (JP#153 and JP#157). Space
+/// separated, the first name kept first; names that no longer fit the
+/// router's 64-character peer name are left off (v2.1.18).
+String mergeServerNames(String existing, String added, {String? city}) {
+  final names = <String>[];
+  for (final n in [...existing.split(RegExp(r'\s*/\s*|\s+')), ...added.split(RegExp(r'\s*/\s*|\s+'))]) {
+    final t = n.trim();
+    if (t.isNotEmpty && !names.any((x) => x.toLowerCase() == t.toLowerCase())) names.add(t);
+  }
+  // "Former ... server" style names are not codes: keep them only alone.
+  if (names.length > 1 && !existing.contains('#')) return added.trim().isEmpty ? existing : added.trim();
+  var out = names.join(' ');
+  while (names.length > 1 &&
+      listPeerName(ProtonServer(name: out, entryIp: '0.0.0.0', publicKey: '', port: 0, city: city)).length >= 64) {
+    names.removeLast();
+    out = names.join(' ');
+  }
+  return out;
+}
+
 /// Name prefix the app gives a LIVE tunnel peer when it switches it
 /// (v2.1.13): the router can't hold that server in the list too (one peer
 /// per key), so the tunnel peer's own name carries the server name and city.
