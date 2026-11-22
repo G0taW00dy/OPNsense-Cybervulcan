@@ -571,7 +571,7 @@ class _ServersPageState extends State<ServersPage> {
                 const SizedBox(width: 8),
                 DropdownButton<int>(
                   value: _candidates >= _poolSize ? 999 : _candidates,
-                  items: const [
+                  items: [
                     for (final n in const [3, 5, 10])
                       if (n < _poolSize) DropdownMenuItem(value: n, child: Text('$n (${_minutes(n)})')),
                     DropdownMenuItem(value: 999, child: Text('All $_poolSize (${_minutes(_poolSize)})')),
