@@ -22,6 +22,7 @@ import 'line_speed.dart';
 import 'network_map.dart';
 import 'pc_mode.dart';
 import 'schedule.dart';
+import 'shaper_presets.dart';
 import 'shaper_tuner.dart';
 import 'change_journal.dart';
 import 'diagnostics.dart';
@@ -677,6 +678,7 @@ class CybervulcanController extends ChangeNotifier {
           detail: 'Handshake confirmed${sw.monitorWarning == null ? '' : '; monitor not refreshed'}');
       tuner.pathChanged();
       await _followCity(main, server);
+      if (main) await _applyCityLimits(server);
       // The server the tunnel left goes (back) into the list - also on a
       // device that never had it - and so into the router list.
       final cached = cachedServers();
@@ -718,7 +720,10 @@ class CybervulcanController extends ChangeNotifier {
       if (plan != null) {
         await journal.add('Find best server', ok: true, detail: plan.reason);
         tuner.pathChanged();
-        if (plan.changeMain) await _followCity(true, plan.newMain.server);
+        if (plan.changeMain) {
+          await _followCity(true, plan.newMain.server);
+          await _applyCityLimits(plan.newMain.server);
+        }
         final nb = plan.newBackup?.server;
         if (nb != null) await _followCity(false, nb);
       }
@@ -1164,6 +1169,84 @@ class CybervulcanController extends ChangeNotifier {
       lastActionError = 'Speed test failed: $e';
       notifyListeners();
       return null;
+    }
+  }
+
+  // ---------------------------------------------- shaper presets (v2.1.13)
+
+  List<ShaperPreset> get shaperPresets => decodePresets(prefs.getString(shaperPresetsKey));
+
+  Future<void> saveShaperPreset(ShaperPreset p) async {
+    await prefs.setString(shaperPresetsKey, encodePresets(upsertPreset(shaperPresets, p)));
+    notifyListeners();
+  }
+
+  Future<void> deleteShaperPreset(String name) async {
+    await prefs.setString(
+        shaperPresetsKey, encodePresets([for (final x in shaperPresets) if (x.name.toLowerCase() != name.toLowerCase()) x]));
+    notifyListeners();
+  }
+
+  /// Puts a preset's limits on the router (only the paths it holds).
+  Future<bool> applyShaperPreset(ShaperPreset p) async {
+    var ok = true;
+    if (p.hasTunnel) ok = await setShaperPath(tunnel: true, down: p.tunnelDown, up: p.tunnelUp) && ok;
+    if (p.hasLine) ok = await setShaperPath(tunnel: false, down: p.lineDown, up: p.lineUp) && ok;
+    if (ok) {
+      lastActionInfo = 'Shaper preset "${p.name}" is on the router (${p.summary}).';
+      await journal.add('Shaper preset "${p.name}"', ok: true, detail: p.summary);
+      notifyListeners();
+    }
+    return ok;
+  }
+
+  Map<String, ({int down, int up})> get cityTunnelLimits => decodeCityLimits(prefs.getString(shaperCityLimitsKey));
+
+  Future<void> rememberCityTunnelLimits(String city, int down, int up) async {
+    final m = {...cityTunnelLimits, cityKey(city): (down: down, up: up)};
+    await prefs.setString(shaperCityLimitsKey, encodeCityLimits(m));
+    notifyListeners();
+  }
+
+  Future<void> forgetCityTunnelLimits(String city) async {
+    final m = {...cityTunnelLimits}..remove(cityKey(city));
+    await prefs.setString(shaperCityLimitsKey, encodeCityLimits(m));
+    notifyListeners();
+  }
+
+  /// City of the server the main tunnel uses now, if known.
+  Future<String?> mainTunnelCity() async {
+    try {
+      final (m, _) = await tunnelPeers();
+      final s = m.match(cachedServers()) ??
+          serverFromTunnelPeer(name: m.name, address: m.address, publicKey: m.publicKey, port: m.port);
+      final city = s?.city?.trim();
+      if (city != null && city.isNotEmpty) return city;
+    } on Object {
+      // Fall through.
+    }
+    final label = config.mainLabel.trim();
+    return config.namesFollowCity && label != 'Main' && label.isNotEmpty ? label : null;
+  }
+
+  /// After the main tunnel moves: the tunnel limits saved for the new city
+  /// go on the router. No lock prompt - the switch itself was authorised.
+  Future<void> _applyCityLimits(ProtonServer server) async {
+    final city = server.city;
+    if (city == null) return;
+    final l = cityTunnelLimits[cityKey(city)];
+    final c = _client;
+    if (l == null || c == null) return;
+    try {
+      final p = findVpnPipesAny(await c.shaperPipes());
+      if (p == null) return;
+      await c.setPipeBandwidth(p.down.uuid, l.down);
+      await c.setPipeBandwidth(p.up.uuid, l.up);
+      await c.shaperReconfigure();
+      await journal.add('Shaper (tunnel): ${l.down}/${l.up} Mbit/s for $city', ok: true);
+      await refreshShaperInfo();
+    } on Object catch (e) {
+      await journal.add('Shaper limits for $city not applied', ok: false, detail: '$e');
     }
   }
 

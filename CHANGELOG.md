@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.1.14 (pre-release)
+- Shaper presets: save named limits for both paths ("NBN 500", "Boost 1000/100" for a speed-boost day, "Away mode") and put them on the router with one tap. New presets start from the limits on the router now; a preset can hold just one path. Kept on this device.
+- Tunnel limits per city: limits you set for the tunnel are remembered for the main tunnel's city (shown under the tunnel row, with Remember / Update / forget) and go back on the router by themselves when the main tunnel moves to that city - by a switch, Find best or the nightly run.
+
 ## 2.1.13 (pre-release)
 - Shaper redesigned (22 Nov tuning on the house NBN line):
   - Continuous auto-tune and "Restore original limits" are gone: on a quiet line it saw no lag and kept raising the limits (VPN went to 594/52, above the tunnel's real speed, so the shaper did nothing).

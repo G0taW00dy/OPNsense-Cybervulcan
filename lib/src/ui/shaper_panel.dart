@@ -18,6 +18,7 @@ import 'package:http/http.dart' as http;
 import '../api/shaper_models.dart';
 import '../core/controller.dart';
 import '../core/quick_tests.dart';
+import '../core/shaper_presets.dart';
 import 'settings_page.dart' show InfoLine;
 import 'theme.dart';
 
@@ -39,9 +40,12 @@ class _ShaperPanelState extends State<ShaperPanel> {
     unawaited(_refresh());
   }
 
+  String? _city;
+
   Future<void> _refresh() async {
     await c.refreshShaperInfo();
     await c.checkShaperLayout();
+    _city = await c.mainTunnelCity();
     if (mounted) setState(() {});
   }
 
@@ -86,8 +90,10 @@ class _ShaperPanelState extends State<ShaperPanel> {
           InfoLine(c.tuner.lastReason ?? 'Reading the router\'s shaper limits ...')
         else ...[
           _pathRow(context, tunnel: true),
+          if (_city != null) _cityLine(context),
           _pathRow(context, tunnel: false),
         ],
+        if (c.allShaperPipes != null) ..._presets(context),
         if (c.shaperLayout == ShaperLayout.other || c.shaperLayout == ShaperLayout.none) ...[
           const SizedBox(height: 6),
           InfoLine(c.shaperLayout == ShaperLayout.none
@@ -111,6 +117,92 @@ class _ShaperPanelState extends State<ShaperPanel> {
             style: t.bodySmall),
       ]),
     );
+  }
+
+  Widget _cityLine(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final city = _city!;
+    final saved = c.cityTunnelLimits[cityKey(city)];
+    final p = c.shaperPath(tunnel: true);
+    return Padding(
+      padding: const EdgeInsets.only(left: 12, bottom: 4),
+      child: Row(children: [
+        Expanded(
+            child: Text(
+                saved == null
+                    ? 'Main tunnel is in $city - no limits saved for it yet.'
+                    : 'Saved for $city: ${saved.down} / ${saved.up} - used again whenever the main tunnel moves to $city.',
+                style: t.bodySmall)),
+        if (p != null)
+          TextButton(
+              onPressed: _busy
+                  ? null
+                  : () => _run(() async {
+                        await c.rememberCityTunnelLimits(city, p.down.mbit.round(), p.up.mbit.round());
+                      }),
+              child: Text(saved == null ? 'Remember for $city' : 'Update')),
+        if (saved != null)
+          IconButton(
+              tooltip: 'Forget $city',
+              onPressed: _busy ? null : () => _run(() => c.forgetCityTunnelLimits(city)),
+              icon: const Icon(Icons.close, size: 18)),
+      ]),
+    );
+  }
+
+  List<Widget> _presets(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final list = c.shaperPresets;
+    return [
+      const SizedBox(height: 10),
+      Text('Presets', style: t.labelLarge),
+      const SizedBox(height: 4),
+      if (list.isEmpty)
+        Text('Save the limits for a plan you switch between, e.g. "NBN 500", "Boost 1000/100" (speed-boost day) '
+            'or "Away mode".', style: t.bodySmall),
+      Wrap(spacing: 6, runSpacing: 6, children: [
+        for (final p in list)
+          InputChip(
+            label: Text(p.name),
+            tooltip: p.summary,
+            onPressed: _busy ? null : () => _run(() async => c.applyShaperPreset(p)),
+            onDeleted: _busy ? null : () => _deletePreset(p),
+          ),
+        ActionChip(
+            avatar: const Icon(Icons.add, size: 18),
+            label: const Text('New preset'),
+            onPressed: _busy ? null : _newPreset),
+      ]),
+    ];
+  }
+
+  Future<void> _deletePreset(ShaperPreset p) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Delete preset "${p.name}"?'),
+        content: Text(p.summary),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Delete')),
+        ],
+      ),
+    );
+    if (ok == true) await c.deleteShaperPreset(p.name);
+  }
+
+  Future<void> _newPreset() async {
+    final tp = c.shaperPath(tunnel: true), lp = c.shaperPath(tunnel: false);
+    final r = await showDialog<ShaperPreset>(
+      context: context,
+      builder: (_) => _PresetDialog(
+        tunnelDown: tp?.down.mbit.round(),
+        tunnelUp: tp?.up.mbit.round(),
+        lineDown: lp?.down.mbit.round(),
+        lineUp: lp?.up.mbit.round(),
+      ),
+    );
+    if (r != null) await c.saveShaperPreset(r);
   }
 
   Widget _pathRow(BuildContext context, {required bool tunnel}) {
@@ -162,7 +254,12 @@ class _ShaperPanelState extends State<ShaperPanel> {
       ),
     );
     if (r == null) return;
-    await _run(() async => c.setShaperPath(tunnel: tunnel, down: r.down, up: r.up));
+    await _run(() async {
+      final ok = await c.setShaperPath(tunnel: tunnel, down: r.down, up: r.up);
+      // Tunnel limits belong to the main tunnel's city: remembered for it and
+      // used again when the main tunnel moves back there.
+      if (ok && tunnel && _city != null) await c.rememberCityTunnelLimits(_city!, r.down, r.up);
+    });
   }
 }
 
@@ -328,6 +425,107 @@ class _ShaperEditDialogState extends State<_ShaperEditDialog> {
         FilledButton(
             onPressed: _measuring || d == null || u == null ? null : () => Navigator.pop(context, (down: d, up: u)),
             child: const Text('Save to router')),
+      ],
+    );
+  }
+}
+
+class _PresetDialog extends StatefulWidget {
+  const _PresetDialog({this.tunnelDown, this.tunnelUp, this.lineDown, this.lineUp});
+  final int? tunnelDown, tunnelUp, lineDown, lineUp;
+
+  @override
+  State<_PresetDialog> createState() => _PresetDialogState();
+}
+
+class _PresetDialogState extends State<_PresetDialog> {
+  final _name = TextEditingController();
+  late final _td = TextEditingController(text: widget.tunnelDown?.toString() ?? '');
+  late final _tu = TextEditingController(text: widget.tunnelUp?.toString() ?? '');
+  late final _ld = TextEditingController(text: widget.lineDown?.toString() ?? '');
+  late final _lu = TextEditingController(text: widget.lineUp?.toString() ?? '');
+  bool _tunnel = true, _line = true;
+
+  @override
+  void dispose() {
+    for (final x in [_name, _td, _tu, _ld, _lu]) {
+      x.dispose();
+    }
+    super.dispose();
+  }
+
+  int? _n(TextEditingController x) {
+    final v = int.tryParse(x.text.trim());
+    return v == null || v < 1 || v > 100000 ? null : v;
+  }
+
+  Widget _pair(String label, bool on, ValueChanged<bool> set, TextEditingController d, TextEditingController u) =>
+      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        CheckboxListTile(
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            value: on,
+            onChanged: (v) => setState(() => set(v ?? false)),
+            title: Text(label)),
+        if (on)
+          Row(children: [
+            Expanded(
+                child: TextField(
+                    controller: d,
+                    keyboardType: TextInputType.number,
+                    onChanged: (_) => setState(() {}),
+                    decoration: const InputDecoration(labelText: 'Download', suffixText: 'Mbit/s'))),
+            const SizedBox(width: 12),
+            Expanded(
+                child: TextField(
+                    controller: u,
+                    keyboardType: TextInputType.number,
+                    onChanged: (_) => setState(() {}),
+                    decoration: const InputDecoration(labelText: 'Upload', suffixText: 'Mbit/s'))),
+          ]),
+      ]);
+
+  @override
+  Widget build(BuildContext context) {
+    final name = _name.text.trim();
+    final tOk = !_tunnel || (_n(_td) != null && _n(_tu) != null);
+    final lOk = !_line || (_n(_ld) != null && _n(_lu) != null);
+    final ok = name.isNotEmpty && (_tunnel || _line) && tOk && lOk;
+    return AlertDialog(
+      title: const Text('New shaper preset'),
+      content: SizedBox(
+        width: 440,
+        child: SingleChildScrollView(
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            TextField(
+                controller: _name,
+                autofocus: true,
+                onChanged: (_) => setState(() {}),
+                decoration: const InputDecoration(labelText: 'Name', hintText: 'e.g. Boost 1000/100')),
+            const SizedBox(height: 4),
+            Text('Filled with the limits on the router now - change them for the plan this preset is for. '
+                'A paid speed boost raises the direct line most; the tunnel is capped by the VPN server too.',
+                style: Theme.of(context).textTheme.bodySmall),
+            _pair('Tunnel (VPN)', _tunnel, (v) => _tunnel = v, _td, _tu),
+            _pair('Direct line (CLEAR, bypass)', _line, (v) => _line = v, _ld, _lu),
+          ]),
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+        FilledButton(
+            onPressed: !ok
+                ? null
+                : () => Navigator.pop(
+                    context,
+                    ShaperPreset(
+                      name: name,
+                      tunnelDown: _tunnel ? _n(_td) : null,
+                      tunnelUp: _tunnel ? _n(_tu) : null,
+                      lineDown: _line ? _n(_ld) : null,
+                      lineUp: _line ? _n(_lu) : null,
+                    )),
+            child: const Text('Save preset')),
       ],
     );
   }

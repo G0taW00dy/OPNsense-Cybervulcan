@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:opnsense_cybervulcan/src/api/shaper_models.dart';
+import 'package:opnsense_cybervulcan/src/core/shaper_presets.dart';
 
 void main() {
   const pipes = [
@@ -70,5 +71,26 @@ void main() {
     expect(l.up, 52);
     expect(expectedRealMbps(tunnel: true, limit: 410), 336);
     expect(expectedRealMbps(tunnel: false, limit: 540), 524);
+  });
+
+  test('presets round-trip, replace by name, ignore junk', () {
+    const boost = ShaperPreset(name: 'Boost 1000/100', tunnelDown: 410, tunnelUp: 48, lineDown: 980, lineUp: 97);
+    const away = ShaperPreset(name: 'Away mode', lineDown: 20, lineUp: 5);
+    var list = upsertPreset(const [], boost);
+    list = upsertPreset(list, away);
+    list = upsertPreset(list, const ShaperPreset(name: 'boost 1000/100', lineDown: 990, lineUp: 98));
+    final back = decodePresets(encodePresets(list));
+    expect(back.map((p) => p.name), ['Away mode', 'boost 1000/100']);
+    expect(back.first.hasTunnel, isFalse);
+    expect(back.first.summary, 'line 20/5');
+    expect(back.last.lineDown, 990);
+    expect(decodePresets('not json'), isEmpty);
+    expect(decodePresets('[{"name":"x"},{"name":"","ld":1,"lu":1}]'), isEmpty);
+  });
+
+  test('city tunnel limits are keyed case-insensitively', () {
+    final m = decodeCityLimits(encodeCityLimits({cityKey('Tokyo'): (down: 410, up: 48)}));
+    expect(m[cityKey('TOKYO ')], (down: 410, up: 48));
+    expect(decodeCityLimits('{"Osaka":{"d":0,"u":5}}'), isEmpty);
   });
 }
