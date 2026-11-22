@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.1.17 (pre-release)
+- Find best rotates through the list: it remembers when each server was last tested and tries never-tested ones first, then the longest ago - so repeated runs and the nightly run cover every server, not the same few. Candidates: 3, 5, 10 or All (with the time it takes, ~100 s each). It follows the Cities dropdown; ticked cities with no servers are ignored (an old "San Jose, Los Angeles" setting found no candidates).
+- Old "Former <city> server" entries get their city from the name.
+
 ## 2.1.16 (pre-release)
 - From the 23 Nov phone test of 2.1.15 (server names from the router, switch backup to JP#302 and back to JP#219 with names and cities kept - all OK):
   - VPN servers: the "Only <cities>" on/off chip is replaced by a Cities dropdown with a tick per city and "All cities". A ticked city with no servers no longer hides the whole list.

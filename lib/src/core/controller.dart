@@ -359,7 +359,9 @@ class CybervulcanController extends ChangeNotifier {
         final cached = cachedServers();
         if (cached.isNotEmpty) {
           await prefs.setString(_bestRunKey, now.toUtc().toIso8601String());
-          unawaited(findBestServer(pickCandidates(cached, config.serverCityList), (_) {}, skipLock: true));
+          unawaited(findBestServer(
+              pickCandidates(cached, config.serverCityList, max: 5, lastTested: serverLastTested), (_) {},
+              skipLock: true));
         }
       }
     } on Object catch (_) {
@@ -711,6 +713,7 @@ class CybervulcanController extends ChangeNotifier {
     if (!skipLock && !await authorize('Find and switch to the best VPN server', always: true)) return null;
     final sw = _switcher = _newSwitcher();
     if (sw == null) return null;
+    sw.onTested = (s) => unawaited(_markTested(s));
     serverBusy = true;
     notifyListeners();
     final before = <ProtonServer>[];
@@ -840,6 +843,30 @@ class CybervulcanController extends ChangeNotifier {
     serverBusy = false;
     notifyListeners();
     return r ?? false;
+  }
+
+  static const _testedKey = 'server_tested_v1';
+
+  /// When each server (by address) was last tried by Find best, seconds.
+  Map<String, int> get serverLastTested {
+    try {
+      final j = jsonDecode(prefs.getString(_testedKey) ?? '{}');
+      if (j is! Map) return const {};
+      return {for (final e in j.entries) if (e.value is num) '${e.key}': (e.value as num).toInt()};
+    } on Object {
+      return const {};
+    }
+  }
+
+  Future<void> _markTested(ProtonServer s) async {
+    final m = {...serverLastTested, s.entryIp: DateTime.now().millisecondsSinceEpoch ~/ 1000};
+    await prefs.setString(_testedKey, jsonEncode(m));
+  }
+
+  /// Cities from the dropdown that have servers in [servers] (empty = all).
+  List<String> activeServerCities(List<ProtonServer> servers) {
+    final have = {for (final s in servers) (s.city ?? '').toLowerCase()};
+    return [for (final c in config.serverCityList) if (have.contains(c.toLowerCase())) c];
   }
 
   void cancelFindBest() => _switcher?.cancel();

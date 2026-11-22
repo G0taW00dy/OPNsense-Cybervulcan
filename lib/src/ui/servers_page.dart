@@ -297,6 +297,19 @@ class _ServersPageState extends State<ServersPage> {
     if (mounted) setState(() {});
   }
 
+  /// Servers Find best can pick from (ticked cities; the tunnels' own
+  /// servers are excluded by the switcher).
+  int get _poolSize {
+    final cities = _activeCities;
+    final n = cities.isEmpty
+        ? _servers.length
+        : _servers.where((s) => cities.contains((s.city ?? '').toLowerCase())).length;
+    return n < 1 ? 1 : n;
+  }
+
+  /// About 100 s per candidate plus the main measurement.
+  String _minutes(int n) => '~${((n * 100 + 90) / 60).ceil()} min';
+
   List<ProtonServer> get _visible {
     final cities = _activeCities;
     final list = cities.isNotEmpty
@@ -506,7 +519,8 @@ class _ServersPageState extends State<ServersPage> {
       await _download();
       pool = _servers;
     }
-    final candidates = pickCandidates(pool, c.config.serverCityList, max: _candidates);
+    final candidates =
+        pickCandidates(pool, c.config.serverCityList, max: _candidates, lastTested: c.serverLastTested);
     if (candidates.isEmpty) {
       setState(() => _message = 'No servers to test - download the list or add some from .conf files.');
       return;
@@ -556,13 +570,14 @@ class _ServersPageState extends State<ServersPage> {
                 const Text('Candidates:'),
                 const SizedBox(width: 8),
                 DropdownButton<int>(
-                  value: _candidates,
+                  value: _candidates >= _poolSize ? 999 : _candidates,
                   items: const [
-                    DropdownMenuItem(value: 2, child: Text('2 (~4 min)')),
-                    DropdownMenuItem(value: 3, child: Text('3 (~5 min)')),
-                    DropdownMenuItem(value: 5, child: Text('5 (~9 min)')),
+                    for (final n in const [3, 5, 10])
+                      if (n < _poolSize) DropdownMenuItem(value: n, child: Text('$n (${_minutes(n)})')),
+                    DropdownMenuItem(value: 999, child: Text('All $_poolSize (${_minutes(_poolSize)})')),
                   ],
                   onChanged: _running ? null : (v) => setState(() => _candidates = v ?? 3),
+                  // A choice above the pool size shows as "All".
                 ),
                 const Spacer(),
                 if (_running)

@@ -50,7 +50,12 @@ ProtonServer? serverFromTunnelPeer({required String name, required String addres
   // Server codes keep theirs (US-CA#742, JP-FREE-1: a "#" or no lower case).
   if (!name.contains('#') && !name.contains(' ') && RegExp('[a-z]').hasMatch(name)) name = name.replaceAll('-', ' ');
   final city = i < 0 ? null : rest.substring(i + 1).replaceAll('--', ' ').replaceAll('-', ' ').trim();
-  return (name, city == null || city.isEmpty ? null : city);
+  var c = city == null || city.isEmpty ? null : city;
+  // "Former Los Angeles server" (saved before cities were stored): the city
+  // is in the name (v2.1.17).
+  final f = RegExp(r'^Former (.+) server$').firstMatch(name);
+  if (c == null && f != null && !{'main', 'backup'}.contains(f.group(1)!.toLowerCase())) c = f.group(1);
+  return (name, c);
 }
 
 /// A list peer: our prefix, switched off, linked to no instance.

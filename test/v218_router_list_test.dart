@@ -207,6 +207,7 @@ void main() {
     final p = WgPeer(uuid: 'u', name: 'CVL_Former-Los-Angeles-server', enabled: false, serverAddress: '149.102.228.1',
         serverPort: 51820, publicKey: _k1, instanceNames: const []);
     expect(serverFromListPeer(p)!.name, 'Former Los Angeles server');
+    expect(serverFromListPeer(p)!.city, 'Los Angeles');
     final code = WgPeer(uuid: 'u', name: 'CVL_JP-FREE-1', enabled: false, serverAddress: '149.102.228.1',
         serverPort: 51820, publicKey: _k1, instanceNames: const []);
     expect(serverFromListPeer(code)!.name, 'JP-FREE-1');
@@ -220,5 +221,16 @@ void main() {
     );
     final out = withTunnelServers(const [], peers, cfg);
     expect(out.map((s) => s.name), containsAll(['US-CA#742', '${cfg.backupLabel} tunnel server']));
+  });
+
+  test('v2.1.17: Find best rotates - never-tested first, then oldest; empty ticked cities ignored', () {
+    ProtonServer sv(String n, String ip, String city) =>
+        ProtonServer(name: n, entryIp: ip, publicKey: _k1, port: 51820, city: city);
+    final all = [sv('A', '1.1.1.1', 'Tokyo'), sv('B', '1.1.1.2', 'Tokyo'), sv('C', '1.1.1.3', 'Osaka')];
+    final tested = {'1.1.1.1': 100, '1.1.1.3': 50};
+    expect(pickCandidates(all, const [], max: 1, lastTested: tested).single.name, 'B');
+    expect(pickCandidates(all, const ['Tokyo'], max: 2, lastTested: tested).map((s) => s.name), ['B', 'A']);
+    // Cities ticked that have no servers don't empty the pool.
+    expect(pickCandidates(all, const ['San Jose'], max: 3), hasLength(3));
   });
 }

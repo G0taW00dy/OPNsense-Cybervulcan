@@ -190,7 +190,8 @@ Endpoint = 198.51.100.7:51820
       final all = parseProtonLogicals(logicals, country: 'US');
       final c = pickCandidates(all, ['San Jose', 'Los Angeles'], max: 2);
       expect(c.map((s) => s.city).toSet(), {'San Jose', 'Los Angeles'});
-      expect(pickCandidates(all, ['Seattle']), isEmpty);
+      // v2.1.17: a ticked city with no servers is ignored, not an empty pool.
+      expect(pickCandidates(all, ['Seattle']), isNotEmpty);
     });
 
     test('plan keeps the current main unless clearly better', () {

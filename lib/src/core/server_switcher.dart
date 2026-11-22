@@ -177,12 +177,22 @@ ProtonServer? serverFromWireGuardConf(String text, {String? fallbackName}) {
 
 /// Candidates for "find best": servers in the chosen cities, least loaded
 /// first, at most [max]. Without a city list every server qualifies.
-List<ProtonServer> pickCandidates(List<ProtonServer> all, List<String> cities, {int max = 3}) {
+List<ProtonServer> pickCandidates(List<ProtonServer> all, List<String> cities,
+    {int max = 3, Map<String, int> lastTested = const {}}) {
   final wanted = cities.map((c) => c.toLowerCase()).toSet();
+  // A ticked city with no servers doesn't empty the pool (v2.1.16 dropdown).
+  final have = {for (final s in all) (s.city ?? '').toLowerCase()};
+  wanted.removeWhere((c) => !have.contains(c));
+  // Rotation (v2.1.17): never-tested first, then the ones tested longest ago,
+  // so repeated runs (and the nightly run) work through the whole list.
+  int tested(ProtonServer s) => lastTested[s.entryIp] ?? 0;
   final pool = [
     for (final s in all)
       if (wanted.isEmpty || wanted.contains((s.city ?? '').toLowerCase())) s,
-  ]..sort((a, b) => (a.load ?? 100).compareTo(b.load ?? 100));
+  ]..sort((a, b) {
+      final t = tested(a).compareTo(tested(b));
+      return t != 0 ? t : (a.load ?? 100).compareTo(b.load ?? 100);
+    });
   // Spread over the cities first, then fill up by load.
   final out = <ProtonServer>[];
   final seenCity = <String>{};
@@ -300,6 +310,9 @@ class ServerSwitcher {
 
   /// Wait after a change before measuring (dpinger averages over ~60 s).
   final Duration settle;
+
+  /// Called after each candidate was tried (rotation, v2.1.17).
+  void Function(ProtonServer server)? onTested;
   final int samples;
   final Duration sampleGap;
 
@@ -429,12 +442,14 @@ class ServerSwitcher {
         } on ServerSwitchException catch (e) {
           log('  ${e.message}');
           results.add(ServerMeasurement(c, error: 'no handshake'));
+          onTested?.call(c);
           continue;
         }
         await _sleep(settle);
         final m = await _measure(config.backupGateway, c, log);
         log('  ${m.describe()}');
         results.add(m);
+        onTested?.call(c);
       }
       if (_cancelled) {
         log('Cancelled.');
