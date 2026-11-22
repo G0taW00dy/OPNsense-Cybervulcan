@@ -27,6 +27,7 @@ import 'remote_access.dart';
 import 'remote_engine_settings.dart';
 import 'servers_page.dart' show knownCities;
 import 'remote_modes_editor.dart';
+import 'shaper_panel.dart';
 import 'theme.dart';
 import 'update_widgets.dart';
 
@@ -852,100 +853,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 help: 'Tests a few servers on the backup tunnel, then moves the fastest to main if it is '
                     'clearly better (at least 10 %). Takes about 5 minutes. You get a notification with the result.'),
           ],
-          SubSection(title: 'Shaper (lag control)', children: [
-            if (c.shaperPipes == null)
-              InfoLine(c.tuner.lastReason ?? 'Reading the router\'s shaper limits ...')
-            else if (c.shaperPipes!.isEmpty)
-              const InfoLine('The router has no shaper limits set up (Firewall > Shaper).')
-            else ...[
-              Text('Limits on the router now', style: Theme.of(context).textTheme.labelLarge),
-              const SizedBox(height: 4),
-              for (final p in shaperDisplayOrder(c.shaperPipes!))
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 2),
-                  child: Row(children: [
-                    Expanded(child: Text(p.description.isEmpty ? 'Pipe ${p.number ?? ''}' : p.description)),
-                    Text('${p.mbit.round()} Mbit/s', style: const TextStyle(fontFeatures: [FontFeature.tabularFigures()])),
-                    SizedBox(
-                        width: 84,
-                        child: Text(
-                            (p.looksVpnDownload || p.looksVpnUpload)
-                                ? (_cfg.shaperAutoTune ? '  auto-tuned' : '  fixed')
-                                : (p.looksClearDownload || p.looksClearUpload)
-                                    ? (_cfg.shaperClearAutoTune ? '  auto-tuned' : '  fixed')
-                                    : '  fixed',
-                            style: Theme.of(context).textTheme.bodySmall)),
-                  ]),
-                ),
-              if (c.tuner.lastReason != null) InfoLine('Last check: ${c.tuner.lastReason}'),
-              const SizedBox(height: 8),
-            ],
-            _switch('Auto-tune the shaper', _cfg.shaperAutoTune, (v) => _set(_cfg.copyWith(shaperAutoTune: v)),
-                subtitle: 'Moves the VPN limits: lower when lag rises under load, higher when it\'s clear.',
-                help: 'Mobile lines change speed all the time, so a fixed shaper limit is either too high (lag) or '
-                    'too low (wasted speed). Auto-tune watches the tunnel\'s ping (the router\'s gateway monitor) and '
-                    'how busy each direction is, and moves the VPN limits within the range below - about every '
-                    '30 seconds at most. After a server switch it starts again, because each server has its own '
-                    'speed and ping.\n\nRun it on ONE device only (best: the always-on PC). Needs the router '
-                    'privilege "Firewall: Shaper" on this app user, and shaper pipes named with "VPN" and '
-                    '"download"/"upload". The original limits are saved first: "Restore original limits" puts '
-                    'them back, and the app does so by itself if tuning keeps failing.'),
-            if (_cfg.shaperAutoTune) ...[
-              Row(children: [
-                Expanded(child: _field('shaperMinDown', 'VPN download min', number: true, note: 'Mbit/s')),
-                const SizedBox(width: 12),
-                Expanded(child: _field('shaperMaxDown', 'VPN download max', number: true, note: 'Mbit/s')),
-              ]),
-              Row(children: [
-                Expanded(child: _field('shaperMinUp', 'VPN upload min', number: true, note: 'Mbit/s')),
-                const SizedBox(width: 12),
-                Expanded(child: _field('shaperMaxUp', 'VPN upload max', number: true, note: 'Mbit/s')),
-              ]),
-            ],
-            _switch('Auto-tune CLEAR too', _cfg.shaperClearAutoTune,
-                (v) => _set(_cfg.copyWith(shaperClearAutoTune: v)),
-                subtitle: 'Same for the direct internet line (gaming), watching the WAN gateway\'s ping.',
-                help: 'Moves the CLEAR download/upload limits within the range below, using the ping of the router\'s '
-                    'direct internet gateway (System > Gateways - its monitor IP should be a public address such as '
-                    'Quad9 9.9.9.9). Like the VPN tuner it reads everything from the router, so the device running '
-                    'it can be on any network, or away. Run it on ONE device only. Needs shaper pipes named with '
-                    '"CLEAR" and "download"/"upload".'),
-            if (_cfg.shaperClearAutoTune) ...[
-              Row(children: [
-                Expanded(child: _field('shaperClearMinDown', 'CLEAR download min', number: true, note: 'Mbit/s')),
-                const SizedBox(width: 12),
-                Expanded(child: _field('shaperClearMaxDown', 'CLEAR download max', number: true, note: 'Mbit/s')),
-              ]),
-              Row(children: [
-                Expanded(child: _field('shaperClearMinUp', 'CLEAR upload min', number: true, note: 'Mbit/s')),
-                const SizedBox(width: 12),
-                Expanded(child: _field('shaperClearMaxUp', 'CLEAR upload max', number: true, note: 'Mbit/s')),
-              ]),
-              _field('wanGateway', 'WAN gateway (optional)',
-                  hint: 'empty = find it', help: 'Name of the direct internet gateway (System > Gateways), e.g. '
-                      'WAN_DHCP. Empty: the first gateway with "WAN" in its name.'),
-              if (c.clearTuner.lastReason != null) InfoLine('CLEAR: ${c.clearTuner.lastReason}'),
-            ],
-            Wrap(spacing: 8, runSpacing: 8, children: [
-              OutlinedButton.icon(
-                  onPressed: () async {
-                    await c.retuneShaper();
-                    await c.refreshShaperInfo();
-                    if (mounted) setState(() {});
-                  },
-                  icon: const Icon(Icons.tune),
-                  label: const Text('Re-tune now')),
-              if (c.shaperOriginal != null)
-                OutlinedButton.icon(
-                    onPressed: () async {
-                      await c.restoreShaperOriginal();
-                      await c.refreshShaperInfo();
-                      if (mounted) setState(() {});
-                    },
-                    icon: const Icon(Icons.undo),
-                    label: Text('Restore original limits (${c.shaperOriginal!.values.join(' / ')})')),
-            ]),
-          ]),
+          SubSection(title: 'Shaper (lag control)', children: [ShaperPanel(controller: c)]),
         ],
       ),
 

@@ -189,4 +189,36 @@ void main() {
       expect(looksLikeVpnNetwork('Host Universal Pty Ltd'), isTrue);
     });
   });
+
+  test('v2.1.13: live tunnel peer name carries the server (CVT_)', () {
+    final n = tunnelPeerName(sj);
+    expect(n, 'CVT_US-CA.742_San--Jose');
+    final back = serverFromTunnelPeer(name: n, address: sj.entryIp, publicKey: _k1, port: 51820)!;
+    expect(back.name, 'US-CA#742');
+    expect(back.city, 'San Jose');
+    expect(serverFromTunnelPeer(name: 'Proton_1077', address: sj.entryIp, publicKey: _k1, port: 51820), isNull);
+    // A CVT_ peer is never a list entry.
+    final live = WgPeer(uuid: 'u', name: n, enabled: true, serverAddress: sj.entryIp, serverPort: 51820,
+        publicKey: _k1, instanceNames: const ['Proton_VPN_Main']);
+    expect(isListPeer(live), isFalse);
+  });
+
+  test('v2.1.13: names saved with dashes before 2.1.12 read with spaces', () {
+    final p = WgPeer(uuid: 'u', name: 'CVL_Former-Los-Angeles-server', enabled: false, serverAddress: '149.102.228.1',
+        serverPort: 51820, publicKey: _k1, instanceNames: const []);
+    expect(serverFromListPeer(p)!.name, 'Former Los Angeles server');
+    final code = WgPeer(uuid: 'u', name: 'CVL_JP-FREE-1', enabled: false, serverAddress: '149.102.228.1',
+        serverPort: 51820, publicKey: _k1, instanceNames: const []);
+    expect(serverFromListPeer(code)!.name, 'JP-FREE-1');
+  });
+
+  test('v2.1.13: tunnel servers named by CVT_ show by name, not "tunnel server"', () {
+    const cfg = AppConfig();
+    final peers = (
+      WgPeerInfo('149.102.228.1', 51820, _k1, name: tunnelPeerName(sj)),
+      const WgPeerInfo('203.0.113.9', 51820, _k2, name: 'Proton_446'),
+    );
+    final out = withTunnelServers(const [], peers, cfg);
+    expect(out.map((s) => s.name), containsAll(['US-CA#742', '${cfg.backupLabel} tunnel server']));
+  });
 }

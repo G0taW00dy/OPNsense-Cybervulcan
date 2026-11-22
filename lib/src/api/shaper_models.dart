@@ -107,3 +107,132 @@ List<ShaperPipe> shaperDisplayOrder(List<ShaperPipe> pipes) {
   });
   return list;
 }
+
+// ------------------------------------------------------------ v2.1.13
+// Shaper by exit path (22 Nov): rules on the WireGuard tunnel interfaces use
+// the VPN pipes ("Tunnel"), rules on WAN use the CLEAR pipes ("Direct line").
+// A device switched to CLEAR stays on the VPN network but leaves via WAN, so
+// it must be shaped by the line limit - rules by source network got that
+// wrong (the PC on CLEAR was held to the VPN limit).
+
+/// Any VPN download / upload pipes, switched on or off.
+({ShaperPipe down, ShaperPipe up})? findVpnPipesAny(List<ShaperPipe> pipes) {
+  final d = pipes.where((p) => p.looksVpnDownload).firstOrNull;
+  final u = pipes.where((p) => p.looksVpnUpload).firstOrNull;
+  return d == null || u == null ? null : (down: d, up: u);
+}
+
+/// Any CLEAR (direct line) download / upload pipes, switched on or off.
+({ShaperPipe down, ShaperPipe up})? findClearPipesAny(List<ShaperPipe> pipes) {
+  final d = pipes.where((p) => p.looksClearDownload).firstOrNull;
+  final u = pipes.where((p) => p.looksClearUpload).firstOrNull;
+  return d == null || u == null ? null : (down: d, up: u);
+}
+
+class ShaperQueue {
+  const ShaperQueue({required this.uuid, required this.pipe, required this.description, required this.enabled});
+  final String uuid;
+
+  /// UUID of the pipe the queue feeds.
+  final String pipe;
+  final String description;
+  final bool enabled;
+
+  factory ShaperQueue.fromJson(Map<String, dynamic> j) => ShaperQueue(
+        uuid: '${j['uuid'] ?? ''}',
+        pipe: '${j['pipe'] ?? ''}',
+        description: '${j['description'] ?? ''}',
+        enabled: j['enabled'] == '1' || j['enabled'] == 1 || j['enabled'] == true,
+      );
+}
+
+class ShaperRule {
+  const ShaperRule({
+    required this.uuid,
+    required this.enabled,
+    required this.interface,
+    required this.direction,
+    required this.target,
+    required this.description,
+    this.sequence,
+  });
+  final String uuid;
+  final bool enabled;
+
+  /// Interface key (wan, opt5, ...).
+  final String interface;
+
+  /// in / out / both ('' = both).
+  final String direction;
+
+  /// UUID of the queue or pipe the rule feeds.
+  final String target;
+  final String description;
+  final int? sequence;
+
+  factory ShaperRule.fromJson(Map<String, dynamic> j) => ShaperRule(
+        uuid: '${j['uuid'] ?? ''}',
+        enabled: j['enabled'] == '1' || j['enabled'] == 1 || j['enabled'] == true,
+        interface: '${j['interface'] ?? ''}',
+        direction: '${j['direction'] ?? ''}',
+        target: '${j['target'] ?? ''}',
+        description: '${j['description'] ?? ''}',
+        sequence: _int(j['sequence']),
+      );
+}
+
+enum ShaperLayout {
+  /// Tunnel rules on the WireGuard interfaces and line rules on WAN.
+  exitPath,
+
+  /// Rules exist but not by exit path (e.g. by VPN / CLEAR network).
+  other,
+
+  /// No enabled rules feed the VPN / CLEAR pipes.
+  none,
+}
+
+/// Which pipe (uuid) a rule ends up in: its target, or the pipe of its queue.
+String _pipeOf(ShaperRule r, List<ShaperQueue> queues) =>
+    queues.where((q) => q.uuid == r.target).firstOrNull?.pipe ?? r.target;
+
+/// Classifies the router's shaper rules. [tunnelIfaces] are the interface
+/// keys of the house WireGuard tunnels (main and backup), [wanIface] the WAN.
+ShaperLayout classifyShaperLayout({
+  required List<ShaperRule> rules,
+  required List<ShaperQueue> queues,
+  required List<ShaperPipe> pipes,
+  required Set<String> tunnelIfaces,
+  String wanIface = 'wan',
+}) {
+  final vpn = findVpnPipesAny(pipes);
+  final line = findClearPipesAny(pipes);
+  if (vpn == null || line == null) return ShaperLayout.none;
+  final live = rules.where((r) => r.enabled).toList();
+  bool has(String iface, String dir, String pipe) =>
+      live.any((r) => r.interface == iface && r.direction == dir && _pipeOf(r, queues) == pipe);
+  final used = {vpn.down.uuid, vpn.up.uuid, line.down.uuid, line.up.uuid};
+  if (!live.any((r) => used.contains(_pipeOf(r, queues)))) return ShaperLayout.none;
+  final tunnelOk = tunnelIfaces.isNotEmpty &&
+      tunnelIfaces.every((i) => has(i, 'in', vpn.down.uuid) && has(i, 'out', vpn.up.uuid));
+  final lineOk = has(wanIface, 'in', line.down.uuid) && has(wanIface, 'out', line.up.uuid);
+  // Old rules by source network would shape a second time: not exit-path.
+  final stray = live.any((r) =>
+      used.contains(_pipeOf(r, queues)) && r.interface != wanIface && !tunnelIfaces.contains(r.interface));
+  return tunnelOk && lineOk && !stray ? ShaperLayout.exitPath : ShaperLayout.other;
+}
+
+/// Recommended limits from a speed test with the shaper OFF, measured on the
+/// house line on 22 Nov 2026: the tunnel stayed lag-free with its limit at
+/// about the unshaped speed (410 for 413 measured: the limit counts traffic
+/// inside the tunnel and the tunnel delivers ~82 % of it), the direct line
+/// with ~98 % down / ~97 % up (540 / 52 for 549 / 53.5).
+({int down, int up}) recommendedLimits({required bool tunnel, required double downMbps, required double upMbps}) {
+  final fd = tunnel ? 1.0 : 0.98;
+  final fu = tunnel ? 1.0 : 0.97;
+  int r(double v) => v < 1 ? 1 : v.round();
+  return (down: r(downMbps * fd), up: r(upMbps * fu));
+}
+
+/// Real speed to expect through a limit (for the hint under the fields).
+int expectedRealMbps({required bool tunnel, required int limit}) => (limit * (tunnel ? 0.82 : 0.97)).round();

@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.1.13 (pre-release)
+- Shaper redesigned (22 Nov tuning on the house NBN line):
+  - Continuous auto-tune and "Restore original limits" are gone: on a quiet line it saw no lag and kept raising the limits (VPN went to 594/52, above the tunnel's real speed, so the shaper did nothing).
+  - Two paths, each with an on/off switch and limits you can type in: Tunnel (everything through the VPN) and Direct line (CLEAR network, devices switched to CLEAR, whole-house bypass).
+  - "Recommend from a speed test": press Measure (the shaper for that path is switched off for ~25 s while this device tests) or type your speedtest.net figures; the recommended limits fill in and can still be changed before saving.
+  - The card shows the real speed to expect (the tunnel delivers ~82 % of its limit, the direct line ~97 %) and re-reads the router about every minute (it showed old limits before).
+  - Checks the router's shaper rules: rules by network (VPN / CLEAR) held a device on CLEAR to the VPN limit. "Set up rules by exit path" replaces them with rules on the tunnel interfaces and WAN.
+- VPN servers: the server a tunnel uses is stored in the tunnel peer's name on the router (CVT_...) when you switch, rename or set its city, so every device shows its name instead of "Main tunnel server" or a bare IP. New "Rename" in each server's menu.
+- A new device turns "Keep the server list on the router" on by itself when the router already has the shared list (the new desktop install showed only two servers).
+- Names saved with dashes before 2.1.12 read with spaces ("Former Los Angeles server").
+- Tests: when this device doesn't know a tunnel's server, the expected exit country comes from the tunnel endpoint (the PC judged a Tokyo exit against "US" and warned about its own VPN app). The device chips fill in when the page opens, not only after Run all.
+- Devices: all leases are listed (the router returned one page only, so the phone's new lease was missing).
+- Status: "This PC" says it is going direct while whole-house bypass is on (it said "on the VPN").
+
 ## 2.1.12 (pre-release)
 - Review fixes (independent review of the router-writing code - nothing critical found):
   - Router server list: background saves (after a switch, Find best, the nightly run) only ADD - an older copy on one device can no longer delete servers another device added. Removing is an explicit action on the VPN servers page.

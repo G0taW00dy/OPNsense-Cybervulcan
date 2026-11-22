@@ -27,6 +27,32 @@ String listPeerName(ProtonServer s) {
   return full.length <= 64 ? full : full.substring(0, 64);
 }
 
+/// Name prefix the app gives a LIVE tunnel peer when it switches it
+/// (v2.1.13): the router can't hold that server in the list too (one peer
+/// per key), so the tunnel peer's own name carries the server name and city.
+const tunnelPeerPrefix = 'CVT_';
+
+/// Name for a live tunnel peer pointed at [s]: `CVT_<name>_<city>`.
+String tunnelPeerName(ProtonServer s) => tunnelPeerPrefix + listPeerName(s).substring(routerListPrefix.length);
+
+/// The server a live tunnel peer named by the app stands for, else null.
+ProtonServer? serverFromTunnelPeer({required String name, required String address, required String publicKey, required int port}) {
+  if (!name.startsWith(tunnelPeerPrefix) || address.isEmpty) return null;
+  final (n, city) = _decode(name.substring(tunnelPeerPrefix.length));
+  return ProtonServer(name: n.isEmpty ? address : n, entryIp: address, publicKey: publicKey, port: port, city: city);
+}
+
+(String, String?) _decode(String rest) {
+  final i = rest.indexOf('_');
+  // "--" is a space (v2.1.12); a single "-" stays (US-CA#742).
+  var name = (i < 0 ? rest : rest.substring(0, i)).replaceAll('--', ' ').replaceAll('.', '#');
+  // Names saved before v2.1.12 used "-" for spaces ("Former-Los-Angeles-server").
+  // Server codes keep theirs (US-CA#742, JP-FREE-1: a "#" or no lower case).
+  if (!name.contains('#') && !name.contains(' ') && RegExp('[a-z]').hasMatch(name)) name = name.replaceAll('-', ' ');
+  final city = i < 0 ? null : rest.substring(i + 1).replaceAll('--', ' ').replaceAll('-', ' ').trim();
+  return (name, city == null || city.isEmpty ? null : city);
+}
+
 /// A list peer: our prefix, switched off, linked to no instance.
 bool isListPeer(WgPeer p) => p.name.startsWith(routerListPrefix) && !p.enabled && p.instanceNames.isEmpty;
 
@@ -34,17 +60,13 @@ bool isListPeer(WgPeer p) => p.name.startsWith(routerListPrefix) && !p.enabled &
 /// its endpoint / key are unusable.
 ProtonServer? serverFromListPeer(WgPeer p) {
   if (!isListPeer(p) || !isWgPublicKey(p.publicKey) || p.serverAddress.isEmpty) return null;
-  final rest = p.name.substring(routerListPrefix.length);
-  final i = rest.indexOf('_');
-  // "--" is a space (v2.1.12); a single "-" stays (US-CA#742).
-  final name = (i < 0 ? rest : rest.substring(0, i)).replaceAll('--', ' ').replaceAll('.', '#');
-  final city = i < 0 ? null : rest.substring(i + 1).replaceAll('--', ' ').replaceAll('-', ' ').trim();
+  final (name, city) = _decode(p.name.substring(routerListPrefix.length));
   return ProtonServer(
     name: name.isEmpty ? p.serverAddress : name,
     entryIp: p.serverAddress,
     publicKey: p.publicKey,
     port: p.serverPort,
-    city: city == null || city.isEmpty ? null : city,
+    city: city,
   );
 }
 

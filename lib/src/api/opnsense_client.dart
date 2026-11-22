@@ -252,7 +252,9 @@ class OpnsenseClient {
   /// "Services: Dnsmasq DNS/DHCP: Settings".
   Future<List<DhcpLease>> dnsmasqLeases() async {
     const ep = '/api/dnsmasq/leases/search';
-    final map = _asMap(await _send('GET', ep), ep);
+    // POST with rowCount -1: a plain GET returns one page only, so some
+    // devices were missing from the list (22 Nov: the phone's new lease).
+    final map = _asMap(await _send('POST', ep, body: {'current': 1, 'rowCount': -1}), ep);
     return [
       for (final r in _rows(map))
         if (r is Map) DhcpLease.fromJson(r.cast<String, dynamic>()),
@@ -334,8 +336,11 @@ class OpnsenseClient {
   /// If the link is already missing, [instance] (an instance name) is used to
   /// restore it.
   Future<void> setWgPeerServer(String uuid,
-      {required String address, required int port, required String publicKey, String? instance}) async {
+      {required String address, required int port, required String publicKey, String? instance, String? name}) async {
     if (!_uuidRe.hasMatch(uuid)) throw ArgumentError.value(uuid, 'uuid', 'not a UUID');
+    if (name != null && !RegExp(r'^[A-Za-z0-9._\-]{1,64}$').hasMatch(name)) {
+      throw ArgumentError.value(name, 'name', 'not a valid peer name');
+    }
     if (InternetAddress.tryParse(address.trim()) == null) {
       throw ArgumentError.value(address, 'address', 'not an IP address');
     }
@@ -358,6 +363,7 @@ class OpnsenseClient {
             'serveraddress': address.trim(),
             'serverport': '$port',
             'pubkey': publicKey.trim(),
+            if (name != null) 'name': name,
             if (servers.isNotEmpty) 'servers': servers.join(','),
           },
         }),
@@ -519,6 +525,111 @@ class OpnsenseClient {
         ep);
     if (map['result'] != 'saved') {
       throw OpnsenseException(ApiErrorKind.server, 'Router did not save the shaper limit', endpoint: ep);
+    }
+  }
+
+  /// Switches one pipe on or off (nothing else changes).
+  Future<void> setPipeEnabled(String uuid, bool enabled) async {
+    if (!_uuidRe.hasMatch(uuid)) throw ArgumentError.value(uuid, 'uuid', 'not a UUID');
+    final ep = '/api/trafficshaper/settings/set_pipe/$uuid';
+    final map = _asMap(await _send('POST', ep, body: {'pipe': {'enabled': enabled ? '1' : '0'}}), ep);
+    if (map['result'] != 'saved') {
+      throw OpnsenseException(ApiErrorKind.server, 'Router did not save the shaper switch', endpoint: ep);
+    }
+  }
+
+  Future<List<ShaperQueue>> shaperQueues() async {
+    const ep = '/api/trafficshaper/settings/search_queues';
+    final json = await _send('POST', ep, body: const {'current': 1, 'rowCount': -1, 'searchPhrase': ''});
+    return [
+      for (final r in _rows(_asMap(json, ep)))
+        if (r is Map && _uuidRe.hasMatch('${r['uuid']}')) ShaperQueue.fromJson(r.cast<String, dynamic>()),
+    ];
+  }
+
+  Future<List<ShaperRule>> shaperRules() async {
+    const ep = '/api/trafficshaper/settings/search_rules';
+    final json = await _send('POST', ep, body: const {'current': 1, 'rowCount': -1, 'searchPhrase': ''});
+    return [
+      for (final r in _rows(_asMap(json, ep)))
+        if (r is Map && _uuidRe.hasMatch('${r['uuid']}')) ShaperRule.fromJson(r.cast<String, dynamic>()),
+    ];
+  }
+
+  /// Interface keys the shaper accepts, with their names (wan -> "WAN").
+  Future<Map<String, String>> shaperInterfaces() async {
+    const ep = '/api/trafficshaper/settings/get_rule';
+    final rule = _asMap(await _send('GET', ep), ep)['rule'];
+    final iface = rule is Map ? rule['interface'] : null;
+    if (iface is! Map) return const {};
+    return {
+      for (final e in iface.entries)
+        if (e.value is Map) '${e.key}': '${(e.value as Map)['value'] ?? e.key}',
+    };
+  }
+
+  /// Device -> interface name (igc0 -> "WAN", wg0 -> "WG_MAIN").
+  Future<Map<String, String>> interfaceNames() async {
+    const ep = '/api/diagnostics/interface/get_interface_names';
+    return {for (final e in _asMap(await _send('GET', ep), ep).entries) e.key: '${e.value}'};
+  }
+
+  /// Device of each WireGuard instance by name (Proton_VPN_Main -> wg0).
+  Future<Map<String, String>> wgInstanceDevices() async {
+    const ep = '/api/wireguard/server/search_server';
+    final json = await _send('POST', ep, body: const {'current': 1, 'rowCount': -1, 'searchPhrase': ''});
+    return {
+      for (final r in _rows(_asMap(json, ep)))
+        if (r is Map && '${r['interface'] ?? ''}'.isNotEmpty) '${r['name'] ?? ''}': '${r['interface']}',
+    };
+  }
+
+  /// Adds a shaper rule feeding queue [target]; returns its uuid.
+  Future<String> addShaperRule({
+    required int sequence,
+    required String interface,
+    required String direction,
+    required String target,
+    required String description,
+  }) async {
+    if (!_uuidRe.hasMatch(target)) throw ArgumentError.value(target, 'target', 'not a UUID');
+    if (!RegExp(r'^[a-z0-9_]{1,32}$').hasMatch(interface)) throw ArgumentError.value(interface, 'interface');
+    if (direction != 'in' && direction != 'out') throw ArgumentError.value(direction, 'direction');
+    const ep = '/api/trafficshaper/settings/add_rule';
+    final map = _asMap(
+        await _send('POST', ep, body: {
+          'rule': {
+            'enabled': '1',
+            'sequence': '$sequence',
+            'interface': interface,
+            'interface2': '',
+            'proto': 'ip',
+            'source': 'any',
+            'source_not': '0',
+            'src_port': 'any',
+            'destination': 'any',
+            'destination_not': '0',
+            'dst_port': 'any',
+            'direction': direction,
+            'target': target,
+            'description': description,
+          },
+        }),
+        ep);
+    final uuid = '${map['uuid'] ?? ''}';
+    if (map['result'] != 'saved' || !_uuidRe.hasMatch(uuid)) {
+      throw OpnsenseException(ApiErrorKind.server, 'Router did not save the shaper rule: ${map['validations'] ?? ''}',
+          endpoint: ep);
+    }
+    return uuid;
+  }
+
+  Future<void> deleteShaperRule(String uuid) async {
+    if (!_uuidRe.hasMatch(uuid)) throw ArgumentError.value(uuid, 'uuid', 'not a UUID');
+    final ep = '/api/trafficshaper/settings/del_rule/$uuid';
+    final map = _asMap(await _send('POST', ep, body: const {}), ep);
+    if (map['result'] != 'deleted') {
+      throw OpnsenseException(ApiErrorKind.server, 'Router did not delete the shaper rule', endpoint: ep);
     }
   }
 

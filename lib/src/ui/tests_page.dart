@@ -10,6 +10,7 @@ import '../core/controller.dart';
 import '../core/network_map.dart';
 import '../core/pc_mode.dart';
 import '../core/quick_tests.dart';
+import '../core/router_server_list.dart';
 import '../core/security_tests.dart';
 import 'theme.dart';
 
@@ -45,6 +46,31 @@ class _TestsPageState extends State<TestsPage> {
         _results[r.id] = r;
       }
     }
+    unawaited(_detectDevice());
+  }
+
+  bool _detected = false;
+
+  /// Fill the device / expected-path chips on open, not only after a run
+  /// (22 Nov: the PC showed "not on a house network" until Run all).
+  Future<void> _detectDevice() async {
+    try {
+      final ip = c.snapshot.pcIp ?? await detectPcIp(c.config);
+      if (!mounted) return;
+      setState(() {
+        _deviceIp = ip;
+        _expected = expectedPathFor(
+          deviceIp: ip,
+          cfg: c.config,
+          bypassActive: c.snapshot.bypassActive,
+          pcClear: c.supportsPcMode ? c.snapshot.pcClear : null,
+        );
+      });
+    } on Object {
+      // Chips stay as they are.
+    } finally {
+      if (mounted) setState(() => _detected = true);
+    }
   }
 
   @override
@@ -67,8 +93,22 @@ class _TestsPageState extends State<TestsPage> {
       final (m, b) = await c.tunnelPeers();
       final list = c.cachedServers();
       for (final p in [m, b]) {
-        final s = p.match(list);
-        if (s != null) names.add(s.name);
+        final s = p.match(list) ??
+            serverFromTunnelPeer(name: p.name, address: p.address, publicKey: p.publicKey, port: p.port);
+        if (s != null) {
+          names.add(s.name);
+        } else if (c.config.externalTests && p.address.isNotEmpty) {
+          // Server not in this device's list (e.g. server switcher off on the
+          // PC): look up the tunnel endpoint's country instead, so a Tokyo
+          // tunnel is not judged against the default "VPN country" (22 Nov).
+          try {
+            final g = await QuickTests(_http).geo(p.address);
+            final cc = g.countryCode?.toUpperCase();
+            if (cc != null && cc.length == 2) names.add('$cc#endpoint');
+          } on Object {
+            // Ignore: the setting is used alone.
+          }
+        }
       }
     } on Object {
       // Without peers the "VPN country" setting is used alone.
@@ -163,7 +203,7 @@ class _TestsPageState extends State<TestsPage> {
           onRun: busy ? null : _runAll,
           onCopy: _results.isEmpty ? null : () => _copyReport(current),
           chips: [
-            _chip(Icons.devices, '$_deviceName ${_deviceIp ?? '(not on a house network)'}'),
+            _chip(Icons.devices, '$_deviceName ${_deviceIp ?? (_detected ? '(not on a house network)' : '(checking...)')}'),
             _chip(Icons.alt_route, 'Expected: ${switch (_expected) {
               ExpectedPath.vpn => 'VPN',
               ExpectedPath.direct => 'direct',

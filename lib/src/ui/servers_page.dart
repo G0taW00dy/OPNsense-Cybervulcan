@@ -8,6 +8,7 @@ import '../api/opnsense_client.dart';
 import '../core/config.dart';
 import '../core/controller.dart';
 import '../core/providers.dart';
+import '../core/router_server_list.dart';
 import '../core/server_switcher.dart';
 import 'qr_scan_page.dart';
 import 'remote_access.dart';
@@ -36,6 +37,13 @@ class _ServersCardState extends State<ServersCard> {
 
   Future<void> _load() async {
     try {
+      // Fills this device's copy from the router list, so the card shows
+      // server names, not bare IPs (22 Nov, new PC install).
+      try {
+        await c.loadServerList();
+      } on Object {
+        // The card still works with addresses.
+      }
       final p = await c.tunnelPeers();
       if (mounted) {
         setState(() {
@@ -55,7 +63,8 @@ class _ServersCardState extends State<ServersCard> {
   }
 
   String _describe(WgPeerInfo p) {
-    final s = p.match(c.cachedServers());
+    final s = p.match(c.cachedServers()) ??
+        serverFromTunnelPeer(name: p.name, address: p.address, publicKey: p.publicKey, port: p.port);
     return s != null ? s.label : p.address;
   }
 
@@ -289,7 +298,39 @@ class _ServersPageState extends State<ServersPage> {
             : x,
     ];
     await c.saveServers(_servers);
+    if (_inUse(s) != null) {
+      await c.nameTunnelPeer(_servers.firstWhere((x) => x.entryIp == s.entryIp));
+    }
     if (mounted) setState(() => _message = '${s.name} is now listed in $city${_whereSaved()}.');
+  }
+
+  /// Renames a server (e.g. "Former Backup server" -> "JP#219"). A server a
+  /// tunnel uses also gets its name on the router's tunnel peer, so the other
+  /// devices see it (v2.1.13).
+  Future<void> _rename(ProtonServer s) async {
+    final ctl = TextEditingController(text: s.name);
+    final name = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Rename server'),
+        content: TextField(
+            controller: ctl,
+            autofocus: true,
+            decoration: const InputDecoration(labelText: 'Name', hintText: 'e.g. JP#219')),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, ctl.text.trim()), child: const Text('Save')),
+        ],
+      ),
+    );
+    if (name == null || name.isEmpty || name == s.name) return;
+    final renamed = ProtonServer(
+        name: name, entryIp: s.entryIp, publicKey: s.publicKey, port: s.port, city: s.city, country: s.country,
+        load: s.load, score: s.score);
+    _servers = [for (final x in _servers) x.sameEndpoint(s.entryIp, s.publicKey) ? renamed : x];
+    await c.saveServers(_servers);
+    if (_inUse(s) != null) await c.nameTunnelPeer(renamed);
+    if (mounted) setState(() => _message = 'Renamed to $name${_whereSaved()}.');
   }
 
   Future<void> _remove(ProtonServer s) async {
@@ -550,12 +591,14 @@ class _ServersPageState extends State<ServersPage> {
                       'main' => _use(s, main: true),
                       'backup' => _use(s, main: false),
                       'city' => _setCity(s),
+                      'rename' => _rename(s),
                       _ => _remove(s),
                     },
                     itemBuilder: (_) => [
                       PopupMenuItem(value: 'main', child: Text('Use for ${c.config.mainLabel} (main)')),
                       PopupMenuItem(value: 'backup', child: Text('Use for ${c.config.backupLabel} (backup)')),
                       const PopupMenuDivider(),
+                      const PopupMenuItem(value: 'rename', child: Text('Rename')),
                       const PopupMenuItem(value: 'city', child: Text('Set city')),
                       const PopupMenuItem(value: 'remove', child: Text('Remove from list')),
                     ],
@@ -612,7 +655,10 @@ List<ProtonServer> withTunnelServers(List<ProtonServer> servers, (WgPeerInfo, Wg
   final out = [...servers];
   for (final (label, p) in [(cfg.mainLabel, peers.$1), (cfg.backupLabel, peers.$2)]) {
     if (p.address.isEmpty || p.match(out) != null) continue;
-    out.insert(0, ProtonServer(name: '$label tunnel server', entryIp: p.address, publicKey: p.publicKey, port: p.port));
+    out.insert(
+        0,
+        serverFromTunnelPeer(name: p.name, address: p.address, publicKey: p.publicKey, port: p.port) ??
+            ProtonServer(name: '$label tunnel server', entryIp: p.address, publicKey: p.publicKey, port: p.port));
   }
   return out;
 }

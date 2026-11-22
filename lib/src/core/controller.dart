@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io' show Platform;
 
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 
 import '../api/models.dart';
 import '../api/opnsense_client.dart';
@@ -17,6 +18,7 @@ import 'client_factory.dart';
 import 'config.dart';
 import 'events.dart';
 import 'house_state.dart';
+import 'line_speed.dart';
 import 'network_map.dart';
 import 'pc_mode.dart';
 import 'schedule.dart';
@@ -344,9 +346,11 @@ class CybervulcanController extends ChangeNotifier {
         notifyListeners();
       }
 
-      // Shaper auto-tune (this device only; best on the always-on PC).
-      if (config.shaperAutoTune) await _tuneShaper();
-      if (config.shaperClearAutoTune) await _tuneClear();
+      // v2.1.13: no continuous auto-tune any more (a quiet line shows no lag,
+      // so it kept raising the limits - 22 Nov). Limits are set by hand or
+      // from a speed test; the shown limits are re-read about every minute so
+      // a change made elsewhere shows up.
+      if (shaperPipes != null && ++_shaperPolls % 4 == 0) unawaited(refreshShaperInfo());
 
       // Nightly "find best server".
       final lastBest = DateTime.tryParse(prefs.getString(_bestRunKey) ?? '');
@@ -427,6 +431,7 @@ class CybervulcanController extends ChangeNotifier {
       prefs.setString(serverCacheKey, jsonEncode([for (final s in servers) s.toJson()]));
 
   static const _listSeededKey = 'server_list_seeded_v1';
+  static const _listAutoKey = 'server_list_auto_checked_v1';
 
   /// Why the router-stored list was not used last time (shown on the page).
   String? serverListNote;
@@ -442,14 +447,37 @@ class CybervulcanController extends ChangeNotifier {
   Future<List<ProtonServer>> loadServerList() async {
     final local = cachedServers();
     final c = _client;
-    if (!config.serverListOnRouter || c == null) return local;
+    if (c == null) return local;
+    // A new device on a router that already has the shared list turns the
+    // list on by itself, once (22 Nov: the new desktop install showed only the
+    // two tunnel servers). Turning it off later sticks.
+    if (!config.serverListOnRouter && !prefs.flag(_listAutoKey)) {
+      try {
+        final found = (await c.wgPeers()).any(isListPeer);
+        await prefs.setFlag(_listAutoKey);
+        if (found) {
+          config = config.copyWith(serverListOnRouter: true);
+          await prefs.saveConfig(config);
+          lastActionInfo = 'Found the shared server list on the router - switched "Keep the server list on the router" on.';
+        }
+      } on Object {
+        // Try again next time.
+      }
+    }
+    if (!config.serverListOnRouter) return local;
     try {
       final peers = await c.wgPeers();
-      var list = [
+      var list = <ProtonServer>[
         for (final p in peers) ?serverFromListPeer(p),
-        // Servers a tunnel uses now live in that tunnel's peer, not the list.
-        ...inUseByTunnels(peers, local),
+        // Servers a tunnel uses now live in that tunnel's peer, not the list:
+        // named by the app on a switch (CVT_), else this device's own copy.
+        for (final p in peers)
+          if (!isListPeer(p))
+            ?serverFromTunnelPeer(name: p.name, address: p.serverAddress, publicKey: p.publicKey, port: p.serverPort),
       ];
+      for (final s in inUseByTunnels(peers, local)) {
+        if (!list.any((r) => r.sameEndpoint(s.entryIp, s.publicKey))) list.add(s);
+      }
       if (!prefs.flag(_listSeededKey)) {
         list = [
           ...list,
@@ -570,12 +598,34 @@ class CybervulcanController extends ChangeNotifier {
     return c == null ? null : ServerSwitcher(client: c, config: config);
   }
 
+  /// Writes [server]'s name and city into the name of the live tunnel peer
+  /// that uses it (CVT_...), so other devices can show it. Label only: no
+  /// tunnel restart. Best effort.
+  Future<void> nameTunnelPeer(ProtonServer server) async {
+    final c = _client;
+    if (c == null) return;
+    try {
+      for (final p in await c.wgPeers()) {
+        if (isListPeer(p) || !server.sameEndpoint(p.serverAddress, p.publicKey)) continue;
+        final name = tunnelPeerName(server);
+        if (p.name == name) continue;
+        await c.setWgPeerServer(p.uuid,
+            address: p.serverAddress, port: p.serverPort, publicKey: p.publicKey, name: name);
+      }
+    } on Object {
+      // The list still has the name on this device.
+    }
+  }
+
   /// Current main / backup peers (public data only).
   Future<(WgPeerInfo, WgPeerInfo)> tunnelPeers() async {
     final sw = _newSwitcher();
     if (sw == null) throw OpnsenseException(ApiErrorKind.network, 'Router not configured');
     final (m, b) = await sw.peers();
-    return (WgPeerInfo(m.serverAddress, m.serverPort, m.publicKey), WgPeerInfo(b.serverAddress, b.serverPort, b.publicKey));
+    return (
+      WgPeerInfo(m.serverAddress, m.serverPort, m.publicKey, name: m.name),
+      WgPeerInfo(b.serverAddress, b.serverPort, b.publicKey, name: b.name),
+    );
   }
 
   /// Points the main or backup tunnel at [server].
@@ -988,44 +1038,8 @@ class CybervulcanController extends ChangeNotifier {
     await prefs.setString(shaperOriginalKey, jsonEncode(orig));
   }
 
-  int _clearTuneErrors = 0;
 
-  Future<void> _tuneClear() async {
-    final c = _client;
-    final wan = pickWanGateway(allGateways, config);
-    if (c == null) return;
-    if (wan == null) {
-      clearTuner.lastReason = 'No WAN gateway found - set it in Settings (router: System > Gateways).';
-      return;
-    }
-    final mon = wan.monitor?.trim() ?? '';
-    if (mon.isEmpty || mon == '~' || wan.delayMs == null) {
-      // Without a monitor IP the router reports no real delay for the line.
-      clearTuner.lastReason = 'The WAN gateway has no monitor IP - set one (e.g. 9.9.9.9) under System > Gateways.';
-      return;
-    }
-    try {
-      final p = findClearPipes(await c.shaperPipes());
-      if (p == null) {
-        clearTuner.lastReason = 'No CLEAR shaper pipes found (descriptions with "CLEAR" and "download"/"upload").';
-        return;
-      }
-      await _saveOriginal(p);
-      final d = await clearTuner.tick(c, config, wan.delayMs);
-      _clearTuneErrors = 0;
-      if (d != null) {
-        await journal.add('CLEAR shaper ${clearTuner.currentDown}/${clearTuner.currentUp} Mbit/s', ok: true, detail: d.reason);
-        notifyListeners();
-      }
-    } on OpnsenseException catch (e) {
-      clearTuner.lastReason = e.kind == ApiErrorKind.forbidden
-          ? 'Needs the router privilege "Firewall: Shaper" on this app user.'
-          : 'Router: ${e.message}';
-      if (++_clearTuneErrors == 3 && config.routerSafetyNet) await restoreShaperOriginal(reason: 'CLEAR auto-tune kept failing');
-    }
-  }
   static const shaperOriginalKey = 'shaper_original_v1';
-  int _tuneErrors = 0;
 
   /// Original VPN limits saved before the first auto-tune change, or null.
   Map<String, int>? get shaperOriginal {
@@ -1037,33 +1051,6 @@ class CybervulcanController extends ChangeNotifier {
     }
   }
 
-  Future<void> _tuneShaper() async {
-    final c = _client;
-    final gw = snapshot.activeGateway;
-    if (c == null || gw == null) return;
-    try {
-      final p = findVpnPipes(await c.shaperPipes());
-      if (p == null) {
-        tuner.lastReason = 'No VPN shaper pipes found on the router.';
-        return;
-      }
-      {
-        await _saveOriginal(p);
-      }
-      final d = await tuner.tick(c, config, gw.delayMs);
-      _tuneErrors = 0;
-      if (d != null) {
-        await journal.add('Shaper ${tuner.currentDown}/${tuner.currentUp} Mbit/s', ok: true, detail: d.reason);
-        notifyListeners();
-      }
-    } on OpnsenseException catch (e) {
-      tuner.lastReason = e.kind == ApiErrorKind.forbidden
-          ? 'Needs the router privilege "Firewall: Shaper" on this app user.'
-          : 'Router: ${e.message}';
-      // Safety net: three failures in a row -> put the original limits back.
-      if (++_tuneErrors == 3 && config.routerSafetyNet) await restoreShaperOriginal(reason: 'auto-tune kept failing');
-    }
-  }
 
   /// All enabled shaper pipes as last read (Settings shows them), or null.
   List<ShaperPipe>? shaperPipes;
@@ -1074,7 +1061,9 @@ class CybervulcanController extends ChangeNotifier {
     if (c == null) return;
     _shaperTriedAt = clock();
     try {
-      final pipes = (await c.shaperPipes()).where((p) => p.enabled).toList();
+      final all = await c.shaperPipes();
+      allShaperPipes = all;
+      final pipes = all.where((p) => p.enabled).toList();
       shaperPipes = pipes;
       if (tuner.lastReason == _shaperReadError) tuner.lastReason = null;
       _shaperReadError = null;
@@ -1090,6 +1079,207 @@ class CybervulcanController extends ChangeNotifier {
           : 'Router: ${e.message} - trying again shortly';
     }
     notifyListeners();
+  }
+
+  /// Every pipe as last read, switched on or off (v2.1.13).
+  List<ShaperPipe>? allShaperPipes;
+  int _shaperPolls = 0;
+
+  /// The tunnel (VPN pipes) or direct line (CLEAR pipes) limits as last read.
+  ({ShaperPipe down, ShaperPipe up})? shaperPath({required bool tunnel}) {
+    final all = allShaperPipes;
+    if (all == null) return null;
+    return tunnel ? findVpnPipesAny(all) : findClearPipesAny(all);
+  }
+
+  /// Sets the limits and/or switches the shaper on or off for one path.
+  Future<bool> setShaperPath({required bool tunnel, int? down, int? up, bool? enabled}) async {
+    final c = _client;
+    if (c == null) return false;
+    final word = tunnel ? 'tunnel' : 'direct line';
+    if (!await authorize('Change the $word shaper')) return false;
+    try {
+      final p = (tunnel ? findVpnPipesAny : findClearPipesAny)(await c.shaperPipes());
+      if (p == null) {
+        throw OpnsenseException(ApiErrorKind.notFound,
+            'No ${tunnel ? 'VPN' : 'CLEAR'} download/upload pipes on the router (Firewall > Shaper > Pipes)');
+      }
+      if (down != null) await c.setPipeBandwidth(p.down.uuid, down);
+      if (up != null) await c.setPipeBandwidth(p.up.uuid, up);
+      if (enabled != null) {
+        await c.setPipeEnabled(p.down.uuid, enabled);
+        await c.setPipeEnabled(p.up.uuid, enabled);
+      }
+      await c.shaperReconfigure();
+      final what = [
+        if (down != null || up != null) '${down ?? p.down.mbit.round()}/${up ?? p.up.mbit.round()} Mbit/s',
+        if (enabled != null) enabled ? 'on' : 'off',
+      ].join(', ');
+      await journal.add('Shaper ($word): $what', ok: true);
+      lastActionInfo = 'Shaper ($word): $what.';
+      await refreshShaperInfo();
+      return true;
+    } on OpnsenseException catch (e) {
+      lastActionError = 'Could not change the $word shaper: ${e.message}';
+      notifyListeners();
+      return false;
+    }
+  }
+
+  /// Speed test of one path with its shaper switched off for the test, then
+  /// put back as it was. Returns Mbit/s, or null on failure.
+  Future<({double down, double up})?> measureShaperPath({required bool tunnel, required http.Client web}) async {
+    final c = _client;
+    if (c == null) return null;
+    final word = tunnel ? 'tunnel' : 'direct line';
+    if (!await authorize('Measure the $word speed (shaper off for about 25 seconds)')) return null;
+    ({ShaperPipe down, ShaperPipe up})? p;
+    try {
+      p = (tunnel ? findVpnPipesAny : findClearPipesAny)(await c.shaperPipes());
+      final wasOn = p != null && p.down.enabled && p.up.enabled;
+      if (p != null && wasOn) {
+        await c.setPipeEnabled(p.down.uuid, false);
+        await c.setPipeEnabled(p.up.uuid, false);
+        await c.shaperReconfigure();
+        await Future<void>.delayed(const Duration(seconds: 2));
+      }
+      try {
+        final r = await measureSpeed(web);
+        await journal.add('Speed test ($word, shaper off): ${r.down.toStringAsFixed(0)}/${r.up.toStringAsFixed(1)} Mbit/s',
+            ok: true);
+        return r;
+      } finally {
+        if (p != null && wasOn) {
+          await c.setPipeEnabled(p.down.uuid, true);
+          await c.setPipeEnabled(p.up.uuid, true);
+          await c.shaperReconfigure();
+          await refreshShaperInfo();
+        }
+      }
+    } on OpnsenseException catch (e) {
+      lastActionError = 'Speed test failed: ${e.message}';
+      notifyListeners();
+      return null;
+    } on Object catch (e) {
+      lastActionError = 'Speed test failed: $e';
+      notifyListeners();
+      return null;
+    }
+  }
+
+  /// How the router's shaper rules are laid out, or null when unreadable.
+  ShaperLayout? shaperLayout;
+  String? shaperLayoutNote;
+
+  /// Interface keys of the main and backup tunnels (e.g. opt5, opt6).
+  Future<Set<String>> _tunnelIfaces(OpnsenseClient c) async {
+    final devices = await c.wgInstanceDevices();
+    Map<String, String> names;
+    try {
+      names = await c.interfaceNames();
+    } on OpnsenseException {
+      // Without "Diagnostics: Interface": match by name below.
+      names = const {};
+    }
+    final keys = await c.shaperInterfaces();
+    final out = <String>{};
+    for (final (inst, gw) in [(config.mainWgInstance, config.mainGateway), (config.backupWgInstance, config.backupGateway)]) {
+      final dev = devices[inst];
+      final label = dev == null ? null : names[dev];
+      // Fallback: the interface whose name starts the gateway's (WG_MAIN for WG_MAIN_GW).
+      final key = keys.entries.where((e) => e.value == label).firstOrNull?.key ??
+          (keys.entries.where((e) => e.value.length >= 3 && gw.toUpperCase().startsWith(e.value.toUpperCase())).toList()
+                ..sort((a, b) => b.value.length.compareTo(a.value.length)))
+              .firstOrNull
+              ?.key;
+      if (key == null) {
+        throw OpnsenseException(ApiErrorKind.notFound,
+            'The tunnel "$inst" has no assigned interface (Interfaces > Assignments) - the shaper needs one');
+      }
+      out.add(key);
+    }
+    return out;
+  }
+
+  Future<void> checkShaperLayout() async {
+    final c = _client;
+    if (c == null) return;
+    try {
+      shaperLayout = classifyShaperLayout(
+        rules: await c.shaperRules(),
+        queues: await c.shaperQueues(),
+        pipes: await c.shaperPipes(),
+        tunnelIfaces: await _tunnelIfaces(c),
+      );
+      shaperLayoutNote = null;
+    } on OpnsenseException catch (e) {
+      shaperLayout = null;
+      shaperLayoutNote = e.kind == ApiErrorKind.forbidden
+          ? 'Can\'t check the shaper rules - the app user needs "Firewall: Shaper" and "Diagnostics: Interface".'
+          : e.message;
+    }
+    notifyListeners();
+  }
+
+  /// Replaces the shaper rules that feed the VPN / CLEAR pipes with rules by
+  /// exit path: tunnel interfaces -> VPN pipes, WAN -> CLEAR pipes. Other
+  /// rules are not touched.
+  Future<bool> setupExitPathShaper() async {
+    final c = _client;
+    if (c == null) return false;
+    if (!await authorize('Set up the shaper rules by exit path', always: true)) return false;
+    try {
+      final pipes = await c.shaperPipes();
+      final vpn = findVpnPipesAny(pipes);
+      final line = findClearPipesAny(pipes);
+      if (vpn == null || line == null) {
+        throw OpnsenseException(ApiErrorKind.notFound,
+            'Needs pipes named "VPN download", "VPN upload", "CLEAR download", "CLEAR upload" (Firewall > Shaper > Pipes)');
+      }
+      final queues = await c.shaperQueues();
+      String queueFor(ShaperPipe p) {
+        final q = queues.where((q) => q.pipe == p.uuid).firstOrNull;
+        if (q == null) {
+          throw OpnsenseException(ApiErrorKind.notFound, 'No queue on the pipe "${p.description}" (Firewall > Shaper > Queues)');
+        }
+        return q.uuid;
+      }
+
+      final ifaces = (await _tunnelIfaces(c)).toList();
+      final used = {vpn.down.uuid, vpn.up.uuid, line.down.uuid, line.up.uuid};
+      final old = [
+        for (final r in await c.shaperRules())
+          if (used.contains(queues.where((q) => q.uuid == r.target).firstOrNull?.pipe ?? r.target)) r.uuid,
+      ];
+      final names = [config.mainLabel, config.backupLabel];
+      var seq = 50;
+      for (var i = 0; i < ifaces.length; i++) {
+        await c.addShaperRule(
+            sequence: seq++, interface: ifaces[i], direction: 'in', target: queueFor(vpn.down),
+            description: 'Tunnel download - ${names[i]}');
+        await c.addShaperRule(
+            sequence: seq++, interface: ifaces[i], direction: 'out', target: queueFor(vpn.up),
+            description: 'Tunnel upload - ${names[i]}');
+      }
+      await c.addShaperRule(
+          sequence: 60, interface: 'wan', direction: 'in', target: queueFor(line.down),
+          description: 'Line download - WAN (direct, CLEAR, bypass)');
+      await c.addShaperRule(
+          sequence: 61, interface: 'wan', direction: 'out', target: queueFor(line.up),
+          description: 'Line upload - WAN (direct, CLEAR, bypass)');
+      for (final u in old) {
+        await c.deleteShaperRule(u);
+      }
+      await c.shaperReconfigure();
+      await journal.add('Shaper rules set up by exit path', ok: true, detail: '${old.length} old rule(s) replaced');
+      lastActionInfo = 'Shaper rules now follow the exit path (tunnel / direct line).';
+      await checkShaperLayout();
+      return true;
+    } on OpnsenseException catch (e) {
+      lastActionError = 'Could not set up the shaper rules: ${e.message}';
+      notifyListeners();
+      return false;
+    }
   }
 
   /// The last shaper read failure shown in Settings (cleared when a read works).

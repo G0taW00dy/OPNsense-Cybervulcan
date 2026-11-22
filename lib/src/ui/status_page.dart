@@ -490,7 +490,7 @@ class _PcModeCard extends StatelessWidget {
                     : 'Could not detect this PC\'s house IP - set it in Settings.')
                 : clear == null
                     ? 'IP ${s.pcIp}: mode unknown (alias not readable).'
-                    : 'IP ${s.pcIp} is ${clear ? 'CLEAR - direct internet, only this ${_deviceNoun()}' : 'on the VPN'}.'),
+                    : 'IP ${s.pcIp} is ${clear ? 'CLEAR - direct internet, only this ${_deviceNoun()}' : s.bypassActive == true ? 'going direct - whole-house bypass is on' : 'on the VPN'}.'),
           ],
         ),
       ),

@@ -7,6 +7,7 @@ import '../api/models.dart';
 import '../api/opnsense_client.dart';
 import '../api/wireguard_models.dart';
 import 'config.dart';
+import 'router_server_list.dart';
 
 /// Proton server switcher (v2.0).
 ///
@@ -82,8 +83,10 @@ class ProtonServer {
 
 /// Where a tunnel points right now (public data only).
 class WgPeerInfo {
-  const WgPeerInfo(this.address, this.port, this.publicKey);
+  const WgPeerInfo(this.address, this.port, this.publicKey, {this.name = ''});
   final String address;
+  /// The router peer's name; `CVT_...` carries the server name (v2.1.13).
+  final String name;
   final int port;
   final String publicKey;
 
@@ -330,8 +333,12 @@ class ServerSwitcher {
         await client.deleteWgPeer(p.uuid);
       }
     }
+    // The live peer's name now carries the server's name and city (CVT_...),
+    // so every device knows which server a tunnel uses (v2.1.13). The router
+    // links instances to peers by uuid, so the name is only a label.
+    final newName = tunnelPeerName(server);
     await client.setWgPeerServer(peer.uuid,
-        address: server.entryIp, port: server.port, publicKey: server.publicKey, instance: instance);
+        address: server.entryIp, port: server.port, publicKey: server.publicKey, instance: instance, name: newName);
     // The peer must still belong to its instance, or the tunnel goes dark.
     final after = (await client.wgPeers()).where((p) => p.uuid == peer.uuid);
     if (after.isEmpty || !after.first.belongsTo(instance)) {
@@ -347,7 +354,8 @@ class ServerSwitcher {
         ? null
         : 'Could not refresh the gateway monitor (the API user needs "System: Static Routes" and '
             '"Status: Services"). The tunnel works, but its ping/loss may be wrong until the router refreshes it.';
-    await verifyHandshake(server, peerName: peer.name, since: started);
+    final named = after.first.name;
+    await verifyHandshake(server, peerName: named.isEmpty ? peer.name : named, since: started);
   }
 
   /// Waits until the router reports a fresh handshake and received data from
