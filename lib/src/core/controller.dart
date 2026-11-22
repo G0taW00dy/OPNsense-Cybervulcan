@@ -479,6 +479,15 @@ class CybervulcanController extends ChangeNotifier {
       for (final s in inUseByTunnels(peers, local)) {
         if (!list.any((r) => r.sameEndpoint(s.entryIp, s.publicKey))) list.add(s);
       }
+      // Tunnel names follow their server's city on EVERY device, not only on
+      // the one that switched (23 Nov: the phone still said San Jose).
+      for (final p in peers) {
+        if (isListPeer(p)) continue;
+        final main = p.belongsTo(config.mainWgInstance);
+        if (!main && !p.belongsTo(config.backupWgInstance)) continue;
+        final s = list.where((x) => x.sameEndpoint(p.serverAddress, p.publicKey)).firstOrNull;
+        if (s != null) await _followCity(main, s);
+      }
       if (!prefs.flag(_listSeededKey)) {
         list = [
           ...list,
@@ -771,6 +780,66 @@ class CybervulcanController extends ChangeNotifier {
     config = main ? config.copyWith(mainLabel: city) : config.copyWith(backupLabel: city);
     await prefs.saveConfig(config);
     notifyListeners();
+  }
+
+  /// Cities ticked in the VPN servers dropdown ("Cities to choose from").
+  Future<void> setServerCities(List<String> cities) async {
+    config = config.copyWith(serverCities: cities.join(', '));
+    await prefs.saveConfig(config);
+    notifyListeners();
+  }
+
+  /// Swaps the servers of the main and backup tunnels (v2.1.16). The router
+  /// allows one peer per key, so: backup parks on a spare server from the
+  /// list, main takes the old backup server, backup takes the old main one.
+  Future<bool> swapTunnels() async {
+    if (serverBusy) return false;
+    if (!await authorize('Swap the main and backup VPN servers', always: true)) return false;
+    final sw = _newSwitcher();
+    if (sw == null) return false;
+    serverBusy = true;
+    notifyListeners();
+    String done = '';
+    final r = await _action((c) async {
+      final (m, b) = await sw.peers();
+      final list = cachedServers();
+      ProtonServer asServer(WgPeer p, String label) =>
+          list.where((x) => x.sameEndpoint(p.serverAddress, p.publicKey)).firstOrNull ??
+          serverFromTunnelPeer(name: p.name, address: p.serverAddress, publicKey: p.publicKey, port: p.serverPort) ??
+          ProtonServer(name: 'Former $label server', entryIp: p.serverAddress, publicKey: p.publicKey, port: p.serverPort);
+      final oldMain = asServer(m, config.mainLabel);
+      final oldBackup = asServer(b, config.backupLabel);
+      final spare = list
+          .where((x) => !x.sameEndpoint(m.serverAddress, m.publicKey) && !x.sameEndpoint(b.serverAddress, b.publicKey))
+          .firstOrNull;
+      if (spare == null) {
+        throw ServerSwitchException('Swapping needs one more server in the list - the backup waits on it for a '
+            'moment (the router allows each server on one tunnel at a time). Add one with Scan QR or Paste config.');
+      }
+      await sw.apply(b, spare, main: false);
+      await journal.add('Swap 1/3: backup parked on ${spare.name}', ok: true);
+      try {
+        final (m2, _) = await sw.peers();
+        await sw.apply(m2, oldBackup, main: true);
+        await journal.add('Swap 2/3: main -> ${oldBackup.name}', ok: true);
+        final (_, b3) = await sw.peers();
+        await sw.apply(b3, oldMain, main: false);
+        await journal.add('Swap 3/3: backup -> ${oldMain.name}', ok: true);
+      } finally {
+        // The spare goes back into the router list whatever happened.
+        if (config.serverListOnRouter) unawaited(_addToRouterList([spare]));
+      }
+      tuner.pathChanged();
+      await _followCity(true, oldBackup);
+      await _followCity(false, oldMain);
+      await _applyCityLimits(oldBackup);
+      done = 'Swapped: main now uses ${oldBackup.name}, backup ${oldMain.name} (handshakes confirmed)';
+      return true;
+    }, done: 'Main and backup swapped (handshakes confirmed)');
+    if (r == true && done.isNotEmpty) lastActionInfo = done;
+    serverBusy = false;
+    notifyListeners();
+    return r ?? false;
   }
 
   void cancelFindBest() => _switcher?.cancel();

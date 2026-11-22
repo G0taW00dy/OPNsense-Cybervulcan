@@ -68,6 +68,31 @@ class _ServersCardState extends State<ServersCard> {
     return s != null ? s.label : p.address;
   }
 
+  /// Swaps the servers of the main and backup tunnels (v2.1.16).
+  Future<void> _swap() async {
+    final p = _peers;
+    if (p == null) return;
+    final cfg = c.config;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Swap main and backup?'),
+        content: Text('Main (${cfg.mainLabel}) moves to ${_describe(p.$2)}, backup (${cfg.backupLabel}) to '
+            '${_describe(p.$1)}.\n\nCompare their ping, jitter and loss on the tunnel cards first. The router '
+            'allows each server on one tunnel at a time, so the backup waits on another server from your list for a '
+            'moment. Main restarts once (a few seconds without internet on the VPN), backup twice.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Swap')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    setState(() {});
+    await c.swapTunnels();
+    await _load();
+  }
+
   @override
   Widget build(BuildContext context) {
     final t = Theme.of(context).textTheme;
@@ -103,6 +128,11 @@ class _ServersCardState extends State<ServersCard> {
                     },
               icon: const Icon(Icons.speed),
               label: const Text('Find best'),
+            ),
+            OutlinedButton.icon(
+              onPressed: c.serverBusy || _error != null || _peers == null ? null : _swap,
+              icon: const Icon(Icons.swap_vert),
+              label: const Text('Swap'),
             ),
             OutlinedButton.icon(
               onPressed: c.serverBusy || _error != null
@@ -143,7 +173,6 @@ class ServersPage extends StatefulWidget {
 class _ServersPageState extends State<ServersPage> {
   final _http = http.Client();
   List<ProtonServer> _servers = [];
-  bool _onlyMyCities = true;
   bool _loading = false;
   String? _message;
   final List<String> _log = [];
@@ -215,9 +244,62 @@ class _ServersPageState extends State<ServersPage> {
     super.dispose();
   }
 
+  /// Cities ticked in the dropdown that have servers here (a ticked city
+  /// with no servers no longer hides the whole list).
+  Set<String> get _activeCities {
+    final have = {for (final s in _servers) (s.city ?? '').toLowerCase()};
+    return {
+      for (final x in c.config.serverCityList)
+        if (have.contains(x.toLowerCase())) x.toLowerCase(),
+    };
+  }
+
+  Widget _cityMenu(BuildContext context) {
+    final all = knownCities(_servers, c.config);
+    final ticked = c.config.serverCityList.map((x) => x.toLowerCase()).toSet();
+    final active = _activeCities;
+    final label = active.isEmpty
+        ? 'All cities'
+        : [for (final x in all) if (active.contains(x.toLowerCase())) x].join(', ');
+    return MenuAnchor(
+      menuChildren: [
+        MenuItemButton(
+          leadingIcon: Icon(active.isEmpty ? Icons.check_box : Icons.check_box_outline_blank),
+          onPressed: () => _setCities(const []),
+          child: const Text('All cities'),
+        ),
+        for (final city in all)
+          MenuItemButton(
+            closeOnActivate: false,
+            leadingIcon:
+                Icon(ticked.contains(city.toLowerCase()) ? Icons.check_box : Icons.check_box_outline_blank),
+            onPressed: () => _setCities([
+              for (final x in c.config.serverCityList)
+                if (x.toLowerCase() != city.toLowerCase()) x,
+              if (!ticked.contains(city.toLowerCase())) city,
+            ]),
+            child: Text(city),
+          ),
+      ],
+      builder: (context, ctl, _) => OutlinedButton.icon(
+        onPressed: () => ctl.isOpen ? ctl.close() : ctl.open(),
+        icon: const Icon(Icons.location_city_outlined),
+        label: Row(mainAxisSize: MainAxisSize.min, children: [
+          Text(label),
+          const Icon(Icons.arrow_drop_down),
+        ]),
+      ),
+    );
+  }
+
+  Future<void> _setCities(List<String> cities) async {
+    await c.setServerCities(cities);
+    if (mounted) setState(() {});
+  }
+
   List<ProtonServer> get _visible {
-    final cities = c.config.serverCityList.map((x) => x.toLowerCase()).toSet();
-    final list = _onlyMyCities && cities.isNotEmpty
+    final cities = _activeCities;
+    final list = cities.isNotEmpty
         ? _servers.where((s) => cities.contains((s.city ?? '').toLowerCase())).toList()
         : [..._servers];
     list.sort((a, b) => (a.load ?? 100).compareTo(b.load ?? 100));
@@ -281,7 +363,7 @@ class _ServersPageState extends State<ServersPage> {
     final hidden = !_visible.any((x) => x.entryIp == server.entryIp);
     if (mounted) {
       setState(() => _message = 'Added ${server.name}${_whereSaved()}.'
-          '${hidden ? ' It is hidden by the city filter - tap "Only ..." to show all.' : ''}'
+          '${hidden ? ' It is hidden by the city filter - choose "All cities" to show it.' : ''}'
           ' (Any private key in it was ignored.)');
     }
   }
@@ -544,14 +626,9 @@ class _ServersPageState extends State<ServersPage> {
               onPressed: _loading || _running ? null : _addFromConf,
               icon: const Icon(Icons.note_add_outlined),
               label: const Text('Paste config')),
-          // No cities chosen = nothing to filter: no chip (it showed ticked
-          // but did nothing on the PC).
-          if (c.config.serverCityList.isNotEmpty)
-            FilterChip(
-              label: Text('Only ${c.config.serverCities}'),
-              selected: _onlyMyCities,
-              onSelected: (v) => setState(() => _onlyMyCities = v),
-            ),
+          // v2.1.16: a dropdown with a tick per city (was an on/off chip that
+          // hid everything when the chosen cities had no servers).
+          if (knownCities(_servers, c.config).isNotEmpty) _cityMenu(context),
         ]),
         if (_message != null)
           Padding(
@@ -565,7 +642,7 @@ class _ServersPageState extends State<ServersPage> {
             child: Text(
               _servers.isEmpty
                   ? 'No servers yet. ${_profile.noListReason ?? 'Download the list, or add servers from config files.'}'
-                  : 'No servers in your cities - turn the filter off or change the cities in Settings.',
+                  : 'No servers in the ticked cities - choose "All cities".',
               style: t.bodySmall,
             ),
           )

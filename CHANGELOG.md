@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.1.16 (pre-release)
+- From the 23 Nov phone test of 2.1.15 (server names from the router, switch backup to JP#302 and back to JP#219 with names and cities kept - all OK):
+  - VPN servers: the "Only <cities>" on/off chip is replaced by a Cities dropdown with a tick per city and "All cities". A ticked city with no servers no longer hides the whole list.
+  - Tunnel names follow their server's city on every device (with "Name tunnels after their server's city" on), not only on the device that switched - the phone still said San Jose / Los Angeles.
+  - New Swap button on the VPN servers card: main and backup trade servers. The router allows each server on one tunnel at a time, so the backup waits on a spare server from the list for a moment; every step waits for a real handshake. Tunnel limits saved for the new main city are applied.
+
 ## 2.1.15 (pre-release)
 - From the 23 Nov PC test of 2.1.14 (Tests A+ 100, Devices lists all 11 leases, presets, per-city limits, path on/off, rename to the router's tunnel peer all worked):
   - Shaper Measure: the app's test read 258/32 on a tunnel speedtest.net measured at 413/47, so "Use recommended" no longer lowers working limits by itself - it explains and asks you to press it again. The test now uses 16 streams for 12 s each way.
