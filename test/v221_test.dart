@@ -108,4 +108,18 @@ void v223Tests() {
     expect(await resolveEndpoint('home.invalid', 51830), '203.0.113.7:51830');
     endpointCache.remove('home.invalid');
   });
+
+  group('v2.2.3 expected path', () {
+    final cfg = const AppConfig().copyWith(remoteEnabled: true, remoteMode: 'everything');
+    test('Windows everything via home away -> VPN expected', () {
+      expect(everythingViaHomeActive(cfg: cfg, windows: true, homeLinkConnected: true, atHome: false), isTrue);
+      expect(expectedPathFor(deviceIp: null, cfg: cfg, bypassActive: null, pcClear: null, everythingViaHome: true),
+          ExpectedPath.vpn);
+    });
+    test('Android, at home, or link down -> not via home', () {
+      expect(everythingViaHomeActive(cfg: cfg, windows: false, homeLinkConnected: true, atHome: false), isFalse);
+      expect(everythingViaHomeActive(cfg: cfg, windows: true, homeLinkConnected: true, atHome: true), isFalse);
+      expect(everythingViaHomeActive(cfg: cfg, windows: true, homeLinkConnected: false, atHome: false), isFalse);
+    });
+  });
 }

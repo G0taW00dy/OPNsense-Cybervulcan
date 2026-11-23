@@ -15,7 +15,11 @@ ExpectedPath expectedPathFor({
   required AppConfig cfg,
   required bool? bypassActive,
   required bool? pcClear,
+  bool everythingViaHome = false,
 }) {
+  // v2.2.3: away with Windows "Everything via home" connected, this PC's own
+  // traffic (the app's checks included) goes through the house VPN.
+  if (everythingViaHome) return ExpectedPath.vpn;
   if (deviceIp == null) return ExpectedPath.unknown;
   final net = networkNameFor(deviceIp, cfg.networks);
   final onVpnNet = Ipv4Subnet.tryParse(cfg.bypassNetwork)?.contains(deviceIp) ?? false;
@@ -230,3 +234,13 @@ class QuickTests {
     return DnsResolverInfo(resolverIp: '${dns['ip']}', geo: dns['geo']?.toString());
   }
 }
+
+/// v2.2.3: true when this device is away and its whole traffic goes through
+/// home (Windows only - on Android the app keeps itself outside its own VPN).
+bool everythingViaHomeActive({
+  required AppConfig cfg,
+  required bool windows,
+  required bool homeLinkConnected,
+  required bool atHome,
+}) =>
+    windows && !atHome && homeLinkConnected && cfg.remoteEnabled && cfg.mode == 'everything';

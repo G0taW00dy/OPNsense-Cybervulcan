@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.2.4 (pre-release)
+- Tests: away on Windows with "Everything via home" connected, the PC's own traffic goes through the house VPN - the tests now expect the VPN path, so exit and DNS leak checks pass/fail properly instead of "not on a house network the app can judge".
+- Verified on a laptop on another network: 2.2.3 switches Home devices <-> Everything with no DNS loss and no admin prompt; exit and DNS both via the house VPN.
+
 ## 2.2.3 (pre-release)
 - Windows "Everything via home": switching to it restarted the app's tunnel, which looked up the home name again - but with the DNS lock already on, that lookup needed the very tunnel that was restarting, and the PC lost DNS (found in testing 23 Nov). The app now keeps the last good address of the home name and uses it when a lookup fails.
 - Safety: if home can't be reached for 90 s while Windows "Everything via home" is on, the mode pauses (adapter and DNS lock removed, internet goes direct) and comes back by itself when home answers - the PC is never left without DNS.

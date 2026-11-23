@@ -12,6 +12,7 @@ import '../core/pc_mode.dart';
 import '../core/quick_tests.dart';
 import '../core/router_server_list.dart';
 import '../core/security_tests.dart';
+import '../platform/vpn_modes.dart';
 import 'theme.dart';
 
 /// v2.0 security Tests page: score, grouped checks (router side + outside),
@@ -51,6 +52,14 @@ class _TestsPageState extends State<TestsPage> {
 
   bool _detected = false;
 
+  /// Away (not on a house network) with Windows "Everything via home" up.
+  bool _viaHome(String? _) => everythingViaHomeActive(
+        cfg: c.config,
+        windows: Platform.isWindows,
+        homeLinkConnected: c.homeLink.state == HomeLinkState.connected,
+        atHome: c.atHome,
+      );
+
   /// Fill the device / expected-path chips on open, not only after a run
   /// (22 Nov: the PC showed "not on a house network" until Run all).
   Future<void> _detectDevice() async {
@@ -64,6 +73,7 @@ class _TestsPageState extends State<TestsPage> {
           cfg: c.config,
           bypassActive: c.snapshot.bypassActive,
           pcClear: c.supportsPcMode ? c.snapshot.pcClear : null,
+          everythingViaHome: _viaHome(ip),
         );
       });
     } on Object {
@@ -86,6 +96,7 @@ class _TestsPageState extends State<TestsPage> {
       cfg: c.config,
       bypassActive: c.snapshot.bypassActive,
       pcClear: c.supportsPcMode ? c.snapshot.pcClear : null,
+      everythingViaHome: _viaHome(_deviceIp),
     );
     // Countries of the servers the tunnels use now (JP#153 -> JP).
     final names = <String>[];

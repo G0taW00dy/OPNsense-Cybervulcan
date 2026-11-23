@@ -296,7 +296,7 @@ Future<SecurityTestResult> _exitTest(TestEnv env) async {
 /// into itself) - say so, and how to check the real path (23 Nov: Sam's
 /// phone showed ExampleTel here while her browser exited in Singapore).
 String? awayEverythingNote(TestEnv env) =>
-    !env.atHome && env.config.remoteEnabled && env.config.mode == 'everything'
+    !env.atHome && env.config.remoteEnabled && env.config.mode == 'everything' && env.expected != ExpectedPath.vpn
         ? 'Everything via home is on, but this app\'s own checks always go direct. To see where other apps exit, '
             'open ipleak.net in a browser - it should show the house VPN\'s country.'
         : null;
