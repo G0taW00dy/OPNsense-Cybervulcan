@@ -181,7 +181,11 @@ func PipeSDDL(userSID string) (string, error) {
 	if !ValidUserSID(userSID) {
 		return "", errors.New("invalid user SID")
 	}
-	return fmt.Sprintf("O:BAG:BAD:P(A;;0x%X;;;%s)(A;;GA;;;SY)S:(ML;;NW;;;ME)", PipeClientAccess, userSID), nil
+	// (A;;GA;;;BA), v2.1.23: the elevated helper itself must be able to
+	// create the next pipe instance for each Accept - without it every
+	// accept failed with "Access is denied" (helper log, 23 Nov). Admins
+	// own the pipe and the machine anyway.
+	return fmt.Sprintf("O:BAG:BAD:P(A;;0x%X;;;%s)(A;;GA;;;SY)(A;;GA;;;BA)S:(ML;;NW;;;ME)", PipeClientAccess, userSID), nil
 }
 
 // PipeClientAccess is what the user is granted on the helper's pipes AND

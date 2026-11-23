@@ -1,5 +1,8 @@
 # Changelog
 
+## 2.1.23 (pre-release)
+- Windows home link: the elevated helper could not accept the app's connection - its own pipe gave Administrators no right to add the next pipe instance, so every accept failed with "Access is denied" (found with 2.1.22's helper log, 23 Nov). Administrators now have full access to the helper's pipe (they own it and the PC anyway); the app's user still gets only read/write.
+
 ## 2.1.22 (pre-release)
 - Windows home link fixed: the app asked for more rights on the admin helper's pipe than the pipe grants, so Windows refused every try and the app gave up with "the admin helper did not answer" (23 Nov, laptop away). It now asks for exactly what the pipe allows (vendored pipe dialer with an access setting). If the helper still stops early, the message says why (its exit code, plus the last line of its log in ProgramData\Cybervulcan\vpn-helper.log).
 - Tunnel names follow their server's city on every device about once a minute, not only when the VPN servers card opens (the phone's Status said Tokyo and the laptop's Settings San Jose while both tunnels were in Singapore).

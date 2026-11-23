@@ -35,6 +35,11 @@ func TestPipeSDDLGrantsClientAccess(t *testing.T) {
 	if !strings.Contains(s, want) {
 		t.Fatalf("SDDL %q does not grant the client access %s", s, want)
 	}
+	// The elevated helper (Administrators) must be able to add pipe
+	// instances for each Accept (v2.1.23).
+	if !strings.Contains(s, "(A;;GA;;;BA)") {
+		t.Error("Administrators need full access to create pipe instances")
+	}
 	// No FILE_CREATE_PIPE_INSTANCE (0x4) for the user.
 	if PipeClientAccess&0x4 != 0 {
 		t.Error("client access must not include FILE_CREATE_PIPE_INSTANCE")
