@@ -65,10 +65,10 @@ class ReleaseInfo {
   final ReleaseAsset? asset;
   final String notes;
 
-  /// Parses a GitHub `releases/latest` response. Returns null for drafts,
-  /// pre-releases or malformed data.
-  static ReleaseInfo? fromGitHub(Map<String, dynamic> j, UpdateTarget target) {
-    if (j['draft'] == true || j['prerelease'] == true) return null;
+  /// Parses a GitHub release. Returns null for drafts, pre-releases (unless
+  /// [allowPrerelease], v2.2.2 test builds) or malformed data.
+  static ReleaseInfo? fromGitHub(Map<String, dynamic> j, UpdateTarget target, {bool allowPrerelease = false}) {
+    if (j['draft'] == true || (j['prerelease'] == true && !allowPrerelease)) return null;
     final tag = j['tag_name'];
     final page = Uri.tryParse('${j['html_url'] ?? ''}');
     if (tag is! String || tag.isEmpty || page == null || !_isGitHub(page)) return null;
@@ -95,6 +95,18 @@ class ReleaseInfo {
   }
 }
 
+/// v2.2.2: the newest release in a GitHub `releases` list that has this
+/// platform's file (pre-releases included when [allowPrerelease]).
+ReleaseInfo? newestRelease(List<Object?> releases, UpdateTarget target, {required bool allowPrerelease}) {
+  ReleaseInfo? best;
+  for (final r in releases.whereType<Map<String, dynamic>>()) {
+    final info = ReleaseInfo.fromGitHub(r, target, allowPrerelease: allowPrerelease);
+    if (info == null || info.asset == null) continue;
+    if (best == null || compareVersions(info.version, best.version) > 0) best = info;
+  }
+  return best;
+}
+
 bool _isGitHub(Uri u) => u.scheme == 'https' && (u.host == 'github.com' || u.host.endsWith('.github.com'));
 
 class UpdateException implements Exception {
@@ -114,10 +126,15 @@ class UpdateService extends ChangeNotifier {
     this.currentVersion = appVersion,
     this.checkEvery = const Duration(hours: 12),
     bool Function()? autoCheck,
+    bool Function()? testBuilds,
   })  : _http = client ?? http.Client(),
-        _autoCheck = autoCheck ?? (() => true);
+        _autoCheck = autoCheck ?? (() => true),
+        _testBuilds = testBuilds ?? (() => false);
 
   final bool Function() _autoCheck;
+
+  /// v2.2.2: Settings > "Test builds" - pre-releases count too.
+  final bool Function() _testBuilds;
 
   final UpdateTarget target;
   final String repo;
@@ -159,8 +176,11 @@ class UpdateService extends ChangeNotifier {
     error = null;
     notifyListeners();
     try {
+      final test = _testBuilds();
       final res = await _http.get(
-        Uri.https('api.github.com', '/repos/$repo/releases/latest'),
+        test
+            ? Uri.https('api.github.com', '/repos/$repo/releases', {'per_page': '15'})
+            : Uri.https('api.github.com', '/repos/$repo/releases/latest'),
         headers: {
           'Accept': 'application/vnd.github+json',
           'User-Agent': 'Cybervulcan/$currentVersion',
@@ -174,7 +194,10 @@ class UpdateService extends ChangeNotifier {
       if (res.statusCode != 200) {
         throw UpdateException('GitHub answered ${res.statusCode}');
       }
-      final info = ReleaseInfo.fromGitHub(jsonDecode(res.body) as Map<String, dynamic>, target);
+      final body = jsonDecode(res.body);
+      final info = test
+          ? (body is List ? newestRelease(body, target, allowPrerelease: true) : null)
+          : ReleaseInfo.fromGitHub(body as Map<String, dynamic>, target);
       available = info != null && compareVersions(info.version, currentVersion) > 0 ? info : null;
       final a = available;
       if (a != null && a.version != _announced) {

@@ -86,6 +86,7 @@ Future<void> main(List<String> args) async {
   final updates = UpdateService(
     target: Platform.isWindows ? UpdateTarget.windows : UpdateTarget.android,
     autoCheck: () => controller.config.checkUpdates,
+    testBuilds: () => controller.config.testBuilds,
   );
   updates.found.listen((r) => unawaited(notifier.show(AlertEvent(
         AlertKind.updateAvailable,

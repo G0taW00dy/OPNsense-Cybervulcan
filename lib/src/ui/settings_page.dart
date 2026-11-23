@@ -1243,6 +1243,10 @@ class _SettingsPageState extends State<SettingsPage> {
             if (widget.updates != null) ...[
               _switch('Check for updates automatically', _cfg.checkUpdates, (v) => _set(_cfg.copyWith(checkUpdates: v)),
                   subtitle: 'At start-up and every 12 hours.'),
+              // v2.2.2: test channel.
+              _switch('Test builds', _cfg.testBuilds, (v) => _set(_cfg.copyWith(testBuilds: v)),
+                  subtitle: 'Also install pre-releases (newest test build). Off = stable releases only. Save, then '
+                      '"Check now".'),
               UpdateSettingsCard(updates: widget.updates!),
             ],
           ],

@@ -47,6 +47,7 @@ class AppConfig {
     this.notifyOnFailover = true,
     this.useExpiryMarker = true,
     this.checkUpdates = true,
+    this.testBuilds = false,
     this.vpnName = 'Proton',
     this.directLabel = 'Direct',
     this.directNetworkName = 'CLEAR',
@@ -140,6 +141,9 @@ class AppConfig {
 
   /// Check GitHub Releases automatically (start-up + every 12 h).
   final bool checkUpdates;
+
+  /// v2.2.2: also install pre-releases (test builds). Off = stable only.
+  final bool testBuilds;
 
   /// Name of the VPN provider, used in texts ("back on Proton").
   final String vpnName;
@@ -414,6 +418,7 @@ class AppConfig {
     bool? notifyOnFailover,
     bool? useExpiryMarker,
     bool? checkUpdates,
+    bool? testBuilds,
     String? vpnName,
     String? directLabel,
     String? directNetworkName,
@@ -491,6 +496,7 @@ class AppConfig {
         notifyOnFailover: notifyOnFailover ?? this.notifyOnFailover,
         useExpiryMarker: useExpiryMarker ?? this.useExpiryMarker,
         checkUpdates: checkUpdates ?? this.checkUpdates,
+        testBuilds: testBuilds ?? this.testBuilds,
         vpnName: vpnName ?? this.vpnName,
         directLabel: directLabel ?? this.directLabel,
         directNetworkName: directNetworkName ?? this.directNetworkName,
@@ -572,6 +578,7 @@ class AppConfig {
         'notifyOnFailover': notifyOnFailover,
         'useExpiryMarker': useExpiryMarker,
         'checkUpdates': checkUpdates,
+        'testBuilds': testBuilds,
         'vpnName': vpnName,
         'directLabel': directLabel,
         'directNetworkName': directNetworkName,
@@ -691,6 +698,7 @@ class AppConfig {
       notifyOnFailover: b('notifyOnFailover', d.notifyOnFailover),
       useExpiryMarker: b('useExpiryMarker', d.useExpiryMarker),
       checkUpdates: b('checkUpdates', d.checkUpdates),
+      testBuilds: b('testBuilds', d.testBuilds),
       vpnName: s('vpnName', d.vpnName),
       directLabel: s('directLabel', d.directLabel),
       directNetworkName: s('directNetworkName', d.directNetworkName),

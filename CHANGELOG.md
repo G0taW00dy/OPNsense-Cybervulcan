@@ -1,5 +1,8 @@
 # Changelog
 
+## 2.2.2 (pre-release)
+- Update channel: Settings > App & updates > "Test builds" also installs pre-releases (the newest test build), with the same checksum check. Off (default) = stable releases only - for family devices.
+
 ## 2.2.1 (pre-release)
 - "Everything via home" now works on Windows. While it is on, a Windows name-resolution policy sends every lookup to the tunnel's resolver only (Windows otherwise also asks the Wi-Fi's own DNS servers at the same time); the policy is removed when the mode stops, when the helper ends, and by the next start after a crash. The route to the home endpoint is re-pinned when the PC changes networks.
 - Everything via home: choose its DNS server (Settings > Remote access): empty = the router, or e.g. 10.2.0.1 for Proton's DNS inside the house tunnels - the same as devices on the house VPN network. The router needs a rule letting the remote tunnel reach it through the VPN gateway.
