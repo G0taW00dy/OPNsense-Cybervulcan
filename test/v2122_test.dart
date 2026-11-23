@@ -81,12 +81,12 @@ void main() {
     test('host from the router and match by MAC in any case or separator', () {
       final h = WolHost.fromJson({
         'uuid': 'cba68e41-0d3c-41bf-b00f-ffddab0e09a9',
-        'mac': '00:11:22:33:44:55',
+        'mac': '02:00:00:00:00:01',
         'interface': 'opt3',
         'descr': 'Main PC',
       });
-      expect(h.mac, '00:11:22:33:44:55');
-      expect(wolHostFor('00-11-22-33-44-55', [h])?.description, 'Main PC');
+      expect(h.mac, '02:00:00:00:00:01');
+      expect(wolHostFor('02-00-00-00-00-01', [h])?.description, 'Main PC');
       expect(wolHostFor('00:11:22:33:44:55', [h]), isNull);
       expect(wolHostFor('', [h]), isNull);
     });

@@ -9,6 +9,8 @@
 //	char* cvwg_status(void);                 // tunnel.Status as JSON, {"up":false} when down
 //	void  cvwg_down(void);
 //	void  cvwg_free(char* p);
+//	char* cvwg_verify_file(const char* pubKey, const char* path, const char* minisig);
+//	                                         // "" when valid, else the reason
 //
 // Only one tunnel exists per process; cvwg_up replaces a running one.
 package main
@@ -20,9 +22,11 @@ import "C"
 
 import (
 	"encoding/json"
+	"os"
 	"sync"
 	"unsafe"
 
+	"github.com/G0taW00dy/opnsense-cybervulcan/native/cvwg/internal/minisign"
 	"github.com/G0taW00dy/opnsense-cybervulcan/native/cvwg/tunnel"
 )
 
@@ -83,6 +87,35 @@ func cvwg_down() {
 		current.Close()
 		current = nil
 	}
+}
+
+// cvwg_verify_file checks a downloaded update against the publisher's
+// minisign signature before it is installed (v2.2.5). Returns "" when the
+// signature is valid for pubKey, otherwise the reason.
+//
+//export cvwg_verify_file
+func cvwg_verify_file(pubKey, path, sigText *C.char) *C.char {
+	return C.CString(verifyFile(C.GoString(pubKey), C.GoString(path), C.GoString(sigText)))
+}
+
+func verifyFile(pubKey, path, sigText string) string {
+	pk, err := minisign.ParsePublicKey(pubKey)
+	if err != nil {
+		return err.Error()
+	}
+	sig, err := minisign.ParseSignature(sigText)
+	if err != nil {
+		return err.Error()
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return "open: " + err.Error()
+	}
+	defer f.Close()
+	if _, err := minisign.Verify(pk, sig, f); err != nil {
+		return err.Error()
+	}
+	return ""
 }
 
 //export cvwg_free

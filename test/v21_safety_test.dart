@@ -93,11 +93,11 @@ void main() {
     });
 
     test('redaction blanks public IPs, domains and keys but keeps house addresses', () {
-      final s = redact('router.example.com 149.102.228.1 10.10.40.51 100.64.0.85 '
+      final s = redact('router.home.example.net 149.102.228.1 10.10.40.51 100.64.0.85 '
           'iNr6EwCdfX33rtwU/VIlysVIjBXKDUy5tklfZ6Ytwp0= speed.cloudflare.com controller.dart ApiErrorKind.forbidden');
-      expect(s, isNot(contains('example.com')));
+      expect(s, isNot(contains('home.example.net')));
       expect(s, isNot(contains('149.102.228.1')));
-      expect(s, isNot(contains('K4Fask')));
+      expect(s, isNot(contains('iNr6Ew')));
       expect(s, contains('10.10.40.51'));
       expect(s, contains('100.64.0.85'));
       expect(s, contains('speed.cloudflare.com'));

@@ -132,6 +132,7 @@ typedef _VoidC = Void Function();
 typedef _VoidD = void Function();
 typedef _FreeC = Void Function(Pointer<Utf8>);
 typedef _FreeD = void Function(Pointer<Utf8>);
+typedef _Verify = Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>);
 
 /// wireguard-go + gVisor netstack, built from native/cvwg as libcvwg.so
 /// (Android) / cvwg.dll (Windows) and called through dart:ffi.
@@ -179,6 +180,22 @@ class NativeTunnel implements AppTunnel {
   }
 
   String get version => _take(_version());
+
+  /// v2.2.5: checks [path] against a minisign signature ([minisig] = the
+  /// text of the .minisig file) made with [publicKey]. Returns null when the
+  /// signature is valid, otherwise the reason.
+  String? verifyFile(String publicKey, String path, String minisig) {
+    final fn = _lib.lookupFunction<_Verify, _Verify>('cvwg_verify_file');
+    final a = publicKey.toNativeUtf8(), b = path.toNativeUtf8(), c = minisig.toNativeUtf8();
+    try {
+      final out = _take(fn(a, b, c));
+      return out.isEmpty ? null : out;
+    } finally {
+      malloc.free(a);
+      malloc.free(b);
+      malloc.free(c);
+    }
+  }
 
   @override
   bool get isAvailable => true;

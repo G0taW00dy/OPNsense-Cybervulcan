@@ -238,8 +238,19 @@ class CybervulcanController extends ChangeNotifier {
 
   void _schedule() {
     _timer?.cancel();
-    _timer = Timer.periodic(config.pollInterval, (_) => unawaited(refresh()));
+    _timer = Timer.periodic(currentPollInterval, (_) => unawaited(refresh()));
   }
+
+  /// v2.2.5: how often the router is polled while the app is in the
+  /// background (Android). The VPN service keeps the process alive all day,
+  /// so polling at the foreground rate drained the battery.
+  static const backgroundPollInterval = Duration(minutes: 5);
+
+  /// The poll interval in force now: the Settings value on screen, at least
+  /// [backgroundPollInterval] in the background.
+  Duration get currentPollInterval => _foreground || config.pollInterval >= backgroundPollInterval
+      ? config.pollInterval
+      : backgroundPollInterval;
 
   BypassManager? _bypass() {
     final c = _client;
@@ -1820,6 +1831,7 @@ class CybervulcanController extends ChangeNotifier {
       _backgroundTimer = null;
       if (_foreground) return;
       _foreground = true;
+      if (_timer != null) _schedule(); // back to the on-screen rate
       unawaited(refresh());
       return;
     }
@@ -1828,6 +1840,7 @@ class CybervulcanController extends ChangeNotifier {
       _backgroundTimer = null;
       if (_disposed) return;
       _foreground = false;
+      if (_timer != null) _schedule(); // v2.2.5: slow down in the background
       if (homeLink.keepTunnelInBackground(config)) return; // v2.1: the VPN needs the tunnel
       unawaited(link.pause());
     });

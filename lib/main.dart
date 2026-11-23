@@ -9,6 +9,7 @@ import 'src/core/events.dart';
 import 'src/core/storage.dart';
 import 'src/core/updater.dart';
 import 'src/net/tailscale_engine.dart';
+import 'src/net/tunnel.dart';
 import 'src/platform/android_widget.dart';
 import 'src/platform/app_lock.dart';
 import 'src/platform/notifications.dart';
@@ -83,8 +84,11 @@ Future<void> main(List<String> args) async {
     if (ctx != null) unawaited(confirmAndStartBypass(ctx, controller));
   }
 
+  final tunnel = controller.link.tunnel;
   final updates = UpdateService(
     target: Platform.isWindows ? UpdateTarget.windows : UpdateTarget.android,
+    // v2.2.5: updates must carry the publisher's signature.
+    verifier: tunnel is NativeTunnel ? (path, sig) => tunnel.verifyFile(updatePublicKey, path, sig) : null,
     autoCheck: () => controller.config.checkUpdates,
     testBuilds: () => controller.config.testBuilds,
   );
