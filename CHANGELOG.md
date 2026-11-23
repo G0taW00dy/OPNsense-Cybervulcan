@@ -1,7 +1,10 @@
 # Changelog
 
+## 2.1.21 (pre-release)
+- Speed test fallback fixed: DigitalOcean's test hostnames no longer exist and OVH/Linode did not answer from the Proton exit, so the 2.1.20 fallback still read "download 0.0". It now uses Vultr's public test files (Singapore, Tokyo, Sydney, Los Angeles, Frankfurt - checked from the Singapore exit), and the result says when the fallback was used.
+
 ## 2.1.20 (pre-release)
-- Speed tests (Tests page and shaper Measure): when Cloudflare refuses with HTTP 429 - it did for 15+ minutes on a busy Proton Singapore exit - downloads switch to the fastest of several public test files (DigitalOcean Singapore/Sydney/Bangalore/San Francisco/Frankfurt, OVH) instead of failing with "download 0.0". Measure uses 8 streams again.
+- Speed tests (Tests page and shaper Measure): when Cloudflare refuses with HTTP 429 - it did for 15+ minutes on a busy Proton Singapore exit - downloads switch to the fastest of several public test files (see 2.1.21) instead of failing with "download 0.0". Measure uses 8 streams again.
 - Shaper rows show the limit only; the dialog explains real speed is 80-95 % of a tunnel limit depending on the server (Tokyo 410 -> 336, Singapore 415 -> 389), not a fixed guess.
 - Server scores say "just now" instead of "0 min ago".
 

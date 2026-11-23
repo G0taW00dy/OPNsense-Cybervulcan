@@ -706,6 +706,8 @@ Future<SecurityTestResult> _bufferbloat(TestEnv env) async {
       'Router tunnel monitor: ${routerIdle.toStringAsFixed(0)} ms idle, up to ${routerLoaded.reduce(max).toStringAsFixed(0)} ms '
           'under load (+${addRouter.toStringAsFixed(0)})',
     'Path: ${_expectWord(env.expected)}. Added delay under load is what makes games lag when someone else downloads.',
+    if (speedTestUsedFallback)
+      'Cloudflare\'s speed test was busy for this VPN exit (HTTP 429) - downloads came from a public Vultr test file.',
   ];
   // No real load = no valid result (the old version graded an idle line A+).
   final downMbps = down.$2 * 8 / down.$3 / 1e6;

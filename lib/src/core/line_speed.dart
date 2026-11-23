@@ -15,13 +15,15 @@ import 'package:http/http.dart' as http;
 /// busy shared VPN exit - 23 Nov on a Proton Singapore exit for 15+ min.
 /// Then downloads come from the nearest of these big public test files.
 const _fallbackDownloads = [
-  'https://speedtest-sgp1.digitalocean.com/100mb.test',
-  'https://speedtest-syd1.digitalocean.com/100mb.test',
-  'https://speedtest-blr1.digitalocean.com/100mb.test',
-  'https://speedtest-sfo3.digitalocean.com/100mb.test',
-  'https://speedtest-fra1.digitalocean.com/100mb.test',
-  'https://proof.ovh.net/files/100Mb.dat',
-];
+  // Vultr's public test files answer from Proton exits (checked 23 Nov from
+  // the Singapore exit; DigitalOcean's names no longer resolve, OVH/Linode
+  // were too slow to answer).
+  'https://sgp-ping.vultr.com/vultr.com.100MB.bin',
+  'https://hnd-jp-ping.vultr.com/vultr.com.100MB.bin',
+  'https://syd-au-ping.vultr.com/vultr.com.100MB.bin',
+  'https://lax-ca-us-ping.vultr.com/vultr.com.100MB.bin',
+  'https://fra-de-ping.vultr.com/vultr.com.100MB.bin',
+]
 
 DateTime? _cloudflareBlockedUntil;
 String? _fallbackPick;
@@ -57,7 +59,7 @@ Future<String> _fastestFallback(http.Client web) async {
       await r.stream.drain<void>();
       if ((r.statusCode == 200 || r.statusCode == 206) && !c.isCompleted) c.complete(u);
     }).catchError((Object _) {}).whenComplete(() {
-      if (--pending == 0 && !c.isCompleted) c.complete(_fallbackDownloads.first);
+      if (--pending == 0 && !c.isCompleted) c.completeError(Exception('no speed test server answered'));
     }));
   }
   return c.future;
