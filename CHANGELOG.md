@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.1.19 (pre-release)
+- Find best: fixed moving the winner to main when it was the last server tested - it was still on the backup tunnel, the router refused the same key twice ("Public keys should be unique") and the run rolled back (23 Nov, SG#210 at 78 ms vs Tokyo 147). The backup now moves off first; every step re-reads the tunnels.
+- Find best keeps the real server names when it restores or reports a tunnel (a rollback renamed the tunnel peers "Tokyo (37.19.205.155)").
+- Real progress: "Server 3 of 15 - about 20 min left" with a filling bar, instead of a moving loading bar.
+- Each server shows its last Find best result ("78 ms, jitter 0.5, loss 0 % - 2 h ago") and the list is sorted best first.
+
 ## 2.1.18 (pre-release)
 - Scanning a server that is the same machine as one already listed (same address and key - Proton runs several names on one server, e.g. JP#153 and JP#157) keeps both names on one entry ("JP#153 JP#157") and says so, instead of replacing the name. A tunnel using that machine gets the joined name on the router too.
 

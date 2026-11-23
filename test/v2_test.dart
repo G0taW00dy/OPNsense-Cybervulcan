@@ -233,6 +233,21 @@ Endpoint = 198.51.100.7:51820
       expect(sent, isNot(contains('privkey')));
     });
 
+    test('find best: winner tested last (still on the backup peer) still moves to main - 23 Nov', () async {
+      final r = FakeRouter()..delayByServer = {'149.36.48.154': 147, '203.0.113.61': 146, '203.0.113.62': 78};
+      final sw = ServerSwitcher(client: r.client(), config: const AppConfig(), sleep: (_) async {});
+      final log = <String>[];
+      final plan = (await sw.findBest([
+        ProtonServer(name: 'JP#302', entryIp: '203.0.113.61', publicKey: key('j'), city: 'Tokyo'),
+        ProtonServer(name: 'SG#210', entryIp: '203.0.113.62', publicKey: key('s'), city: 'Singapore'),
+      ], log.add))!;
+      expect(plan.changeMain, isTrue, reason: log.join('\n'));
+      expect(r.wgClients[0]['serveraddress'], '203.0.113.62'); // main = SG#210
+      expect(r.wgClients[1]['serveraddress'], isNot('203.0.113.62'));
+      expect(r.wgClients[0]['%servers'], 'Proton_VPN_Main');
+      expect(r.wgClients[1]['%servers'], 'Proton_VPN_Failover');
+    });
+
     test('find best restores the original backup when nothing works', () async {
       final r = FakeRouter();
       r.gateways = [FakeRouter.gw('WG_MAIN_GW', 'none', '200 ms', '0.0 %'), FakeRouter.gw('WG_BACKUP_GW', 'down', '~', '100 %')];

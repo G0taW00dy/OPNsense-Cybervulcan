@@ -176,6 +176,26 @@ class _ServersPageState extends State<ServersPage> {
   bool _loading = false;
   String? _message;
   final List<String> _log = [];
+  int _total = 0;
+  DateTime? _started;
+
+  /// Candidates finished so far (each logs one "Testing ..." line).
+  int get _done {
+    final n = _log.where((l) => l.startsWith('Testing ') && !l.startsWith('Testing ${_total} ')).length;
+    return n == 0 ? 0 : n - 1 + (_log.last.startsWith('  ') ? 1 : 0);
+  }
+
+  /// "Server 3 of 15 - about 20 min left" (v2.1.19: real progress).
+  String get _progressText {
+    final done = _done.clamp(0, _total);
+    final st = _started;
+    var left = '';
+    if (st != null && done > 0 && done < _total) {
+      final per = DateTime.now().difference(st).inSeconds / done;
+      left = ' - about ${((_total - done) * per / 60).ceil()} min left';
+    }
+    return done >= _total ? 'Measured all $_total - choosing ...' : 'Server ${done + 1} of $_total$left';
+  }
   bool _running = false;
   int _candidates = 3;
   BestServerPlan? _plan;
@@ -315,8 +335,26 @@ class _ServersPageState extends State<ServersPage> {
     final list = cities.isNotEmpty
         ? _servers.where((s) => cities.contains((s.city ?? '').toLowerCase())).toList()
         : [..._servers];
-    list.sort((a, b) => (a.load ?? 100).compareTo(b.load ?? 100));
+    // Best measured first, then unmeasured by load (v2.1.19).
+    final sc = c.serverScores;
+    double key(ProtonServer s) => sc[s.entryIp]?.ms ?? 10000 + (s.load ?? 100).toDouble();
+    list.sort((a, b) => key(a).compareTo(key(b)));
     return list;
+  }
+
+  /// "78 ms, jitter 0.5 - 2 h ago" from the last Find best (v2.1.19).
+  String? _score(ProtonServer s) {
+    final r = c.serverScores[s.entryIp];
+    if (r == null) return null;
+    final age = DateTime.now().difference(DateTime.fromMillisecondsSinceEpoch(r.at * 1000));
+    final ago = age.inMinutes < 60
+        ? '${age.inMinutes} min ago'
+        : age.inHours < 48
+            ? '${age.inHours} h ago'
+            : '${age.inDays} d ago';
+    if (r.ms == null) return 'no answer $ago';
+    return '${r.ms!.round()} ms, jitter ${r.jitter?.toStringAsFixed(1) ?? '?'}, '
+        'loss ${r.loss?.toStringAsFixed(0) ?? '?'} % - $ago';
   }
 
   ProviderProfile get _profile => ProviderProfile.byId(c.config.providerId);
@@ -546,6 +584,8 @@ class _ServersPageState extends State<ServersPage> {
     setState(() {
       _running = true;
       _plan = null;
+      _total = candidates.length;
+      _started = DateTime.now();
       _log
         ..clear()
         ..add('Testing ${candidates.length} server(s) on the backup tunnel - about '
@@ -607,7 +647,15 @@ class _ServersPageState extends State<ServersPage> {
                     label: const Text('Start'),
                   ),
               ]),
-              if (_running) const Padding(padding: EdgeInsets.only(top: 8), child: LinearProgressIndicator()),
+              if (_running)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    LinearProgressIndicator(value: _total == 0 ? null : (_done / _total).clamp(0.0, 1.0)),
+                    const SizedBox(height: 4),
+                    Text(_progressText, style: t.bodySmall),
+                  ]),
+                ),
               if (_log.isNotEmpty)
                 Container(
                   width: double.infinity,
@@ -694,7 +742,12 @@ class _ServersPageState extends State<ServersPage> {
                           text: '   ${_inUse(s) == 'main' ? c.config.mainLabel : c.config.backupLabel} (${_inUse(s)}) now',
                           style: t.labelMedium?.copyWith(color: OpnColors.glassCyan)),
                   ])),
-                  subtitle: Text([s.city ?? '?', s.entryIp, if (s.load != null) '${s.load}% load'].join(' - ')),
+                  subtitle: Text([
+                    s.city ?? '?',
+                    s.entryIp,
+                    if (s.load != null) '${s.load}% load',
+                    if (_score(s) case final sc?) sc,
+                  ].join(' - ')),
                   trailing: PopupMenuButton<String>(
                     enabled: !_running && !_loading,
                     tooltip: 'Use this server',

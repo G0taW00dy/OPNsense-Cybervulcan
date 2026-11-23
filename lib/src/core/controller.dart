@@ -713,7 +713,7 @@ class CybervulcanController extends ChangeNotifier {
     if (!skipLock && !await authorize('Find and switch to the best VPN server', always: true)) return null;
     final sw = _switcher = _newSwitcher();
     if (sw == null) return null;
-    sw.onTested = (s) => unawaited(_markTested(s));
+    sw.onTested = (s, m) => unawaited(_markTested(s, m));
     serverBusy = true;
     notifyListeners();
     final before = <ProtonServer>[];
@@ -728,7 +728,7 @@ class CybervulcanController extends ChangeNotifier {
       // Only used to keep the list complete afterwards.
     }
     try {
-      final plan = await sw.findBest(candidates, log);
+      final plan = await sw.findBest(candidates, log, known: cachedServers());
       if (plan != null) {
         await journal.add('Find best server', ok: true, detail: plan.reason);
         tuner.pathChanged();
@@ -858,9 +858,38 @@ class CybervulcanController extends ChangeNotifier {
     }
   }
 
-  Future<void> _markTested(ProtonServer s) async {
-    final m = {...serverLastTested, s.entryIp: DateTime.now().millisecondsSinceEpoch ~/ 1000};
+  Future<void> _markTested(ProtonServer s, ServerMeasurement r) async {
+    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final m = {...serverLastTested, s.entryIp: now};
     await prefs.setString(_testedKey, jsonEncode(m));
+    final scores = {...serverScores, s.entryIp: (at: now, ms: r.delayMs, jitter: r.jitterMs, loss: r.lossPercent)};
+    await prefs.setString(_scoresKey, jsonEncode({
+      for (final e in scores.entries)
+        e.key: {'t': e.value.at, 'ms': e.value.ms, 'j': e.value.jitter, 'l': e.value.loss},
+    }));
+  }
+
+  static const _scoresKey = 'server_scores_v1';
+
+  /// Last Find best result per server address (v2.1.19). ms null = failed.
+  Map<String, ({int at, double? ms, double? jitter, double? loss})> get serverScores {
+    try {
+      final j = jsonDecode(prefs.getString(_scoresKey) ?? '{}');
+      if (j is! Map) return const {};
+      double? d(Object? v) => v is num ? v.toDouble() : null;
+      return {
+        for (final e in j.entries)
+          if (e.value is Map && (e.value as Map)['t'] is num)
+            '${e.key}': (
+              at: ((e.value as Map)['t'] as num).toInt(),
+              ms: d((e.value as Map)['ms']),
+              jitter: d((e.value as Map)['j']),
+              loss: d((e.value as Map)['l']),
+            ),
+      };
+    } on Object {
+      return const {};
+    }
   }
 
   /// Cities from the dropdown that have servers in [servers] (empty = all).

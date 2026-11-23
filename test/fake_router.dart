@@ -165,6 +165,14 @@ class FakeRouter {
       final c = wgClients.where((x) => x['uuid'] == setClient.group(1)).firstOrNull;
       if (c == null) return json({'result': 'failed'});
       final body = ((jsonDecode(r.body) as Map)['client'] as Map).cast<String, dynamic>();
+      // Like the real router: one peer per public key (23 Nov find-best bug).
+      final key = body['pubkey'];
+      if (key != null && wgClients.any((x) => x['uuid'] != c['uuid'] && x['pubkey'] == key)) {
+        return json({
+          'result': 'failed',
+          'validations': {'client.pubkey': 'Public keys should be unique.'},
+        });
+      }
       // Like the real router: a relation field that is not posted is cleared.
       final servers = '${body.remove('servers') ?? ''}';
       c['%servers'] = [

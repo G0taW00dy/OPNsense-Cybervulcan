@@ -312,7 +312,7 @@ class ServerSwitcher {
   final Duration settle;
 
   /// Called after each candidate was tried (rotation, v2.1.17).
-  void Function(ProtonServer server)? onTested;
+  void Function(ProtonServer server, ServerMeasurement result)? onTested;
   final int samples;
   final Duration sampleGap;
 
@@ -415,12 +415,19 @@ class ServerSwitcher {
   /// Tests [candidates] one by one on the backup tunnel, then moves the
   /// winner to main and the runner-up to backup. [log] gets progress lines.
   /// Restores the original backup server if anything goes wrong.
-  Future<BestServerPlan?> findBest(List<ProtonServer> candidates, void Function(String) log) async {
+  Future<BestServerPlan?> findBest(List<ProtonServer> candidates, void Function(String) log,
+      {List<ProtonServer> known = const []}) async {
     _cancelled = false;
     final (main, backup) = await peers();
-    final originalBackup = _asServer(backup, config.backupLabel);
-    final current = _asServer(main, config.mainLabel);
-    log('Measuring the current main (${main.serverAddress}) ...');
+    // Real names for the tunnels' servers (23 Nov: a restore renamed the
+    // tunnel peers "Tokyo (37.19.205.155)").
+    ProtonServer named(WgPeer p, String label) =>
+        [...known, ...candidates].where((x) => x.sameEndpoint(p.serverAddress, p.publicKey)).firstOrNull ??
+        serverFromTunnelPeer(name: p.name, address: p.serverAddress, publicKey: p.publicKey, port: p.serverPort) ??
+        _asServer(p, label);
+    final originalBackup = named(backup, config.backupLabel);
+    final current = named(main, config.mainLabel);
+    log('Measuring the current main (${current.label}) ...');
     final currentM = await _measure(config.mainGateway, current, log);
     log('  ${currentM.describe()}');
 
@@ -441,15 +448,16 @@ class ServerSwitcher {
           await apply(backup, c, main: false);
         } on ServerSwitchException catch (e) {
           log('  ${e.message}');
-          results.add(ServerMeasurement(c, error: 'no handshake'));
-          onTested?.call(c);
+          final failed = ServerMeasurement(c, error: 'no handshake');
+          results.add(failed);
+          onTested?.call(c, failed);
           continue;
         }
         await _sleep(settle);
         final m = await _measure(config.backupGateway, c, log);
         log('  ${m.describe()}');
         results.add(m);
-        onTested?.call(c);
+        onTested?.call(c, m);
       }
       if (_cancelled) {
         log('Cancelled.');
@@ -461,27 +469,48 @@ class ServerSwitcher {
         return null;
       }
       log(plan.reason);
+      final nb = plan.newBackup?.server ?? originalBackup;
       if (plan.changeMain) {
-        log('Moving main to ${plan.newMain.server.name} ...');
+        final winner = plan.newMain.server;
+        // The router allows each server key on one peer only. The backup peer
+        // still holds the LAST candidate tested - often the winner (23 Nov:
+        // "Public keys should be unique", SG#210). Move the backup first, to
+        // a server that is neither the winner nor the current main.
+        var (_, b1) = await peers();
+        if (winner.sameEndpoint(b1.serverAddress, b1.publicKey)) {
+          final park = [nb, originalBackup, for (final r in results) if (r.ok) r.server]
+              .where((x) => !x.sameEndpoint(winner.entryIp, winner.publicKey) &&
+                  !x.sameEndpoint(main.serverAddress, main.publicKey))
+              .firstOrNull;
+          if (park == null) throw ServerSwitchException('No other server to move the backup to first.');
+          log('Moving the backup to ${park.name} first (the router allows each server on one tunnel) ...');
+          await apply(b1, park, main: false);
+        }
+        log('Moving main to ${winner.name} ...');
+        final (m2, _) = await peers();
         try {
-          await apply(main, plan.newMain.server, main: true);
+          await apply(m2, winner, main: true);
         } on Object catch (e) {
-          log('  $e Putting main back on ${main.serverAddress} ...');
-          await apply(main, current, main: true);
+          log('  $e Putting main back on ${current.label} ...');
+          final (m3, _) = await peers();
+          await apply(m3, current, main: true);
           rethrow;
         }
       }
-      final nb = plan.newBackup?.server ?? originalBackup;
-      log('Backup: ${nb.name}.');
-      await apply(backup, nb, main: false);
+      final (_, b4) = await peers();
+      if (!nb.sameEndpoint(b4.serverAddress, b4.publicKey)) {
+        log('Backup: ${nb.name}.');
+        await apply(b4, nb, main: false);
+      }
       backupMoved = false;
       log('Done.');
       return plan;
     } finally {
       if (backupMoved) {
-        log('Putting the backup tunnel back on ${originalBackup.entryIp} ...');
+        log('Putting the backup tunnel back on ${originalBackup.label} ...');
         try {
-          await apply(backup, originalBackup, main: false);
+          final (_, b5) = await peers();
+          await apply(b5, originalBackup, main: false);
         } on Object catch (e) {
           log('  could not restore the backup: $e');
         }
