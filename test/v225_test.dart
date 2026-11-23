@@ -128,7 +128,7 @@ void main() {
 
   group('Settings import (v2.2.5, audit L1)', () {
     test('a certificate pin is never imported or exported', () {
-      const pinned = AppConfig(baseUrl: 'https://router.example.net', pinnedCertSha256: 'aa' * 32);
+      final pinned = AppConfig(baseUrl: 'https://router.example.net', pinnedCertSha256: 'aa' * 32);
       expect(exportSettings(pinned), isNot(contains('pinnedCertSha256')));
       final text = jsonEncode({
         'kind': settingsExportKind,

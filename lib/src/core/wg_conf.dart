@@ -112,7 +112,7 @@ WgQuickImport parseWgQuick(String text) {
   if (ep != null && ep.isNotEmpty) {
     (host, port) = splitHostPort(ep);
     // A host name or IP only (letters, digits, dots, dashes, IPv6 colons).
-    if (host != null && (host.isEmpty || host.length > 253 || !RegExp(r'^[A-Za-z0-9.:-]+$').hasMatch(host))) {
+    if (host.isEmpty || host.length > 253 || !RegExp(r'^[A-Za-z0-9.:-]+$').hasMatch(host)) {
       warnings.add('Endpoint host "${host.length > 40 ? '${host.substring(0, 40)}...' : host}" is not valid and was ignored.');
       host = null;
       port = null;

@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.2.5 (pre-release)
+Security, privacy and battery release (independent code audit, 24 Nov).
+- Updates are signed: every release file has a minisign signature, and the app installs an update only if it verifies against the publisher key built into the app (checked again right before the installer runs). Unsigned releases are refused.
+- Battery (Android): the router is checked every 5 minutes while the app is in the background (was every 15 seconds all day); on screen it stays at your setting. The widget no longer greys out after one missed check while the phone sleeps.
+- Router address: a plain http:// address is no longer used for direct connections (the API key would travel unencrypted to whatever answers at that address). Use https://.
+- Windows: the DNS lock of "Everything via home" no longer survives a reboot, and if a crash leaves it behind the Status page offers "Repair DNS". Home-link status no longer freezes the tray app when the helper is slow. The admin helper only runs from Program Files, and its log folder can't be redirected by other users. The built-in Tailscale login is now encrypted for your Windows account.
+- App PIN: stored with PBKDF2; wrong PINs now lock it for a while (5 free tries, then 1 min, doubling up to an hour), even across restarts. Existing PINs keep working and are upgraded on the next unlock.
+- Settings import never takes a certificate pin, and says so when it changes the router address or certificate name.
+- WireGuard config import: size, port and host checks. Help: the router timer install line now uses this version's script and checks its SHA-256.
+- Tests: in direct mode, Quad9's Australian resolvers (hosted by local ISPs) pass when the router's DNS-over-TLS to Quad9 is confirmed. The outside-services list now names every service used.
+- Everything via home: hints for a full kill switch (Android: Always-on VPN + Block connections without VPN).
+- Build: privacy check on every file, commit message and commit email; actions pinned to commit SHAs; release fails without the Android release key or the update signing key; Go vulnerability scan (fixed GO-2026-6865 in a compression library); pre-release branches are removed once published.
+
 ## 2.2.4 (pre-release)
 - Tests: away on Windows with "Everything via home" connected, the PC's own traffic goes through the house VPN - the tests now expect the VPN path, so exit and DNS leak checks pass/fail properly instead of "not on a house network the app can judge".
 - Verified on a laptop on another network: 2.2.3 switches Home devices <-> Everything with no DNS loss and no admin prompt; exit and DNS both via the house VPN.
