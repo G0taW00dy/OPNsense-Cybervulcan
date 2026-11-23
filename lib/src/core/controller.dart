@@ -1705,7 +1705,7 @@ class CybervulcanController extends ChangeNotifier {
     final name = host.description.isEmpty ? 'the device' : host.description;
     if (!await authorize('Wake $name')) return 'Not woken.';
     try {
-      await c.wakeHost(host.uuid);
+      await c.wakeHost(host);
       return 'Wake-up sent to $name - give it a minute to start.';
     } on OpnsenseException catch (e) {
       if (e.kind == ApiErrorKind.forbidden) {

@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.1.24 (pre-release)
+- Wake button fixed: the router's Wake on LAN API wants the interface and MAC (`wake: {interface, mac}` to /api/wol/wol/set) - posting to set/<id> answered `[]` and sent nothing, and the app showed "Expected a JSON object". Checked on the router: the right call answers `{"status":"OK"}`.
+- Tested on the laptop away (IoT Wi-Fi, 23 Nov) with 2.1.23: home link connected, RustDesk to the PC through it, Network layout offered CAMS, city labels Singapore/Singapore.
+
 ## 2.1.23 (pre-release)
 - Windows home link: the elevated helper could not accept the app's connection - its own pipe gave Administrators no right to add the next pipe instance, so every accept failed with "Access is denied" (found with 2.1.22's helper log, 23 Nov). Administrators now have full access to the helper's pipe (they own it and the PC anyway); the app's user still gets only read/write.
 
