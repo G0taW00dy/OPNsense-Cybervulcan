@@ -50,15 +50,10 @@ jobs:
           channel: stable
           flutter-version: ${{ env.FLUTTER_VERSION }}
           cache: true
-      - run: flutter pub get
+      # M7: exactly the committed pubspec.lock versions.
+      - run: flutter pub get --enforce-lockfile
       - run: flutter analyze --no-fatal-infos
       - run: flutter test
-      # M7: the resolved versions (printed, to be committed as pubspec.lock).
-      - name: Resolved package versions
-        run: |
-          echo "----- pubspec.lock -----"
-          cat pubspec.lock
-          echo "----- end pubspec.lock -----"
 
   # Remote access: wireguard-go + gVisor netstack as a C shared library
   # (libcvwg.so per Android ABI, cvwg.dll for Windows), loaded via dart:ffi.
@@ -253,7 +248,8 @@ jobs:
           mkdir -p android/app/src/main/jniLibs
           cp -r native-out/android/* android/app/src/main/jniLibs/
           find android/app/src/main/jniLibs -type f
-      - run: flutter pub get
+      # M7: exactly the committed pubspec.lock versions.
+      - run: flutter pub get --enforce-lockfile
       - run: >
           flutter build apk --release
           --build-name="$APP_VERSION"
@@ -284,7 +280,8 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           cache: true
       - run: flutter config --enable-windows-desktop
-      - run: flutter pub get
+      # M7: exactly the committed pubspec.lock versions.
+      - run: flutter pub get --enforce-lockfile
       - run: >
           flutter build windows --release
           --build-name=${{ needs.version.outputs.name }}

@@ -18,7 +18,8 @@ dependencies:
   http: ^1.2.2
   crypto: ^3.0.3
   shared_preferences: ^2.3.2
-  flutter_secure_storage: '>=9.2.2 <11.0.0'
+  # v2.2.5 (audit M7): one major version - 9 and 10 store keys differently.
+  flutter_secure_storage: ^10.3.4
   flutter_local_notifications: ^19.4.0
   # 0.6+ (tray) / 0.6+ (window) are nativeapi rewrites with a different API.
   tray_manager: '>=0.5.0 <0.6.0'
