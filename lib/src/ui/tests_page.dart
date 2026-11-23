@@ -113,6 +113,17 @@ class _TestsPageState extends State<TestsPage> {
     } on Object {
       // Without peers the "VPN country" setting is used alone.
     }
+    // v2.2.1: a read-only API user (family app) can't read the tunnel setup,
+    // only the live status - the tunnel peer names there (CVT_SG.82_...)
+    // carry the server too (Sam's phone was judged against "US").
+    if (names.isEmpty) {
+      try {
+        final live = await c.routerClient?.wgShow() ?? const [];
+        names.addAll(tunnelServerNamesFromLive([for (final p in live) if (p.isPeer) p.name]));
+      } on Object {
+        // The setting is used alone.
+      }
+    }
     return TestEnv(
       vpnCountries: vpnCountriesFor(c.config, names),
       otherConnections: await otherConnectionsFor(c.config),

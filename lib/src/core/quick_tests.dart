@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 
 import 'config.dart';
 import 'network_map.dart';
+import 'router_server_list.dart' show serverFromTunnelPeer;
 
 /// What this device's traffic *should* look like given the router state.
 enum ExpectedPath { vpn, direct, unknown }
@@ -58,6 +59,13 @@ Set<String> vpnCountriesFor(AppConfig cfg, Iterable<String> tunnelServerNames) =
       for (final n in tunnelServerNames)
         if (RegExp(r'^([A-Z]{2})[#-]').firstMatch(n.trim()) case final m?) m.group(1)!,
     };
+
+/// Server names of the house tunnels from live peer names (v2.2.1): only the
+/// app's tunnel peers (CVT_SG.82_Singapore -> SG#82).
+List<String> tunnelServerNamesFromLive(Iterable<String> peerNames) => [
+      for (final n in peerNames)
+        if (serverFromTunnelPeer(name: n, address: '0.0.0.0', publicKey: '', port: 0) case final s?) s.name,
+    ];
 
 class ExitCheckResult {
   const ExitCheckResult(this.info, this.expected, this.verdict, this.explanation);

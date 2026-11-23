@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.2.1 (pre-release)
+- "Everything via home" now works on Windows. While it is on, a Windows name-resolution policy sends every lookup to the tunnel's resolver only (Windows otherwise also asks the Wi-Fi's own DNS servers at the same time); the policy is removed when the mode stops, when the helper ends, and by the next start after a crash. The route to the home endpoint is re-pinned when the PC changes networks.
+- Everything via home: choose its DNS server (Settings > Remote access): empty = the router, or e.g. 10.2.0.1 for Proton's DNS inside the house tunnels - the same as devices on the house VPN network. The router needs a rule letting the remote tunnel reach it through the VPN gateway.
+- Remote access: "Scan QR code" (Android) imports the config the router's Peer generator shows for a new device.
+- Tests: a read-only API user (family app) now gets the house tunnels' country from the live tunnel names, so a Singapore exit is no longer judged against "US". Away from home, a changing mobile exit address is information, not a warning, and lag under load is blamed on the network in use, not the router's shaper. With Everything via home on, the exit test says the app's own checks go direct and to check ipleak.net in a browser.
+- Remote access mode buttons use short labels ("Everything" wrapped mid-word on phones).
+
 ## 2.2.0
 First stable v2 release: everything in 2.1.x (server switcher and Find best, shaper by exit path with presets and city limits, remote access with WireGuard / Tailscale and the "Home devices only" mode, speed-test fallback, Wake on LAN, router-network hints). Same code as 2.1.24, tested 22-23 Nov on the router, the PC, the phone and the laptop (away on IoT Wi-Fi). "Everything via home" stays Android-only for now.
 

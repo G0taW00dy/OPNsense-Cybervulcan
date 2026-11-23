@@ -69,10 +69,25 @@ List<String> systemVpnAllowed(AppConfig cfg) => switch (cfg.mode) {
       _ => [for (final r in systemVpnRoutes(cfg)) if (!r.contains(':')) r],
     };
 
-/// DNS server the system VPN announces: the router for `everything` (so
-/// lookups go through the house like everything else), none for `home`
-/// (the phone keeps its normal DNS).
-String? systemVpnDns(AppConfig cfg) => cfg.mode == 'everything' ? cfg.routerTunnelIp : null;
+/// DNS server the system VPN announces: for `everything` the server set in
+/// [AppConfig.everythingDns] (v2.2.1, e.g. Proton's 10.2.0.1 through the
+/// house tunnels) or else the router; none for `home` (the device keeps its
+/// normal DNS).
+String? systemVpnDns(AppConfig cfg) {
+  if (cfg.mode != 'everything') return null;
+  final d = cfg.everythingDns.trim();
+  if (d.isNotEmpty && everythingDnsError(d) == null) return d;
+  return cfg.routerTunnelIp;
+}
+
+/// Problem with an "Everything via home" DNS entry, or null (empty = router).
+String? everythingDnsError(String v) {
+  final t = v.trim();
+  if (t.isEmpty) return null;
+  final parts = t.split('.');
+  final ok = parts.length == 4 && parts.every((p) => int.tryParse(p) != null && int.parse(p) >= 0 && int.parse(p) <= 255);
+  return ok ? null : 'One IPv4 address, e.g. 10.2.0.1 (or empty for the router)';
+}
 
 /// AllowedIPs of the in-app WireGuard tunnel: the configured list plus what
 /// the mode needs, so the user does not have to edit AllowedIPs by hand.

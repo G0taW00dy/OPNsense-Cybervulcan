@@ -287,8 +287,19 @@ Future<SecurityTestResult> _exitTest(TestEnv env) async {
     'This device: ${env.deviceIp ?? 'not on a house network'} - expected ${_expectWord(env.expected)}',
     if (env.otherConnections.isNotEmpty)
       'This device also has ${env.otherConnections.join(', ')} - its internet may go that way instead of the router.',
+    if (awayEverythingNote(env) case final n?) n,
   ]);
 }
+
+/// v2.2.1: away with "Everything via home" on, this app's own checks still go
+/// out directly (the app stays outside its own VPN so its tunnel can't loop
+/// into itself) - say so, and how to check the real path (23 Nov: Sam's
+/// phone showed ExampleTel here while her browser exited in Singapore).
+String? awayEverythingNote(TestEnv env) =>
+    !env.atHome && env.config.remoteEnabled && env.config.mode == 'everything'
+        ? 'Everything via home is on, but this app\'s own checks always go direct. To see where other apps exit, '
+            'open ipleak.net in a browser - it should show the house VPN\'s country.'
+        : null;
 
 Future<SecurityTestResult> _exitConsistency(TestEnv env) async {
   final t = _t('exit_consistency');
@@ -307,6 +318,12 @@ Future<SecurityTestResult> _exitConsistency(TestEnv env) async {
   final distinct = ips.toSet();
   if (distinct.length == 1) {
     return _r(t, TestStatus.pass, 'Same exit ${ips.first} from ${ips.length} lookups via two providers.');
+  }
+  if (!env.atHome && env.expected == ExpectedPath.unknown) {
+    // v2.2.1: mobile networks hand out addresses from a pool (ExampleTel
+    // 203.0.113.76 / .21, 23 Nov) - not a house tunnel flapping.
+    return _r(t, TestStatus.info,
+        'Exit changed between lookups (${distinct.join(', ')}) - normal on mobile and other networks away from home.');
   }
   return _r(t, TestStatus.warn,
       'Exit changed between lookups (${distinct.join(', ')}) - flapping between tunnels, or split routing.',
@@ -730,8 +747,12 @@ Future<SecurityTestResult> _bufferbloat(TestEnv env) async {
       pipes = null; // no privilege / no shaper: generic advice
     }
   }
-  final fix = shaperAdvice(pipes, env.expected,
-      downMbps: downMbps, upMbps: upMbps, lagDown: addDown > addUp);
+  // v2.2.1: away from home the lag is on the network in use (e.g. mobile) -
+  // the router's shaper can't help (23 Nov: Sam's phone on ExampleTel 4G).
+  final fix = !env.atHome && env.expected == ExpectedPath.unknown
+      ? 'This device is away from home: the lag is on the network it uses now (e.g. mobile data), not the house '
+          'line - the router\'s shaper can\'t help here.'
+      : shaperAdvice(pipes, env.expected, downMbps: downMbps, upMbps: upMbps, lagDown: addDown > addUp);
   final st = switch (grade) {
     'A+' || 'A' => TestStatus.pass,
     'B' || 'C' => TestStatus.warn,

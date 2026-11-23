@@ -381,7 +381,8 @@ void main() {
   });
 
   test('modes that cannot run are named up front', () {
-    expect(modeUnavailable(cfgFor('everything'), 'everything', windows: true), contains('Windows'));
+    // v2.2.1: Everything via home works on Windows too.
+    expect(modeUnavailable(cfgFor('everything'), 'everything', windows: true), isNull);
     expect(modeUnavailable(cfgFor('home'), 'home', windows: true), isNull);
     final ts = cfgFor('everything').copyWith(remoteTransport: 'tailscale');
     expect(modeUnavailable(ts, 'everything', windows: false), contains('WireGuard'));

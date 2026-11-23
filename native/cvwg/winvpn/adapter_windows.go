@@ -287,6 +287,15 @@ func configureAdapter(luid winipcfg.LUID, plan Plan) error {
 		return fmt.Errorf("set DNS: %w", err)
 	}
 	_ = luid.SetDNS(windows.AF_INET6, nil, nil)
+	// v2.2.1: everything mode - all lookups to the adapter's resolver only
+	// (no DNS out the Wi-Fi's own servers). Home mode: no rule.
+	if plan.Mode == ModeEverything {
+		if err := setDNSLock(plan.DNS); err != nil {
+			return fmt.Errorf("DNS lock: %w", err)
+		}
+	} else {
+		clearDNSLock()
+	}
 	return nil
 }
 
@@ -406,6 +415,9 @@ func (s *session) close() {
 	if mon != nil {
 		_ = mon.Unregister()
 	}
+	// Before the adapter goes: lookups must not point at a resolver that no
+	// longer exists (no internet names until the next start).
+	clearDNSLock()
 	if pkt != nil {
 		_ = pkt.Close()
 	}

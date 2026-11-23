@@ -204,11 +204,10 @@ class WindowsSystemVpn implements SystemVpn {
     if (native == null) throw SystemVpnException(unsupportedReason!);
     final cfg = request.config;
     if (cfg == null) throw SystemVpnException('The home link needs the remote access settings.');
-    if (request.mode == 'everything') {
-      // v2.1 review: Windows can still leak DNS outside the adapter and the
-      // endpoint route isn't re-pinned after an IP change - not shipped yet.
-      throw SystemVpnException('"Everything via home" is not available on Windows yet - use "Home devices only".');
-    }
+    // v2.2.1: "Everything via home" on Windows - the helper now locks DNS to
+    // the adapter (NRPT rule) and re-pins the endpoint route when the PC's
+    // network changes; a reconnect stops the session first, so the endpoint
+    // name is always looked up with the lock off.
     if (Platform.isWindows && !installedForAllUsers(Platform.resolvedExecutable)) {
       // The elevated helper runs this exe and its DLLs; from a per-user
       // folder any program could swap a DLL and gain admin rights.

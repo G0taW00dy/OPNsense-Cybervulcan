@@ -80,6 +80,7 @@ class AppConfig {
     this.remoteMode = 'app',
     this.tailscaleBuiltIn = true,
     this.homeDevices = '',
+    this.everythingDns = '',
     this.vpnProvider = '',
     this.mainKeyExpiry = '',
     this.backupKeyExpiry = '',
@@ -243,6 +244,11 @@ class AppConfig {
 
   /// Home devices reachable in `home` mode: IPs or CIDRs, comma separated (e.g. the NAS).
   final String homeDevices;
+
+  /// v2.2.1: DNS server for "Everything via home" (an IP reached through the
+  /// tunnel, e.g. 10.2.0.1 = Proton's DNS inside the house tunnels). Empty =
+  /// the router.
+  final String everythingDns;
 
   /// VPN provider profile for the server switcher: `proton`, `mullvad` or `other` (empty = guess from [vpnName]).
   final String vpnProvider;
@@ -442,6 +448,7 @@ class AppConfig {
     String? remoteMode,
     bool? tailscaleBuiltIn,
     String? homeDevices,
+    String? everythingDns,
     String? vpnProvider,
     String? mainKeyExpiry,
     String? backupKeyExpiry,
@@ -519,6 +526,7 @@ class AppConfig {
         remoteMode: remoteMode ?? this.remoteMode,
         tailscaleBuiltIn: tailscaleBuiltIn ?? this.tailscaleBuiltIn,
         homeDevices: homeDevices ?? this.homeDevices,
+        everythingDns: everythingDns ?? this.everythingDns,
         vpnProvider: vpnProvider ?? this.vpnProvider,
         mainKeyExpiry: mainKeyExpiry ?? this.mainKeyExpiry,
         backupKeyExpiry: backupKeyExpiry ?? this.backupKeyExpiry,
@@ -597,6 +605,7 @@ class AppConfig {
         'remoteMode': remoteMode,
         'tailscaleBuiltIn': tailscaleBuiltIn,
         'homeDevices': homeDevices,
+        'everythingDns': everythingDns,
         'vpnProvider': vpnProvider,
         'mainKeyExpiry': mainKeyExpiry,
         'backupKeyExpiry': backupKeyExpiry,
@@ -727,6 +736,7 @@ class AppConfig {
           ? b('tailscaleBuiltIn', d.tailscaleBuiltIn)
           : !(b('tailscaleEnabled', false) && !j.containsKey('remoteTransport')) && d.tailscaleBuiltIn,
       homeDevices: s('homeDevices', d.homeDevices),
+      everythingDns: s('everythingDns', d.everythingDns),
       vpnProvider: s('vpnProvider', d.vpnProvider),
       mainKeyExpiry: s('mainKeyExpiry', d.mainKeyExpiry),
       backupKeyExpiry: s('backupKeyExpiry', d.backupKeyExpiry),

@@ -37,8 +37,10 @@ func saveHostRoutes(routes []HostRoute) {
 	_ = k.SetStringsValue(stateValue, list)
 }
 
-// cleanupStale removes host routes left behind by a helper that crashed.
+// cleanupStale removes host routes (and, v2.2.1, the DNS lock rule) left
+// behind by a helper that crashed.
 func cleanupStale() {
+	clearDNSLock()
 	k, err := registry.OpenKey(registry.LOCAL_MACHINE, stateKey, registry.QUERY_VALUE)
 	if err != nil {
 		return

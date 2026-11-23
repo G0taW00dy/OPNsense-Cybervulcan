@@ -18,6 +18,14 @@ const _modesHelp = 'App only (default): only Cybervulcan talks to the router. No
     'Both VPN modes switch on by themselves when you are away and remote access is connected, and off again when '
     'you are home. They use the device\'s one VPN slot.';
 
+const _shortModeLabels = {'app': 'App only', 'home': 'Home devices', 'everything': 'Everything'};
+
+const _dnsHelp = 'Where this device looks up names while "Everything via home" is on. Every lookup is sent '
+    'through the tunnel to this server, whatever server an app asks.\n\n'
+    'Empty: the router (its own resolver - with encrypted DNS it leaves through the house line).\n'
+    '10.2.0.1: Proton\'s DNS inside the house tunnels - the same as devices on the house VPN network. The router '
+    'must allow the remote tunnel to reach it through the VPN gateway (see the guide).';
+
 const _devicesHelp = 'IPv4 addresses or subnets at home that this device should reach while away, separated by '
     'commas - for example 10.10.10.5 for the NAS, or 10.10.10.0/24 for the whole management network. The router '
     'itself is always included.\n\n'
@@ -53,6 +61,7 @@ class RemoteModesEditor extends StatefulWidget {
 
 class _RemoteModesEditorState extends State<RemoteModesEditor> {
   late final TextEditingController _devices = TextEditingController(text: widget.config.homeDevices);
+  late final TextEditingController _dns = TextEditingController(text: widget.config.everythingDns);
   bool? _permission; // null = not asked in this screen
   bool _silentRefusal = false; // v2.1.22: another app is the Always-on VPN
 
@@ -61,6 +70,7 @@ class _RemoteModesEditorState extends State<RemoteModesEditor> {
   @override
   void dispose() {
     _devices.dispose();
+    _dns.dispose();
     super.dispose();
   }
 
@@ -96,7 +106,12 @@ class _RemoteModesEditorState extends State<RemoteModesEditor> {
       SegmentedButton<String>(
         segments: [
           for (final e in remoteModeLabels.entries)
-            ButtonSegment(value: e.key, label: Text(e.value), enabled: modeUnavailable(cfg, e.key) == null || e.key == mode),
+            ButtonSegment(
+                value: e.key,
+                // v2.2.1: short labels - "Everything via home" wrapped mid-word on a phone.
+                label: Text(_shortModeLabels[e.key] ?? e.value, textAlign: TextAlign.center),
+                tooltip: e.value,
+                enabled: modeUnavailable(cfg, e.key) == null || e.key == mode),
         ],
         selected: {mode},
         onSelectionChanged: (v) => unawaited(_pick(v.first)),
@@ -140,9 +155,25 @@ class _RemoteModesEditorState extends State<RemoteModesEditor> {
           ] else if (_permission == false && _link.state != HomeLinkState.connected)
             const WarningLine('VPN permission was not given - tap the mode again to allow it.'),
         ],
-        if (mode == 'everything')
+        if (mode == 'everything') ...[
           const InfoLine('The router must allow this device\'s tunnel address out to the internet through the '
               'house VPN gateway (and its kill switch) - see the guide.'),
+          // v2.2.1: which DNS server the tunnel uses in this mode.
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: TextFormField(
+              controller: _dns,
+              decoration: const InputDecoration(
+                labelText: 'DNS server (optional)',
+                hintText: 'Empty = the router; 10.2.0.1 = Proton',
+                suffixIcon: HelpButton(title: 'DNS for Everything via home', text: _dnsHelp),
+              ),
+              autovalidateMode: AutovalidateMode.onUserInteraction,
+              validator: (v) => everythingDnsError(v ?? ''),
+              onChanged: (v) => widget.onChanged(widget.config.copyWith(everythingDns: v.trim())),
+            ),
+          ),
+        ],
         for (final p in remoteModeProblems(cfg)) WarningLine(p),
         if (modeUnavailable(cfg, mode) case final why?) WarningLine(why),
         if (status != null)
@@ -167,7 +198,6 @@ class _RemoteModesEditorState extends State<RemoteModesEditor> {
 String? modeUnavailable(AppConfig cfg, String mode, {bool? windows}) {
   final win = windows ?? Platform.isWindows;
   if (mode == 'app') return null;
-  if (win && mode == 'everything') return '"Everything via home" is not available on Windows yet.';
   if (win && cfg.transport == 'tailscale') return 'On Windows the home link works over WireGuard only for now.';
   if (mode == 'everything' && cfg.transport == 'tailscale') {
     return '"Everything via home" needs the WireGuard engine for now (Tailscale exit node not supported yet).';

@@ -11,6 +11,7 @@ import '../core/controller.dart';
 import '../core/network_map.dart';
 import '../core/wg_conf.dart';
 import '../core/wg_keys.dart';
+import 'qr_scan_page.dart';
 import 'theme.dart';
 
 /// Shows [text] as a QR code with a copy button.
@@ -240,6 +241,19 @@ class _RemoteAccessEditorState extends State<RemoteAccessEditor> {
     final text = await pasteOrOpenText(context,
         title: 'Import WireGuard configuration',
         hint: '[Interface]\nAddress = 10.10.99.2/32\n...\n[Peer]\nPublicKey = ...\nEndpoint = home.example.com:51830');
+    await _importConfText(text);
+  }
+
+  /// v2.2.1: the router's Peer generator shows the new device's config as a
+  /// QR code - scan it instead of moving a file. Decoded on the phone.
+  Future<void> _scanConf() async {
+    final text = await QrScanPage.scan(context,
+        title: 'Scan the WireGuard QR code',
+        hint: 'Router: VPN > WireGuard > Peer generator shows it for the new device');
+    await _importConfText(text);
+  }
+
+  Future<void> _importConfText(String? text) async {
     if (text == null || text.trim().isEmpty || !mounted) return;
     final WgQuickImport imp;
     try {
@@ -406,11 +420,19 @@ class _RemoteAccessEditorState extends State<RemoteAccessEditor> {
         if (c.hasPresharedKey) TextButton(onPressed: () => _savePsk(remove: true), child: const Text('Remove')),
       ]),
       const SizedBox(height: 12),
-      OutlinedButton.icon(
-        onPressed: _importConf,
-        icon: const Icon(Icons.file_download_outlined),
-        label: const Text('Import a WireGuard .conf'),
-      ),
+      Wrap(spacing: 8, runSpacing: 8, children: [
+        OutlinedButton.icon(
+          onPressed: _importConf,
+          icon: const Icon(Icons.file_download_outlined),
+          label: const Text('Import a WireGuard .conf'),
+        ),
+        if (Platform.isAndroid)
+          OutlinedButton.icon(
+            onPressed: _scanConf,
+            icon: const Icon(Icons.qr_code_scanner),
+            label: const Text('Scan QR code'),
+          ),
+      ]),
       if (_note != null)
         Padding(
           padding: const EdgeInsets.only(top: 8),

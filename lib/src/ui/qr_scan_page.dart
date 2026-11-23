@@ -6,8 +6,10 @@ import 'theme.dart';
 /// Full-screen QR scanner (phone). Returns the decoded text, or null.
 ///
 /// Decoding runs on the device with ZXing - nothing is sent anywhere. Used
-/// for provider WireGuard configs: the caller keeps only the [Peer] part
-/// (server address + public key) and drops the rest, private key included.
+/// for provider WireGuard configs (the servers page keeps only the [Peer]
+/// part and drops the rest, private key included) and, v2.2.1, for this
+/// device's own remote-access config from the router's Peer generator
+/// (Remote access keeps its private key in secure storage).
 class QrScanPage extends StatefulWidget {
   const QrScanPage({super.key, this.title = 'Scan QR code', this.hint});
 

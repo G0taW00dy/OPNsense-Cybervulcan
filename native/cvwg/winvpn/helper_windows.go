@@ -31,6 +31,16 @@ const (
 // first. Returns the process exit code.
 func RunHelper(args []string) int {
 	helperLogf("helper starting (%d args)", len(args))
+	// v2.2.1: whatever way the helper ends (including a panic), the DNS lock
+	// must not outlive it - names would stop resolving on the PC.
+	defer clearDNSLock()
+	defer func() {
+		if r := recover(); r != nil {
+			helperLogf("panic: %v", r)
+			clearDNSLock()
+			panic(r)
+		}
+	}()
 	nonce, userSID, err := ParseHelperArgs(args)
 	if err != nil {
 		helperLogf("exit %d: %v", ExitBadArgs, err)
