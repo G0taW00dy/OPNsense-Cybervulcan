@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:math';
 
 import 'package:http/http.dart' as http;
 
@@ -133,15 +132,6 @@ ExitCheckResult evaluateExit(ExitInfo info, ExpectedPath expected, AppConfig cfg
   }
 }
 
-class DnsResolverInfo {
-  const DnsResolverInfo({required this.resolverIp, this.geo});
-
-  final String resolverIp;
-
-  /// e.g. "Australia - (ISP name)" or "United States - Quad9".
-  final String? geo;
-}
-
 /// Network calls for the quick tests. All third-party endpoints are free and
 /// key-less; failures surface as exceptions with readable messages.
 class QuickTests {
@@ -219,19 +209,6 @@ class QuickTests {
         org: g['org']?.toString(),
       );
     }
-  }
-
-  /// Which recursive resolver is answering for this device. A random,
-  /// never-cached subdomain forces a fresh lookup that ip-api's authoritative
-  /// server records (edns.ip-api.com; plain HTTP only). The label must be
-  /// exactly 32 alphanumeric characters or ip-api answers 404.
-  Future<DnsResolverInfo> dnsResolver() async {
-    final rnd = Random.secure();
-    final label = List.generate(32, (_) => 'abcdefghijklmnopqrstuvwxyz0123456789'[rnd.nextInt(36)]).join();
-    final j = await _getJson(Uri.parse('http://$label.edns.ip-api.com/json'));
-    final dns = j['dns'];
-    if (dns is! Map || dns['ip'] == null) throw Exception('No resolver information returned');
-    return DnsResolverInfo(resolverIp: '${dns['ip']}', geo: dns['geo']?.toString());
   }
 }
 

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
@@ -53,11 +54,41 @@ class AppLock {
     final ctx = context();
     if (ctx == null || !ctx.mounted) return false;
     final stored = (await store.readAppPinHash())!;
+    // v2.2.5 (audit L2): wrong PINs count across dialogs and restarts; after
+    // 5 the PIN is locked for a while, doubling each further time.
+    var (fails, until) = await store.readPinFailures();
     if (!ctx.mounted) return false;
+    if (until != null && until.isAfter(DateTime.now())) {
+      final mins = until.difference(DateTime.now()).inMinutes + 1;
+      await showDialog<void>(
+        context: ctx,
+        builder: (c) => AlertDialog(
+          title: const Text('App PIN locked'),
+          content: Text('Too many wrong PINs. Try again in about $mins minute${mins == 1 ? '' : 's'}.'),
+          actions: [TextButton(onPressed: () => Navigator.pop(c), child: const Text('OK'))],
+        ),
+      );
+      return false;
+    }
     final ok = await showDialog<bool>(
       context: ctx,
       barrierDismissible: false,
-      builder: (_) => _PinDialog(title: reason, check: (pin) => verifyPin(pin, stored)),
+      builder: (_) => _PinDialog(
+        title: reason,
+        triesLeft: fails >= pinFreeTries ? 1 : pinFreeTries - fails,
+        check: (pin) {
+          final good = verifyPin(pin, stored);
+          if (good) {
+            fails = 0;
+            unawaited(store.writePinFailures(0, null));
+            if (isLegacyPinHash(stored)) unawaited(store.writeAppPinHash(hashPin(pin)));
+          } else {
+            fails++;
+            unawaited(store.writePinFailures(fails, pinLockUntil(fails, DateTime.now())));
+          }
+          return good;
+        },
+      ),
     );
     return ok ?? false;
   }
@@ -73,17 +104,57 @@ class AppLock {
   Future<void> removeAppPin() => store.writeAppPinHash(null);
 }
 
-/// "salt:sha256(salt:pin)" with a random 16-byte salt.
-String hashPin(String pin, {String? salt}) {
+/// v2.2.5 (audit L2): PBKDF2-HMAC-SHA256 iterations for the app PIN.
+const pinIterations = 60000;
+
+/// "p2-<iterations>-<salt>:<PBKDF2-HMAC-SHA256(pin, salt)>" with a random
+/// 16-byte salt. PINs saved by older versions ("salt:sha256(salt:pin)") are
+/// still accepted by [verifyPin] and rewritten in this form on the next
+/// successful unlock.
+String hashPin(String pin, {String? salt, int iterations = pinIterations}) {
   final s = salt ?? base64Url.encode(List<int>.generate(16, (_) => Random.secure().nextInt(256)));
-  final h = sha256.convert(utf8.encode('$s:$pin')).toString();
-  return '$s:$h';
+  return 'p2-$iterations-$s:${_hex(pbkdf2Sha256(utf8.encode(pin), utf8.encode(s), iterations, 32))}';
 }
+
+/// The pre-2.2.5 form, for checking old stored PINs only.
+String _legacyHashPin(String pin, String salt) => '$salt:${sha256.convert(utf8.encode('$salt:$pin'))}';
+
+/// True when [stored] is in the pre-2.2.5 form (should be rewritten).
+bool isLegacyPinHash(String stored) => !stored.startsWith('p2-');
+
+/// PBKDF2 (RFC 8018) with HMAC-SHA256.
+List<int> pbkdf2Sha256(List<int> password, List<int> salt, int iterations, int length) {
+  final hmac = Hmac(sha256, password);
+  final out = <int>[];
+  for (var block = 1; out.length < length; block++) {
+    var u = hmac.convert([...salt, block >> 24 & 0xff, block >> 16 & 0xff, block >> 8 & 0xff, block & 0xff]).bytes;
+    final t = List<int>.of(u);
+    for (var i = 1; i < iterations; i++) {
+      u = hmac.convert(u).bytes;
+      for (var j = 0; j < t.length; j++) {
+        t[j] ^= u[j];
+      }
+    }
+    out.addAll(t);
+  }
+  return out.sublist(0, length);
+}
+
+String _hex(List<int> b) => b.map((x) => x.toRadixString(16).padLeft(2, '0')).join();
 
 bool verifyPin(String pin, String stored) {
   final i = stored.indexOf(':');
   if (i <= 0) return false;
-  final expected = hashPin(pin, salt: stored.substring(0, i));
+  final head = stored.substring(0, i);
+  final String expected;
+  if (head.startsWith('p2-')) {
+    final parts = head.split('-');
+    final iter = parts.length >= 3 ? int.tryParse(parts[1]) : null;
+    if (iter == null || iter < 1 || iter > 10000000) return false;
+    expected = hashPin(pin, salt: parts.sublist(2).join('-'), iterations: iter);
+  } else {
+    expected = _legacyHashPin(pin, head);
+  }
   // Constant-time compare.
   if (expected.length != stored.length) return false;
   var diff = 0;
@@ -95,10 +166,22 @@ bool verifyPin(String pin, String stored) {
 
 bool validPin(String pin) => RegExp(r'^\d{4,8}$').hasMatch(pin);
 
+/// Wrong PINs allowed before the first lock-out.
+const pinFreeTries = 5;
+
+/// When the PIN unlocks again after [fails] wrong tries: free for the first
+/// [pinFreeTries], then 1 min, doubling each time, at most 1 hour.
+DateTime? pinLockUntil(int fails, DateTime now) {
+  if (fails < pinFreeTries) return null;
+  final minutes = 1 << (fails - pinFreeTries).clamp(0, 6);
+  return now.add(Duration(minutes: minutes > 60 ? 60 : minutes));
+}
+
 class _PinDialog extends StatefulWidget {
-  const _PinDialog({required this.title, required this.check});
+  const _PinDialog({required this.title, required this.check, this.triesLeft = pinFreeTries});
   final String title;
   final bool Function(String pin) check;
+  final int triesLeft;
 
   @override
   State<_PinDialog> createState() => _PinDialogState();
@@ -122,11 +205,11 @@ class _PinDialogState extends State<_PinDialog> {
     }
     _wrong++;
     _c.clear();
-    if (_wrong >= 5) {
+    if (_wrong >= widget.triesLeft) {
       Navigator.pop(context, false);
       return;
     }
-    setState(() => _error = 'Wrong PIN (${5 - _wrong} tries left)');
+    setState(() => _error = 'Wrong PIN (${widget.triesLeft - _wrong} tries left)');
   }
 
   @override

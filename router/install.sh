@@ -8,10 +8,14 @@
 # connections - exactly what the app itself does. A "no time limit" bypass
 # carries a deadline centuries away, so it is left alone.
 #
-# Install (OPNsense console option 8 "Shell", or SSH), as root:
-#   fetch -qo - https://raw.githubusercontent.com/G0taW00dy/OPNsense-Cybervulcan/main/router/install.sh | sh
+# Install (OPNsense console option 8 "Shell", or SSH), as root: copy the
+# install line from the app (Help > Router timer). It downloads this script
+# from the release tag matching the app and only runs it when its SHA-256
+# matches the copy built into the app:
+#   fetch -qo /tmp/cvinstall.sh https://raw.githubusercontent.com/<repo>/v<version>/router/install.sh \
+#     && [ "$(sha256 -q /tmp/cvinstall.sh)" = "<sha256>" ] && sh /tmp/cvinstall.sh
 # Remove:
-#   fetch -qo - https://raw.githubusercontent.com/G0taW00dy/OPNsense-Cybervulcan/main/router/install.sh | sh -s uninstall
+#   sh /tmp/cvinstall.sh uninstall
 #
 # Then in the web GUI: System > Settings > Cron > "+":
 #   Minutes: *   Hours/Day/Month/Weekdays: *

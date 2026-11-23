@@ -292,8 +292,9 @@ class _TestsPageState extends State<TestsPage> {
         const SizedBox(height: 4),
         Text(
           '- Router checks ask your router directly - nothing leaves the house.\n'
-          '- Outside checks (HTTPS only) use api.ipify.org, ipwho.is, bash.ws, Akamai whoami and '
-          'Cloudflare speed. On the VPN they only see the ${cfg.vpnName} exit, never your home IP. '
+          '- Outside checks (HTTPS only) use api.ipify.org, ipwho.is (ipapi.co as a fallback), bash.ws, '
+          'Akamai whoami and Cloudflare speed (Vultr test files as a fallback). On the VPN they only see '
+          'the ${cfg.vpnName} exit, never your home IP. '
           'Turn them off in Settings > Tests & privacy.\n'
           '- Country matching is a heuristic: a ${cfg.vpnName} server in ${cfg.homeCountryCode} would look "direct".\n'
           '- ${Platform.isAndroid ? 'On mobile data the phone is not on a house network, so leak results are informational.' : 'Results reflect this PC only.'}',

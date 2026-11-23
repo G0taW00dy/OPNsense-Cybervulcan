@@ -112,7 +112,7 @@ func helperExitError(code uint32) error {
 
 // lastHelperLogLine returns the last non-empty line of the helper's log.
 func lastHelperLogLine() string {
-	b, err := os.ReadFile(helperLogPath())
+	b, err := os.ReadFile(knownHelperLogPath())
 	if err != nil {
 		return ""
 	}

@@ -1113,7 +1113,8 @@ class _SettingsPageState extends State<SettingsPage> {
           ]),
           _switch('Allow outside test services', _cfg.externalTests, (v) => _set(_cfg.copyWith(externalTests: v)),
               help: 'Leak tests need a server on the internet to say where your traffic and DNS really come from '
-                  '(ipify, ipwho.is, bash.ws, Akamai, Cloudflare - all HTTPS). On the VPN they only see the '
+                  '(ipify, ipwho.is, ipapi.co, bash.ws, Akamai, Cloudflare, Vultr - all HTTPS). On the VPN they '
+                  'only see the '
                   'VPN exit. Off = the Tests page runs router-side checks only.'),
           Row(children: [
             Expanded(

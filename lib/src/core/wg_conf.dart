@@ -44,7 +44,14 @@ class WgQuickImport {
 
 /// Parses wg-quick text. Throws [FormatException] when it is clearly not a
 /// WireGuard configuration.
+/// v2.2.5 (audit L5): longest configuration text accepted (a real one is
+/// well under 2 KB; QR codes and pasted text are capped).
+const wgQuickMaxLength = 8192;
+
 WgQuickImport parseWgQuick(String text) {
+  if (text.length > wgQuickMaxLength) {
+    throw const FormatException('Too long for a WireGuard configuration.');
+  }
   String? section;
   var peers = 0;
   final iface = <String, String>{};
@@ -104,9 +111,23 @@ WgQuickImport parseWgQuick(String text) {
   final ep = peer['endpoint'];
   if (ep != null && ep.isNotEmpty) {
     (host, port) = splitHostPort(ep);
+    // A host name or IP only (letters, digits, dots, dashes, IPv6 colons).
+    if (host != null && (host.isEmpty || host.length > 253 || !RegExp(r'^[A-Za-z0-9.:-]+$').hasMatch(host))) {
+      warnings.add('Endpoint host "${host.length > 40 ? '${host.substring(0, 40)}...' : host}" is not valid and was ignored.');
+      host = null;
+      port = null;
+    }
+    if (port != null && (port < 1 || port > 65535)) {
+      warnings.add('Endpoint port $port is out of range and was ignored.');
+      port = null;
+    }
   }
 
-  final ka = int.tryParse(peer['persistentkeepalive'] ?? '');
+  var ka = int.tryParse(peer['persistentkeepalive'] ?? '');
+  if (ka != null && (ka < 0 || ka > 65535)) {
+    warnings.add('PersistentKeepalive $ka is out of range and was ignored.');
+    ka = null;
+  }
   final allowed = peer['allowedips']
       ?.split(',')
       .map((e) => e.trim())

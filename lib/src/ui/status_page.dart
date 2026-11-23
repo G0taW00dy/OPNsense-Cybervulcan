@@ -11,6 +11,7 @@ import '../core/house_state.dart';
 import '../core/updater.dart';
 import '../net/router_link.dart';
 import '../platform/vpn_modes.dart' show HomeLinkState;
+import '../platform/vpn_modes_windows.dart' show WindowsSystemVpn;
 import 'bypass_dialog.dart';
 import 'format.dart';
 import 'servers_page.dart';
@@ -31,9 +32,35 @@ class StatusPage extends StatefulWidget {
 class _StatusPageState extends State<StatusPage> {
   Timer? _tick;
 
+  /// v2.2.5: a DNS lock left behind by a crash in "Everything" mode (Windows).
+  bool _dnsLeft = false;
+  bool _repairing = false;
+
+  void _checkDnsLock() {
+    final vpn = widget.controller.homeLink.vpn;
+    if (vpn is WindowsSystemVpn && widget.controller.homeLink.state == HomeLinkState.off) {
+      final left = vpn.dnsLockLeftBehind;
+      if (left != _dnsLeft && mounted) setState(() => _dnsLeft = left);
+    }
+  }
+
+  Future<void> _repairDns() async {
+    final vpn = widget.controller.homeLink.vpn;
+    if (vpn is! WindowsSystemVpn) return;
+    setState(() => _repairing = true);
+    final problem = await vpn.repairDns();
+    if (!mounted) return;
+    setState(() => _repairing = false);
+    _checkDnsLock();
+    if (problem != null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Repair failed: $problem')));
+    }
+  }
+
   @override
   void initState() {
     super.initState();
+    if (Platform.isWindows) WidgetsBinding.instance.addPostFrameCallback((_) => _checkDnsLock());
     // Drives the bypass countdown between polls.
     _tick = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted && (widget.controller.snapshot.bypassActive ?? false)) setState(() {});
@@ -63,9 +90,9 @@ class _StatusPageState extends State<StatusPage> {
               if (c.config.isPlainHttp) ...[
                 const SizedBox(height: 12),
                 _Banner(
-                  text: 'The router address is plain http:// - the API key and everything else '
-                      'travel unencrypted and nothing proves this is your router. Once the router '
-                      'has its certificate, switch to https://${c.config.routerHost ?? ''}'
+                  text: 'The router address is plain http://, so the app will not connect directly: the '
+                      'API key would travel unencrypted and nothing proves this is your router. '
+                      'Switch to https://${c.config.routerHost ?? ''}'
                       '${c.config.certName.trim().isEmpty ? ' and set its certificate name in Settings' : ' (certificate name ${c.config.certName})'}.',
                   color: OpnColors.amber,
                   icon: Icons.lock_open,
@@ -81,6 +108,20 @@ class _StatusPageState extends State<StatusPage> {
                   text: s.link!.describe(c.config),
                   color: s.link!.state == LinkState.wrongCertificate ? OpnColors.red : OpnColors.grey,
                   icon: s.link!.state == LinkState.wrongCertificate ? Icons.gpp_bad : Icons.wifi_off,
+                ),
+              ],
+              if (_dnsLeft) ...[
+                const SizedBox(height: 12),
+                _Banner(
+                  text: 'A DNS lock from "Everything via home" was left behind (the app or PC stopped '
+                      'unexpectedly), so websites may not open. Repair removes it (Windows asks for admin '
+                      'approval).',
+                  color: OpnColors.amber,
+                  icon: Icons.dns_outlined,
+                  action: TextButton(
+                    onPressed: _repairing ? null : _repairDns,
+                    child: Text(_repairing ? 'Repairing...' : 'Repair DNS'),
+                  ),
                 ),
               ],
               // v2.1: system VPN for the remote modes ("Home link: ... - connected").

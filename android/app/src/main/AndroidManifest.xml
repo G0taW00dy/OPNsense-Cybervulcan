@@ -16,16 +16,13 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED"/>
 
-    <!-- usesCleartextTraffic: the router may still be on http://10.10.10.254 (VM
-         phase) and the DNS resolver test endpoint (edns.ip-api.com) is HTTP-only.
-         Router credentials are only ever sent to the configured base URL; use
-         https:// with a pinned certificate once the router has one. -->
+    <!-- v2.2.5: no cleartext traffic (audit H1). The router API is https only. -->
     <application
         android:label="Cybervulcan"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
-        android:usesCleartextTraffic="true"
+        android:usesCleartextTraffic="false"
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules">
         <activity

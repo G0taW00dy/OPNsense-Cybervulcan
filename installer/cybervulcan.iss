@@ -101,7 +101,10 @@ begin
   if IsAdminInstallMode and RegQueryStringValue(HKCU, PerUserUninstallKey, 'UninstallString', Uninst) then
   begin
     Uninst := RemoveQuotes(Uninst);
+    // v2.2.5 (audit M2): the per-user uninstaller and its registry entry can
+    // be changed by any program running as the user, so it runs with the
+    // user's own rights - never with this installer's admin rights.
     if FileExists(Uninst) then
-      Exec(Uninst, '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART', '', SW_HIDE, ewWaitUntilTerminated, Code);
+      ExecAsOriginalUser(Uninst, '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART', '', SW_HIDE, ewWaitUntilTerminated, Code);
   end;
 end;

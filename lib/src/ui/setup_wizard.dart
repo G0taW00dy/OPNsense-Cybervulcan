@@ -203,8 +203,8 @@ class _SetupWizardState extends State<SetupWizard> {
               if (normaliseRouterAddress(_address.text).startsWith('http://'))
                 const Padding(
                   padding: EdgeInsets.only(top: 12),
-                  child: Text('Plain http:// sends the API key unencrypted and cannot prove this is '
-                      'your router. Only use it on a test router.',
+                  child: Text('Plain http:// is blocked: it would send the API key unencrypted and cannot '
+                      'prove this is your router. Use https://.',
                       style: TextStyle(color: OpnColors.amber)),
                 ),
             ]),

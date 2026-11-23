@@ -11,7 +11,9 @@ bool RunVpnHelperIfRequested(int* exit_code) {
   if (argv == nullptr) {
     return false;
   }
-  const bool requested = argc >= 2 && std::wstring(argv[1]) == L"--vpn-helper";
+  // --vpn-repair (v2.2.5): one-shot clean-up of a DNS lock left by a crash.
+  const bool requested = argc >= 2 && (std::wstring(argv[1]) == L"--vpn-helper" ||
+                                       std::wstring(argv[1]) == L"--vpn-repair");
   ::LocalFree(argv);
   if (!requested) {
     return false;

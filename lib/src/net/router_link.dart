@@ -98,9 +98,19 @@ class WrongCertificateException extends HandshakeException {
   final String detail;
 }
 
+/// v2.2.5 (audit H1): a plain `http://` router address is never used over a
+/// direct connection - on a foreign network any device answering at that IP
+/// would receive the API key in clear text. Through the app's own encrypted
+/// tunnel it still works. Tests may switch this on.
+bool allowPlainHttpRouter = false;
+
 /// Opens a socket to the router along [route] and, for https, completes the
 /// TLS handshake against [target]'s certificate name. Nothing else is sent.
 Future<Socket> openRouterSocket(RouterTarget target, RouterRoute route, Duration timeout) async {
+  if (!target.secure && route.token == null && !allowPlainHttpRouter) {
+    throw const SocketException('Plain http:// router addresses are blocked - the API key would be sent '
+        'unencrypted. Switch the router address to https:// in Settings.');
+  }
   final raw = await Socket.connect(route.host, route.port, timeout: timeout);
   try {
     final token = route.token;

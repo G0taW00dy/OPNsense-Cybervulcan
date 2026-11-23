@@ -72,6 +72,26 @@ class SecretStore {
     }
   }
 
+  // v2.2.5 (audit L2): wrong app-PIN attempts, "count:lockedUntilMillis".
+  // Kept across restarts so closing the dialog does not reset the count.
+  static const _kPinFails = 'app_lock_pin_failures';
+
+  Future<(int, DateTime?)> readPinFailures() async {
+    final v = await _s.read(key: _kPinFails);
+    final p = (v ?? '').split(':');
+    final n = int.tryParse(p.first) ?? 0;
+    final until = p.length > 1 ? int.tryParse(p[1]) : null;
+    return (n, until == null || until == 0 ? null : DateTime.fromMillisecondsSinceEpoch(until));
+  }
+
+  Future<void> writePinFailures(int count, DateTime? lockedUntil) async {
+    if (count <= 0) {
+      await _s.delete(key: _kPinFails);
+    } else {
+      await _s.write(key: _kPinFails, value: '$count:${lockedUntil?.millisecondsSinceEpoch ?? 0}');
+    }
+  }
+
   Future<void> clearWireGuard() async {
     await _s.delete(key: _kWgPrivate);
     await _s.delete(key: _kWgPsk);

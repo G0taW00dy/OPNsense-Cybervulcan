@@ -1,3 +1,4 @@
+import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -153,11 +154,11 @@ class HelpPage extends StatelessWidget {
               'Check: System > Log Files > General, search "cybervulcan". A line appears each time it '
                   'ends a bypass. The router\'s clock must be right (System > Settings > General / NTP).',
               'New router or restored backup: run the install line again and re-add the cron job. '
-                  'To remove it, run the same line with "| sh -s uninstall" at the end.',
+                  'To remove it: sh /tmp/cvinstall.sh uninstall',
+              'The line downloads the script of this app version and only runs it if its SHA-256 '
+                  'matches the one built into the app.',
             ],
-            extra: const _CommandBox(
-              'fetch -qo - https://raw.githubusercontent.com/$updateRepo/main/router/install.sh | sh',
-            ),
+            extra: const _RouterInstallCommand(),
           ),
           const _Section(
             number: 8,
@@ -284,6 +285,32 @@ class _Section extends StatelessWidget {
     );
   }
 }
+
+/// v2.2.5 (audit L7): the router install line for this app's own version,
+/// checked against the SHA-256 of the script bundled with the app - never
+/// whatever is on the main branch at that moment.
+class _RouterInstallCommand extends StatelessWidget {
+  const _RouterInstallCommand();
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder<String>(
+        future: routerInstallSha256(),
+        builder: (context, snap) {
+          final sha = snap.data;
+          if (sha == null) return const SizedBox.shrink();
+          return _CommandBox(routerInstallCommand(updateRepo, appVersion, sha));
+        },
+      );
+}
+
+/// SHA-256 of router/install.sh as bundled with the app.
+Future<String> routerInstallSha256() async =>
+    sha256.convert((await rootBundle.load('router/install.sh')).buffer.asUint8List()).toString();
+
+/// The install line: fetch the tagged script, check its hash, run it.
+String routerInstallCommand(String repo, String version, String sha) =>
+    'fetch -qo /tmp/cvinstall.sh https://raw.githubusercontent.com/$repo/v$version/router/install.sh && '
+    '[ "\$(sha256 -q /tmp/cvinstall.sh)" = "$sha" ] && sh /tmp/cvinstall.sh';
 
 /// A shell command shown in monospace with a Copy button.
 class _CommandBox extends StatelessWidget {

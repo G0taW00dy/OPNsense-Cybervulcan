@@ -33,6 +33,10 @@ const _deviceOnly = {
   'shaperAutoTune',
   'protonReminder',
   'remoteMode',
+  // v2.2.5 (audit L1): a certificate pin is never taken from a file or QR
+  // code - with it, a tampered file could point the app at another server
+  // and vouch for its certificate. Each device confirms the certificate itself.
+  'pinnedCertSha256',
 };
 
 /// Every key that may be imported (the non-secret settings).
@@ -102,6 +106,20 @@ SettingsImport importSettings(String text, AppConfig current) {
     }
   }
   if (applied.isEmpty) throw const FormatException('No Cybervulcan settings found in that text.');
+
+  // v2.2.5 (audit L1): say so when the import changes where the app connects.
+  final cur = current.toJson();
+  final defaults = const AppConfig().toJson();
+  for (final k in const ['baseUrl', 'certName']) {
+    final was = '${cur[k] ?? ''}'.trim();
+    final now = incoming.containsKey(k) ? '${incoming[k] ?? ''}'.trim() : was;
+    // A fresh device (still on the built-in default) has nothing to protect.
+    if (was.isNotEmpty && was != '${defaults[k] ?? ''}'.trim() && now != was) {
+      warnings.add(k == 'baseUrl'
+          ? 'The router address changes from $was to $now. Only save this if you trust where these settings came from.'
+          : 'The certificate name changes from $was to $now. Only save this if you trust where these settings came from.');
+    }
+  }
 
   final merged = {
     ...current.toJson(),

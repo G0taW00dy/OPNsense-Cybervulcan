@@ -26,7 +26,18 @@ class WidgetKeys {
   static const detail = 'cv_detail'; // "VPN OK - 247 ms - backup online"
   static const where = 'cv_where'; // "Away - via Tailscale - 15:13"
   static const lastGood = 'cv_last_good'; // "HH:MM" of the last fresh status
+  static const lastGoodAt = 'cv_last_good_ms'; // epoch ms of the last fresh status (v2.2.5)
 }
+
+/// v2.2.5: one missed background check is not "out of reach". While the
+/// phone sleeps, Android can cut a background app's network for a while, so
+/// the widget only greys out when the router has not answered for this long.
+const widgetStaleAfter = Duration(minutes: 12);
+
+/// Whether a failed check should grey the widget out, given the time of the
+/// last fresh status (null = never had one).
+bool widgetShouldGoStale(DateTime? lastGoodAt, DateTime now) =>
+    lastGoodAt == null || now.difference(lastGoodAt) >= widgetStaleAfter;
 
 const androidWidgetProvider = 'ExitWidgetProvider';
 
@@ -91,6 +102,7 @@ Future<void> pushWidgetState(HouseSnapshot s, AppConfig cfg) async {
         : '',
     WidgetKeys.updated: formatClock(s.fetchedAt),
     WidgetKeys.lastGood: s.reachable ? formatClock(s.fetchedAt) : '',
+    if (s.reachable) WidgetKeys.lastGoodAt: '${s.fetchedAt.millisecondsSinceEpoch}',
     // The Quick Settings tile still reads this one.
     WidgetKeys.exit: s.error != null
         ? 'Router unreachable'
@@ -101,7 +113,11 @@ Future<void> pushWidgetState(HouseSnapshot s, AppConfig cfg) async {
 }
 
 /// Greys the widget out with the last real status ("last seen 15:13").
-Future<void> markWidgetOutOfReach() async {
+Future<void> markWidgetOutOfReach({DateTime? now}) async {
+  final at = int.tryParse(await HomeWidget.getWidgetData<String>(WidgetKeys.lastGoodAt) ?? '');
+  if (!widgetShouldGoStale(at == null ? null : DateTime.fromMillisecondsSinceEpoch(at), now ?? DateTime.now())) {
+    return; // a short blip: keep showing the last status
+  }
   final last = await HomeWidget.getWidgetData<String>(WidgetKeys.lastGood);
   final hadStatus = last != null && last.isNotEmpty;
   await _save({

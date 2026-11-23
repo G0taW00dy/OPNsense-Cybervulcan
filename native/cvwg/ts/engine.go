@@ -82,6 +82,14 @@ func NewEngine(o Options) (*Engine, error) {
 		Logf:       logf,
 		UserLogf:   logf,
 	}
+	// v2.2.5 (audit L8): encrypted state on Windows.
+	st, err := platformStore(dir)
+	if err != nil {
+		return nil, err
+	}
+	if st != nil {
+		e.srv.Store = st
+	}
 	return e, nil
 }
 

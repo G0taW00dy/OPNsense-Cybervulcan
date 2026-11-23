@@ -36,6 +36,9 @@ const (
 	// HelperFlag is the command-line switch that turns the app exe into
 	// the elevated helper: <exe> --vpn-helper <nonce> <user SID>.
 	HelperFlag = "--vpn-helper"
+	// RepairFlag runs the helper once to remove a DNS lock and host routes
+	// left behind by a crash or power cut (v2.2.5), then exits.
+	RepairFlag = "--vpn-repair"
 )
 
 // Request is one message from the tray app.

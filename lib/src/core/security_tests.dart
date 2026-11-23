@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import '../api/models.dart';
 import '../api/opnsense_client.dart';
 import '../api/shaper_models.dart';
+import '../api/wireguard_models.dart' show DotServer;
 import '../net/router_link.dart';
 import 'config.dart';
 import 'house_state.dart';
@@ -140,7 +141,8 @@ TestStatus classifyResolver(
     required String? org,
     required ExpectedPath expected,
     required AppConfig cfg,
-    Set<String>? vpnCountries}) {
+    Set<String>? vpnCountries,
+    bool routerDotToQuad9 = false}) {
   final cc = countryCode?.toUpperCase();
   final o = (org ?? '').toLowerCase();
   final quad9 = isQuad9Org(o);
@@ -159,11 +161,27 @@ TestStatus classifyResolver(
       return TestStatus.warn;
     case ExpectedPath.direct:
       if (quad9) return TestStatus.pass;
-      if (cc == cfg.homeCountryCode.toUpperCase()) return TestStatus.warn; // ISP DNS, not the router's DoT
+      // v2.2.5: Quad9's Australian nodes are hosted by local ISPs (Swoop,
+      // which also owns a home ISP), so their network name can't tell them from
+      // ISP DNS. When the router's encrypted DNS to Quad9 is confirmed, a
+      // home-country resolver is that path.
+      if (cc == cfg.homeCountryCode.toUpperCase()) {
+        return routerDotToQuad9 ? TestStatus.pass : TestStatus.warn; // else ISP DNS, not the router's DoT
+      }
       return TestStatus.info;
     case ExpectedPath.unknown:
       return TestStatus.info;
   }
+}
+
+/// True when every enabled upstream DNS server of the router is Quad9 over
+/// TLS with name verification (v2.2.5).
+bool routerUsesQuad9Dot(List<DotServer> servers) {
+  const quad9 = {'9.9.9.9', '149.112.112.112', '9.9.9.10', '149.112.112.10', '9.9.9.11', '149.112.112.11',
+    '2620:fe::fe', '2620:fe::9', '2620:fe::10', '2620:fe::11'};
+  final on = servers.where((s) => s.enabled).toList();
+  return on.isNotEmpty &&
+      on.every((s) => s.isTls && quad9.contains(s.server.trim().toLowerCase()) && (s.verify ?? '').toLowerCase().contains('quad9'));
 }
 
 /// Quad9's resolvers show up under several network names depending on the
@@ -374,6 +392,19 @@ Future<SecurityTestResult> _dnsLeak(TestEnv env) async {
 
   if (seen.isEmpty) return _r(t, TestStatus.warn, 'Neither leak-test service answered.', notes);
 
+  // v2.2.5: in direct mode, check the router really sends DNS to Quad9 over
+  // TLS (needs the Unbound settings privilege; without it the old rule stays).
+  var dotQuad9 = false;
+  final client = env.client;
+  if (env.expected == ExpectedPath.direct && client != null) {
+    try {
+      dotQuad9 = routerUsesQuad9Dot(await client.dotServers());
+      if (dotQuad9) notes.add('Router DNS-over-TLS to Quad9 confirmed.');
+    } on Object {
+      notes.add('Router DNS settings not readable with this API key - Quad9 nodes hosted by local ISPs may show as a warning.');
+    }
+  }
+
   final verdicts = <TestStatus>[];
   final lines = <String>[];
   for (final ip in seen.keys.take(8)) {
@@ -384,7 +415,12 @@ Future<SecurityTestResult> _dnsLeak(TestEnv env) async {
       g = null;
     }
     final v = classifyResolver(
-        countryCode: g?.countryCode, org: g?.org, expected: env.expected, cfg: env.config, vpnCountries: env.vpnSet);
+        countryCode: g?.countryCode,
+        org: g?.org,
+        expected: env.expected,
+        cfg: env.config,
+        vpnCountries: env.vpnSet,
+        routerDotToQuad9: dotQuad9);
     verdicts.add(v);
     lines.add('${v.name.toUpperCase().padRight(4)} $ip - ${g?.country ?? '?'}${g?.org != null ? ' (${g!.org})' : ''}');
   }

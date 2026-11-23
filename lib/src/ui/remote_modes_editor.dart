@@ -158,6 +158,15 @@ class _RemoteModesEditorState extends State<RemoteModesEditor> {
         if (mode == 'everything') ...[
           const InfoLine('The router must allow this device\'s tunnel address out to the internet through the '
               'house VPN gateway (and its kill switch) - see the guide.'),
+          // v2.2.5 (audit M4): without these, traffic goes out directly
+          // whenever the tunnel is down or the app is stopped.
+          if (Platform.isAndroid)
+            const InfoLine('For a full kill switch, turn on "Always-on VPN" and "Block connections without VPN" '
+                'for Cybervulcan in Android\'s VPN settings. Otherwise traffic goes out directly whenever the '
+                'tunnel is down or the app is stopped.'),
+          if (Platform.isWindows)
+            const InfoLine('If the app or PC stops unexpectedly, traffic goes out directly until the app runs '
+                'again - there is no Windows-wide kill switch.'),
           // v2.2.1: which DNS server the tunnel uses in this mode.
           Padding(
             padding: const EdgeInsets.only(bottom: 12),

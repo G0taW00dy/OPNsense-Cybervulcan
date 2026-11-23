@@ -53,11 +53,12 @@ jobs:
       - run: flutter pub get
       - run: flutter analyze --no-fatal-infos
       - run: flutter test
-      # M7: the resolved versions, to be committed as pubspec.lock.
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: pubspec-lock
-          path: pubspec.lock
+      # M7: the resolved versions (printed, to be committed as pubspec.lock).
+      - name: Resolved package versions
+        run: |
+          echo "----- pubspec.lock -----"
+          cat pubspec.lock
+          echo "----- end pubspec.lock -----"
 
   # Remote access: wireguard-go + gVisor netstack as a C shared library
   # (libcvwg.so per Android ABI, cvwg.dll for Windows), loaded via dart:ffi.

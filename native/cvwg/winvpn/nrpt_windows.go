@@ -4,6 +4,7 @@ package winvpn
 
 import (
 	"net/netip"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
@@ -27,7 +28,11 @@ const (
 	nrptRuleKey = nrptBase + `\{C7B0E1A4-3D55-4F2B-9A61-CB5E0D1F2A77}`
 )
 
+// REG_OPTION_VOLATILE: the key is kept in memory only (gone after a reboot).
+const regOptionVolatile = 0x1
+
 var (
+	procRegCreateKeyExW       = windows.NewLazySystemDLL("advapi32.dll").NewProc("RegCreateKeyExW")
 	dnsapi                    = windows.NewLazySystemDLL("dnsapi.dll")
 	procDnsFlushResolverCache = dnsapi.NewProc("DnsFlushResolverCache")
 )
@@ -37,7 +42,7 @@ func setDNSLock(servers []netip.Addr) error {
 	if len(servers) == 0 {
 		return nil
 	}
-	k, _, err := registry.CreateKey(registry.LOCAL_MACHINE, nrptRuleKey, registry.SET_VALUE)
+	k, err := createVolatileRuleKey()
 	if err != nil {
 		return err
 	}
@@ -67,6 +72,45 @@ func setDNSLock(servers []netip.Addr) error {
 	}
 	applyDNSPolicy()
 	return nil
+}
+
+// createVolatileRuleKey creates the rule key as a volatile key (v2.2.5,
+// audit M3): Windows discards it at the next boot, so a power cut or crash in
+// "everything" mode can no longer leave all DNS pointed at a dead tunnel
+// across reboots. The parent stays a normal key (it is shared with other
+// policies); an older non-volatile rule key is replaced.
+func createVolatileRuleKey() (registry.Key, error) {
+	parent, _, err := registry.CreateKey(registry.LOCAL_MACHINE, nrptBase, registry.CREATE_SUB_KEY)
+	if err != nil {
+		return 0, err
+	}
+	defer parent.Close()
+	_ = registry.DeleteKey(registry.LOCAL_MACHINE, nrptRuleKey)
+	name, err := windows.UTF16PtrFromString(nrptRuleKey[len(nrptBase)+1:])
+	if err != nil {
+		return 0, err
+	}
+	var h windows.Handle
+	var disp uint32
+	r, _, _ := procRegCreateKeyExW.Call(uintptr(parent), uintptr(unsafe.Pointer(name)), 0, 0,
+		regOptionVolatile, uintptr(registry.SET_VALUE), 0,
+		uintptr(unsafe.Pointer(&h)), uintptr(unsafe.Pointer(&disp)))
+	if r != 0 {
+		return 0, windows.Errno(r)
+	}
+	return registry.Key(h), nil
+}
+
+// DNSLockPresent reports whether the "everything" DNS rule exists. Readable
+// without admin rights, so the tray app can offer a repair when no helper
+// is running (v2.2.5).
+func DNSLockPresent() bool {
+	k, err := registry.OpenKey(registry.LOCAL_MACHINE, nrptRuleKey, registry.QUERY_VALUE)
+	if err != nil {
+		return false
+	}
+	k.Close()
+	return true
 }
 
 // clearDNSLock removes the rule (no error when it is not there).

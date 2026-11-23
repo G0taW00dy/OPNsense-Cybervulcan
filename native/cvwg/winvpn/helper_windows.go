@@ -5,14 +5,15 @@ package winvpn
 import (
 	"bufio"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"golang.org/x/sys/windows"
 	"github.com/G0taW00dy/opnsense-cybervulcan/native/cvwg/internal/namedpipe"
+	"golang.org/x/sys/windows"
 )
 
 // How long the helper waits for the tray app to connect (after the UAC
@@ -30,6 +31,9 @@ const (
 // client disconnects (the tray app closed or crashed), removing the adapter
 // first. Returns the process exit code.
 func RunHelper(args []string) int {
+	if len(args) == 1 && args[0] == RepairFlag {
+		return runRepair()
+	}
 	helperLogf("helper starting (%d args)", len(args))
 	// v2.2.1: whatever way the helper ends (including a panic), the DNS lock
 	// must not outlive it - names would stop resolving on the PC.
@@ -72,6 +76,12 @@ func RunHelper(args []string) int {
 	self, err := os.Executable()
 	if err != nil {
 		helperLogf("exit %d: own path: %v", ExitSecurity, err)
+		return ExitSecurity
+	}
+	// v2.2.5 (audit L3): the helper runs with admin rights, so its exe and
+	// DLLs must sit where only admins can change them.
+	if err := checkTrustedLocation(self); err != nil {
+		helperLogf("exit %d: %v", ExitSecurity, err)
 		return ExitSecurity
 	}
 
@@ -243,4 +253,91 @@ func handle(line []byte, m *manager) Response {
 	}
 	st := m.Status()
 	return Response{V: ProtocolVersion, OK: true, Status: &st}
+}
+
+// checkTrustedLocation refuses to run the helper from anywhere but a folder
+// under Program Files (found with the Known Folder API, not environment
+// variables a user can change) that is owned by Administrators, SYSTEM or
+// TrustedInstaller and is not a link.
+func checkTrustedLocation(exe string) error {
+	dir := filepath.Dir(exe)
+	low := strings.ToLower(filepath.Clean(dir)) + `\`
+	under := false
+	for _, id := range []*windows.KNOWNFOLDERID{windows.FOLDERID_ProgramFiles, windows.FOLDERID_ProgramFilesX64, windows.FOLDERID_ProgramFilesX86} {
+		pf, err := windows.KnownFolderPath(id, 0)
+		if err == nil && pf != "" && strings.HasPrefix(low, strings.ToLower(filepath.Clean(pf))+`\`) {
+			under = true
+			break
+		}
+	}
+	if !under {
+		return fmt.Errorf("helper is not installed under Program Files (%s)", dir)
+	}
+	ptr, err := windows.UTF16PtrFromString(dir)
+	if err != nil {
+		return err
+	}
+	attrs, err := windows.GetFileAttributes(ptr)
+	if err != nil {
+		return fmt.Errorf("install folder: %w", err)
+	}
+	if attrs&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+		return fmt.Errorf("install folder is a link")
+	}
+	sd, err := windows.GetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION)
+	if err != nil {
+		return fmt.Errorf("install folder owner: %w", err)
+	}
+	owner, _, err := sd.Owner()
+	if err != nil {
+		return fmt.Errorf("install folder owner: %w", err)
+	}
+	if !trustedOwner(owner) && !isTrustedInstaller(owner) {
+		return fmt.Errorf("install folder is not owned by Administrators, SYSTEM or TrustedInstaller")
+	}
+	return nil
+}
+
+// isTrustedInstaller: NT SERVICE\TrustedInstaller.
+func isTrustedInstaller(sid *windows.SID) bool {
+	return sid != nil && sid.String() == "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464"
+}
+
+// runRepair removes the DNS lock and saved host routes, then exits. Started
+// by the tray app's "Repair DNS" (through the UAC prompt) when a crash or
+// power cut left them behind.
+func runRepair() int {
+	if !windows.GetCurrentProcessToken().IsElevated() {
+		return ExitNotElevated
+	}
+	if self, err := os.Executable(); err != nil || checkTrustedLocation(self) != nil {
+		return ExitSecurity
+	}
+	cleanupStale()
+	helperLogf("repair: DNS lock and saved routes removed")
+	return 0
+}
+
+// RepairStale starts the helper elevated in repair mode and waits for it
+// (the user answers a UAC prompt). Called by the tray app.
+func RepairStale() error {
+	self, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	proc, err := launchElevated(self, RepairFlag)
+	if err != nil {
+		return err
+	}
+	if proc == 0 {
+		return nil
+	}
+	defer windows.CloseHandle(proc)
+	if _, err := windows.WaitForSingleObject(proc, 60*1000); err != nil {
+		return err
+	}
+	if code, ok := exitedCode(proc); ok && code != 0 {
+		return helperExitError(code)
+	}
+	return nil
 }

@@ -26,6 +26,7 @@ import (
 	"errors"
 	"net"
 	"sync"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -93,10 +94,12 @@ func winVpnParse(s string) (winvpn.StartRequest, string, error) {
 func cvvpn_start(reqJSON *C.char) *C.char {
 	r, cfg, err := winVpnParse(C.GoString(reqJSON))
 	if err == nil {
+		waitForStop() // a stop still running in the background finishes first
 		winVpnMu.Lock()
 		winVpnCfg = cfg
 		winVpnMu.Unlock()
 		err = vpnClient.Start(r)
+		resetHelperStatus()
 	}
 	if err != nil {
 		return jsonCString(map[string]string{"error": err.Error()})
@@ -104,14 +107,107 @@ func cvvpn_start(reqJSON *C.char) *C.char {
 	return jsonCString(map[string]bool{"ok": true})
 }
 
+// v2.2.5 (audit M9): the app calls cvvpn_status on its UI thread every few
+// seconds. A status round trip to a hung helper used to freeze the tray app
+// for up to 5 s each time; now the round trip runs in a goroutine and the
+// call waits at most statusWait for it, answering with the last known
+// helper status otherwise.
+const statusWait = 250 * time.Millisecond
+
+var (
+	statusMu      sync.Mutex
+	statusLast    = winvpn.Status{State: winvpn.StateOff}
+	statusPending chan struct{}
+	statusGen     uint64 // bumped by start/stop: older answers are dropped
+	stopRunning   sync.WaitGroup
+)
+
+func refreshHelperStatus() <-chan struct{} {
+	statusMu.Lock()
+	defer statusMu.Unlock()
+	if statusPending != nil {
+		return statusPending
+	}
+	done := make(chan struct{})
+	statusPending = done
+	gen := statusGen
+	go func() {
+		st := vpnClient.Status()
+		statusMu.Lock()
+		if gen == statusGen {
+			statusLast = st
+		}
+		if statusPending == done {
+			statusPending = nil
+		}
+		statusMu.Unlock()
+		close(done)
+	}()
+	return done
+}
+
+// resetHelperStatus drops answers from before a start/stop and takes the
+// client's own state (no round trip while it is starting or stopped).
+func resetHelperStatus() {
+	statusMu.Lock()
+	statusGen++
+	statusPending = nil
+	statusMu.Unlock()
+	refreshHelperStatus()
+}
+
+func waitForStop() { stopRunning.Wait() }
+
 //export cvvpn_status
 func cvvpn_status() *C.char {
-	h := vpnClient.Status()
+	select {
+	case <-refreshHelperStatus():
+	case <-time.After(statusWait):
+	}
+	statusMu.Lock()
+	h := statusLast
+	statusMu.Unlock()
 	return jsonCString(map[string]any{"helper": h, "vpn": json.RawMessage(vpnStatusJSON())})
 }
 
+// cvvpn_stop returns at once; the helper is told to stop in the background
+// (up to 15 s when it is slow) - status shows the result (v2.2.5, M9).
+//
 //export cvvpn_stop
-func cvvpn_stop() { vpnClient.Stop() }
+func cvvpn_stop() {
+	stopRunning.Add(1)
+	statusMu.Lock()
+	statusGen++
+	statusPending = nil
+	statusLast = winvpn.Status{State: winvpn.StateOff}
+	statusMu.Unlock()
+	go func() {
+		defer stopRunning.Done()
+		vpnClient.Stop()
+		resetHelperStatus()
+	}()
+}
+
+// cvvpn_dns_lock_present: 1 when the "everything" DNS rule exists (v2.2.5).
+//
+//export cvvpn_dns_lock_present
+func cvvpn_dns_lock_present() C.int {
+	if winvpn.DNSLockPresent() {
+		return 1
+	}
+	return 0
+}
+
+// cvvpn_repair removes a DNS lock / host routes left by a crash, through the
+// UAC prompt. Returns "" on success, else the reason (v2.2.5).
+//
+//export cvvpn_repair
+func cvvpn_repair() *C.char {
+	if err := winvpn.RepairStale(); err != nil {
+		return C.CString(winvpn.FriendlyError(err))
+	}
+	return C.CString("")
+}
 
 // cvvpn_helper_main is called by the app's runner (windows/runner/main.cpp)
 // instead of starting Flutter when the exe was launched with --vpn-helper.

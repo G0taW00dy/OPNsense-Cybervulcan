@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io' show Platform;
+import 'dart:isolate';
 
 import 'package:ffi/ffi.dart';
 
@@ -265,6 +266,24 @@ class WindowsSystemVpn implements SystemVpn {
   @override
   Future<void> stop() async => _native?.stop();
 
+  /// v2.2.5 (audit M3): true when the "Everything via home" DNS lock is still
+  /// in place although the home link is off (a crash or power cut left it).
+  /// All names then fail to resolve until it is removed.
+  bool get dnsLockLeftBehind {
+    final native = _native;
+    if (native is! _FfiHomeLink) return false;
+    if (homeLinkStatusFromJson(native.status()).running) return false;
+    return native.dnsLockPresent();
+  }
+
+  /// Removes a left-behind DNS lock and routes (UAC prompt). Runs off the UI
+  /// thread; returns null on success, otherwise the reason.
+  Future<String?> repairDns() async {
+    if (_native is! _FfiHomeLink) return 'Not available in this build.';
+    final out = await Isolate.run(_repairInIsolate);
+    return out.isEmpty ? null : out;
+  }
+
   @override
   Future<SystemVpnStatus> status() async {
     final native = _native;
@@ -283,6 +302,22 @@ typedef _VoidD = void Function();
 typedef _FreeC = Void Function(Pointer<Utf8>);
 typedef _FreeD = void Function(Pointer<Utf8>);
 
+typedef _IntFn = Int32 Function();
+typedef _IntD = int Function();
+
+/// Runs cvvpn_repair in a background isolate (it waits for the UAC prompt).
+String _repairInIsolate() {
+  final lib = DynamicLibrary.open('cvwg.dll');
+  final repair = lib.lookupFunction<_StrFn, _StrFn>('cvvpn_repair');
+  final free = lib.lookupFunction<_FreeC, _FreeD>('cvwg_free');
+  final p = repair();
+  try {
+    return p.toDartString();
+  } finally {
+    free(p);
+  }
+}
+
 class _FfiHomeLink implements HomeLinkNative {
   _FfiHomeLink(this._lib)
       : _start = _lib.lookupFunction<_StartFn, _StartFn>('cvvpn_start'),
@@ -291,7 +326,6 @@ class _FfiHomeLink implements HomeLinkNative {
         _free = _lib.lookupFunction<_FreeC, _FreeD>('cvwg_free');
 
   // Kept alive for the lifetime of the process.
-  // ignore: unused_field
   final DynamicLibrary _lib;
   final Pointer<Utf8> Function(Pointer<Utf8>) _start;
   final Pointer<Utf8> Function() _status;
@@ -318,6 +352,8 @@ class _FfiHomeLink implements HomeLinkNative {
 
   @override
   String status() => _take(_status());
+
+  bool dnsLockPresent() => _lib.lookupFunction<_IntFn, _IntD>('cvvpn_dns_lock_present')() == 1;
 
   @override
   void stop() => _stop();
