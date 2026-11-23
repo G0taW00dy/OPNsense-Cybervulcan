@@ -374,8 +374,18 @@ jobs:
           sudo apt-get update -qq && sudo apt-get install -y -qq minisign
           umask 077
           key="$RUNNER_TEMP/update.key"
-          printf '%s\n' "$UPDATE_SIGNING_KEY" | tr -d '\r' > "$key"
           trap 'rm -f "$key"' EXIT
+          # A secret pasted through a browser may lose the comment line or
+          # gain spaces: rebuild the key file from its base64 line (the
+          # longest run of base64 text). The signature is checked against the
+          # public key below, so a wrong key can't slip through.
+          b64="$(printf '%s' "$UPDATE_SIGNING_KEY" | tr -d '\r' | grep -oE '[A-Za-z0-9+/]{100,}={0,2}' | awk 'length > m { m = length; l = $0 } END { print l }')"
+          if [ -z "$b64" ]; then
+            echo "::error::UPDATE_SIGNING_KEY does not contain a minisign secret key (no base64 line found)."
+            exit 1
+          fi
+          printf 'untrusted comment: minisign secret key\n%s\n' "$b64" > "$key"
+          echo "Secret key line: ${#b64} characters"
           for f in dist/*.exe dist/*.apk; do
             minisign -S -s "$key" -m "$f" -t "Cybervulcan $APP_VERSION $(basename "$f")"
             minisign -V -P "$UPDATE_PUBLIC_KEY" -m "$f"
