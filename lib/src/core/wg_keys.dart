@@ -116,3 +116,18 @@ String generateWireGuardPrivateKey([Random? random]) {
   k[31] = (k[31] & 127) | 64;
   return base64.encode(k);
 }
+
+/// v2.1.22: the tunnel instances whose key changed since [seen] (instance
+/// name -> public key). New instances (not in [seen]) don't count - only a
+/// key that was known and is now different (23 Nov: new Proton configs, but
+/// the expiry dates in Settings still showed the old keys' dates).
+List<String> replacedInstanceKeys(Map<String, String> seen, Map<String, String> now) => [
+      for (final e in now.entries)
+        if (e.value.isNotEmpty && (seen[e.key] ?? '').isNotEmpty && seen[e.key] != e.value) e.key,
+    ];
+
+/// The expiry date (yyyy-mm-dd) for a key made on [made]: one year later.
+String keyExpiryFrom(DateTime made) {
+  final d = DateTime(made.year + 1, made.month, made.day);
+  return '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+}

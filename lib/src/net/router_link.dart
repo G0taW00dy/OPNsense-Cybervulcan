@@ -327,6 +327,24 @@ List<RemoteStep> remoteSteps(AppConfig cfg) {
   };
 }
 
+/// How often "Auto" retries WireGuard while it is on Tailscale (v2.1.22).
+const wireGuardRetry = Duration(minutes: 5);
+
+/// Whether an "Auto" check should try the built-in Tailscale route before
+/// WireGuard: only while Tailscale is the route in use, only in "App only"
+/// mode (home devices need WireGuard), and not when WireGuard is due for a
+/// retry.
+bool preferTailscaleFirst(AppConfig cfg,
+    {required bool tailscaleInUse,
+    required bool hasBuiltInStep,
+    required DateTime? lastWireGuardTry,
+    required DateTime now}) {
+  if (!tailscaleInUse || !hasBuiltInStep) return false;
+  if (cfg.mode != 'app') return false;
+  if (lastWireGuardTry == null) return false;
+  return now.difference(lastWireGuardTry) < wireGuardRetry;
+}
+
 /// Destination ("host:port") the built-in Tailscale engine forwards to: the
 /// router's tailnet address when set, else its LAN IP (through the subnet
 /// route the router advertises). Null when neither is known.
@@ -426,6 +444,9 @@ class RouterLink {
 
   bool get _tsHeld => _tsHoldUntil != null && DateTime.now().isBefore(_tsHoldUntil!);
 
+  /// When WireGuard was last attempted (v2.1.22, see [preferTailscaleFirst]).
+  DateTime? _lastWireGuardTry;
+
   /// [background]: the app is not in the foreground (Android): in-app engines
   /// are not started then; the device's own Tailscale app can still be used.
   Future<LinkStatus> check(AppConfig cfg, WireGuardSecrets secrets, {bool background = false}) async {
@@ -448,13 +469,22 @@ class RouterLink {
     // Auto: while the built-in Tailscale route is the one in use, try it
     // first (no WireGuard timeout on every check); WireGuard is tried again
     // as soon as Tailscale stops working.
-    if (status.builtInTailscale && status.connected && tailscaleUp && steps.contains(RemoteStep.tailscaleBuiltIn)) {
+    // v2.1.22: only in "App only" mode, and WireGuard still gets a fresh try
+    // every [wireGuardRetry]. The home-device modes need WireGuard (Tailscale
+    // only reaches the router), so they never stay on Tailscale after one
+    // WireGuard hiccup (e.g. the router restarting its tunnels).
+    if (preferTailscaleFirst(cfg,
+        tailscaleInUse: status.builtInTailscale && status.connected && tailscaleUp,
+        hasBuiltInStep: steps.contains(RemoteStep.tailscaleBuiltIn),
+        lastWireGuardTry: _lastWireGuardTry,
+        now: DateTime.now())) {
       steps = [RemoteStep.tailscaleBuiltIn, ...steps.where((s) => s != RemoteStep.tailscaleBuiltIn)];
     }
     for (final step in steps) {
       final _Attempt a;
       switch (step) {
         case RemoteStep.wireguard:
+          if (!background) _lastWireGuardTry = DateTime.now();
           a = background
               ? const _Attempt.failed('not started in the background', tried: false)
               : await _tryWireGuard(cfg, secrets, target);

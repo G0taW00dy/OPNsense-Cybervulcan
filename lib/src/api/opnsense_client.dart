@@ -254,11 +254,38 @@ class OpnsenseClient {
     const ep = '/api/dnsmasq/leases/search';
     // POST with rowCount -1: a plain GET returns one page only, so some
     // devices were missing from the list (22 Nov: the phone's new lease).
-    final map = _asMap(await _send('POST', ep, body: {'current': 1, 'rowCount': -1}), ep);
+    // v2.1.22: 20 s - over the remote tunnel the first call can be slow.
+    final map = _asMap(
+        await _send('POST', ep, body: {'current': 1, 'rowCount': -1}, timeout: const Duration(seconds: 20)), ep);
     return [
       for (final r in _rows(map))
         if (r is Map) DhcpLease.fromJson(r.cast<String, dynamic>()),
     ];
+  }
+
+  // ------------------------------------------------------- wake on LAN
+
+  /// `GET /api/wol/wol/searchHost` - plugin os-wol, privilege
+  /// `Services: Wake on LAN`. The hosts saved on the router.
+  Future<List<WolHost>> wolHosts() async {
+    const ep = '/api/wol/wol/searchHost';
+    final json = await _send('GET', ep);
+    return [
+      for (final r in _rows(_asMap(json, ep)))
+        if (r is Map && _uuidRe.hasMatch('${r['uuid']}')) WolHost.fromJson(r.cast<String, dynamic>()),
+    ];
+  }
+
+  /// `POST /api/wol/wol/set/{uuid}` - sends the magic packet for a saved host.
+  Future<void> wakeHost(String uuid) async {
+    if (!_uuidRe.hasMatch(uuid)) throw ArgumentError.value(uuid, 'uuid', 'not a UUID');
+    final ep = '/api/wol/wol/set/$uuid';
+    final json = await _send('POST', ep, body: const {});
+    final map = _asMap(json, ep);
+    final st = '${map['status'] ?? map['result'] ?? ''}'.toLowerCase();
+    if (st.contains('fail') || st.contains('error')) {
+      throw OpnsenseException(ApiErrorKind.server, 'Router could not send the wake-up packet', endpoint: ep);
+    }
   }
 
   // ------------------------------------------------------- firewall rules
@@ -568,6 +595,13 @@ class OpnsenseClient {
     };
   }
 
+  /// Raw rows of `/api/interfaces/overview/interfaces_info` (v2.1.22: for
+  /// the house networks the router has - see networksFromInterfaceRows).
+  Future<List<Object?>> interfaceOverview() async {
+    const ep = '/api/interfaces/overview/interfaces_info';
+    return _rows(_asMap(await _send('GET', ep), ep)).toList();
+  }
+
   /// Device -> interface name (igc0 -> "WAN", wg0 -> "WG_MAIN").
   Future<Map<String, String>> interfaceNames() async {
     const ep = '/api/diagnostics/interface/get_interface_names';
@@ -581,6 +615,17 @@ class OpnsenseClient {
     return {
       for (final r in _rows(_asMap(json, ep)))
         if (r is Map && '${r['interface'] ?? ''}'.isNotEmpty) '${r['name'] ?? ''}': '${r['interface']}',
+    };
+  }
+
+  /// Public key of each WireGuard instance by name (v2.1.22: notices a
+  /// replaced tunnel key). Public keys only.
+  Future<Map<String, String>> wgInstanceKeys() async {
+    const ep = '/api/wireguard/server/search_server';
+    final json = await _send('POST', ep, body: const {'current': 1, 'rowCount': -1, 'searchPhrase': ''});
+    return {
+      for (final r in _rows(_asMap(json, ep)))
+        if (r is Map && '${r['name'] ?? ''}'.isNotEmpty) '${r['name']}': '${r['pubkey'] ?? ''}',
     };
   }
 

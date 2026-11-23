@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.1.22 (pre-release)
+- Windows home link fixed: the app asked for more rights on the admin helper's pipe than the pipe grants, so Windows refused every try and the app gave up with "the admin helper did not answer" (23 Nov, laptop away). It now asks for exactly what the pipe allows (vendored pipe dialer with an access setting). If the helper still stops early, the message says why (its exit code, plus the last line of its log in ProgramData\Cybervulcan\vpn-helper.log).
+- Tunnel names follow their server's city on every device about once a minute, not only when the VPN servers card opens (the phone's Status said Tokyo and the laptop's Settings San Jose while both tunnels were in Singapore).
+- Remote access "Auto": the home-device modes always try WireGuard first - Tailscale only reaches the router, so the NAS and PC were unreachable after one WireGuard hiccup made it switch. In "App only" it stays on Tailscale for at most 5 minutes before trying WireGuard again.
+- Android: when another VPN app (the provider's) is set as Always-on VPN, Android refuses Cybervulcan's VPN without asking. The app now says so and has an "Open VPN settings" button. The "VPN permission was not given" warning goes once the VPN is connected.
+- Windows installer: an all-users install removes an old "just me" copy (two copies were installed side by side). An upgrade keeps the earlier choice; the app's message now gives the exact /ALLUSERS command to switch.
+- Devices: a "Wake" button on devices saved in the router's Wake on LAN page (plugin os-wol), and a "Wake on LAN" list for saved devices that are offline. The API user needs "Services: Wake on LAN".
+- Devices: the first load through a freshly started remote tunnel no longer times out (longer wait, one quiet retry).
+- Settings > Network layout: lists networks the router has that are missing from "House networks" (CAMS was), with an Add button.
+- A tunnel key replaced on the router moves that tunnel's expiry date to a year from today, noted under Router changes.
+
 ## 2.1.21 (pre-release)
 - Speed test fallback fixed: DigitalOcean's test hostnames no longer exist and OVH/Linode did not answer from the Proton exit, so the 2.1.20 fallback still read "download 0.0". It now uses Vultr's public test files (Singapore, Tokyo, Sydney, Los Angeles, Frankfurt - checked from the Singapore exit), and the result says when the fallback was used.
 

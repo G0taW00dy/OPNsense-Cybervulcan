@@ -54,6 +54,7 @@ class RemoteModesEditor extends StatefulWidget {
 class _RemoteModesEditorState extends State<RemoteModesEditor> {
   late final TextEditingController _devices = TextEditingController(text: widget.config.homeDevices);
   bool? _permission; // null = not asked in this screen
+  bool _silentRefusal = false; // v2.1.22: another app is the Always-on VPN
 
   HomeLink get _link => widget.controller.homeLink;
 
@@ -67,8 +68,15 @@ class _RemoteModesEditorState extends State<RemoteModesEditor> {
     widget.onChanged(widget.config.copyWith(remoteMode: mode));
     if (mode != 'app' && _link.vpn.isSupported) {
       // Ask for the VPN permission now, while the person is here.
-      final ok = await _link.vpn.prepare();
-      if (mounted) setState(() => _permission = ok);
+      final vpn = _link.vpn;
+      final ok = await vpn.prepare();
+      final silent = !ok && vpn is AndroidSystemVpn && await vpn.lastRefusalSilent();
+      if (mounted) {
+        setState(() {
+          _permission = ok;
+          _silentRefusal = silent;
+        });
+      }
     }
   }
 
@@ -114,7 +122,22 @@ class _RemoteModesEditorState extends State<RemoteModesEditor> {
           WarningLine(_link.vpn.unsupportedReason ?? 'Not available on this device.')
         else ...[
           WarningLine(_slotWarning(cfg.vpnName.trim())),
-          if (_permission == false)
+          // v2.1.22: the warning goes once the VPN is connected (the
+          // permission was given later, e.g. from the Status banner).
+          if (_permission == false && _silentRefusal && _link.state != HomeLinkState.connected) ...[
+            const WarningLine(silentVpnRefusalText),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                icon: const Icon(Icons.settings_outlined),
+                label: const Text('Open VPN settings'),
+                onPressed: () {
+                  final v = _link.vpn;
+                  if (v is AndroidSystemVpn) unawaited(v.openVpnSettings());
+                },
+              ),
+            ),
+          ] else if (_permission == false && _link.state != HomeLinkState.connected)
             const WarningLine('VPN permission was not given - tap the mode again to allow it.'),
         ],
         if (mode == 'everything')

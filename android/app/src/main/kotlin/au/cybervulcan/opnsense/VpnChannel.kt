@@ -19,6 +19,10 @@ import org.json.JSONObject
  *  stop               -> null
  *  status             -> {running, mode, lastError, native: {..Go status..}}
  *  otherVpnActive     -> true when some other app's VPN is connected
+ *  lastRefusalSilent  -> true when the last "prepare" was refused without the
+ *                        consent screen showing (another app is the
+ *                        Always-on VPN) - v2.1.22
+ *  openVpnSettings    -> opens Android's VPN settings
  */
 class VpnChannel(private val activity: Activity, messenger: BinaryMessenger) {
     companion object {
@@ -26,6 +30,8 @@ class VpnChannel(private val activity: Activity, messenger: BinaryMessenger) {
     }
 
     private var pendingPrepare: MethodChannel.Result? = null
+    private var prepareStartedAt = 0L
+    private var lastRefusalSilent = false
 
     init {
         MethodChannel(messenger, "cybervulcan/vpn").setMethodCallHandler { call, result ->
@@ -53,6 +59,15 @@ class VpnChannel(private val activity: Activity, messenger: BinaryMessenger) {
                     result.success(null)
                 }
                 "status" -> result.success(status())
+                "lastRefusalSilent" -> result.success(lastRefusalSilent)
+                "openVpnSettings" -> {
+                    try {
+                        activity.startActivity(Intent(android.provider.Settings.ACTION_VPN_SETTINGS))
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.success(false)
+                    }
+                }
                 "otherVpnActive" -> result.success(otherVpnActive(activity))
                 else -> result.notImplemented()
             }
@@ -62,6 +77,7 @@ class VpnChannel(private val activity: Activity, messenger: BinaryMessenger) {
     private fun prepare(result: MethodChannel.Result) {
         val intent = VpnService.prepare(activity)
         if (intent == null) {
+            lastRefusalSilent = false
             result.success(true)
             return
         }
@@ -70,6 +86,7 @@ class VpnChannel(private val activity: Activity, messenger: BinaryMessenger) {
             return
         }
         pendingPrepare = result
+        prepareStartedAt = android.os.SystemClock.elapsedRealtime()
         try {
             @Suppress("DEPRECATION")
             activity.startActivityForResult(intent, REQUEST_PREPARE)
@@ -84,7 +101,12 @@ class VpnChannel(private val activity: Activity, messenger: BinaryMessenger) {
         if (requestCode != REQUEST_PREPARE) return false
         val r = pendingPrepare ?: return true
         pendingPrepare = null
-        r.success(resultCode == Activity.RESULT_OK)
+        val ok = resultCode == Activity.RESULT_OK
+        // 23 Nov: with another app set as Always-on VPN, Android cancels the
+        // consent screen at once without showing it. A refusal that fast
+        // cannot have been a person tapping Cancel.
+        lastRefusalSilent = !ok && android.os.SystemClock.elapsedRealtime() - prepareStartedAt < 800
+        r.success(ok)
         return true
     }
 

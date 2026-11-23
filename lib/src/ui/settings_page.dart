@@ -23,6 +23,7 @@ import '../platform/app_lock.dart';
 import '../platform/autostart.dart';
 import 'format.dart';
 import 'help_page.dart';
+import 'router_networks_hint.dart';
 import 'remote_access.dart';
 import 'remote_engine_settings.dart';
 import 'servers_page.dart' show knownCities;
@@ -1161,6 +1162,8 @@ class _SettingsPageState extends State<SettingsPage> {
               validator: (v) => networksFromText(v ?? '') == null ? 'Each line: NAME a.b.c.d/nn [description]' : null,
             ),
           ),
+          // v2.1.22: networks the router has that are not listed above.
+          RouterNetworksHint(controller: c, text: _t['networks']!, onAdded: () => setState(() => _dirty = true)),
           _field('killSwitchTag', 'Kill switch tag',
               help: 'The tag the router\'s kill switch rule blocks (NO_WAN_EGRESS). The app checks the rule is '
                   'loaded and counts what it blocked.',

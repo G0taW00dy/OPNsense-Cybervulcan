@@ -1,7 +1,10 @@
 ; Inno Setup script for OPNsense Cybervulcan (Windows tray app).
 ; Built by .github/workflows/build.yml:
 ;   iscc /DAppVersion=1.0.0 /DSourceDir=..\build\windows\x64\runner\Release installer\cybervulcan.iss
-; Per-user install, no admin rights needed.
+; Per-user install by default (no admin rights). "Install for all users"
+; (Program Files) is needed for the home link; it is offered on a fresh install,
+; and an upgrade keeps the earlier choice - run the setup with /ALLUSERS to
+; switch. v2.1.22: an all-users install removes an old per-user copy.
 
 #ifndef AppVersion
   #define AppVersion "1.0.0"
@@ -81,3 +84,24 @@ Filename: "{app}\{#AppExe}"; Flags: nowait runasoriginaluser; Check: WizardSilen
 
 [UninstallRun]
 Filename: "{cmd}"; Parameters: "/C taskkill /IM {#AppExe} /F"; Flags: runhidden; RunOnceId: "KillCybervulcan"
+
+[Code]
+// v2.1.22 (23 Nov): switching to "all users" left the old per-user copy
+// installed beside it (its Start-menu shortcut could open the wrong one).
+// An all-users install now removes that copy first, quietly.
+const
+  PerUserUninstallKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{B6C2A7F1-5E3D-4C1A-9F2B-7D8E0A1C3B55}_is1';
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  Uninst: String;
+  Code: Integer;
+begin
+  Result := '';
+  if IsAdminInstallMode and RegQueryStringValue(HKCU, PerUserUninstallKey, 'UninstallString', Uninst) then
+  begin
+    Uninst := RemoveQuotes(Uninst);
+    if FileExists(Uninst) then
+      Exec(Uninst, '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART', '', SW_HIDE, ewWaitUntilTerminated, Code);
+  end;
+end;

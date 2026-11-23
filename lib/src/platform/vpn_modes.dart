@@ -226,7 +226,36 @@ class AndroidSystemVpn implements SystemVpn {
       return false;
     }
   }
+
+  /// v2.1.22: whether the last [prepare] was refused without the consent
+  /// screen showing - Android does that when another app (the VPN
+  /// provider's) is set as the Always-on VPN.
+  Future<bool> lastRefusalSilent() async {
+    try {
+      return await _ch.invokeMethod<bool>('lastRefusalSilent') ?? false;
+    } on PlatformException {
+      return false;
+    } on MissingPluginException {
+      return false;
+    }
+  }
+
+  /// Opens Android's VPN settings (Settings > Network > VPN).
+  Future<bool> openVpnSettings() async {
+    try {
+      return await _ch.invokeMethod<bool>('openVpnSettings') ?? false;
+    } on PlatformException {
+      return false;
+    } on MissingPluginException {
+      return false;
+    }
+  }
 }
+
+/// Text when Android refused the VPN permission without asking (v2.1.22).
+const silentVpnRefusalText = 'Android refused without asking: another VPN app (probably your VPN provider\'s) '
+    'is set as the "Always-on VPN". Open VPN settings, tap the gear next to that app, turn off "Always-on VPN", '
+    'then come back and tap the mode again.';
 
 /// The platform's [SystemVpn]: Android VpnService, Windows Wintun adapter
 /// (vpn_modes_windows.dart).
@@ -366,7 +395,10 @@ class HomeLink {
   Future<void> retry(AppConfig cfg, LinkStatus? link) async {
     if (!await vpn.prepare()) {
       state = HomeLinkState.error;
-      error = 'VPN permission was not given.';
+      final v = vpn;
+      error = v is AndroidSystemVpn && await v.lastRefusalSilent()
+          ? silentVpnRefusalText
+          : 'VPN permission was not given.';
       return;
     }
     _runningSig = null;

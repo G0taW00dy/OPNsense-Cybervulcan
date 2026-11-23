@@ -19,14 +19,52 @@ class DevicesPage extends StatefulWidget {
 
 class _DevicesPageState extends State<DevicesPage> {
   late Future<List<DhcpLease>> _future;
+  List<WolHost> _wol = const []; // v2.1.22: devices the router can wake
+  final Set<String> _waking = {};
 
   @override
   void initState() {
     super.initState();
     _future = widget.controller.leases();
+    _loadWol();
+  }
+
+  void _loadWol() {
+    widget.controller.wolHosts().then((h) {
+      if (mounted) setState(() => _wol = h);
+    });
+  }
+
+  Future<void> _wake(WolHost h) async {
+    setState(() => _waking.add(h.uuid));
+    final msg = await widget.controller.wake(h);
+    if (!mounted) return;
+    setState(() => _waking.remove(h.uuid));
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  Widget? _trailing(BuildContext context, DhcpLease l) {
+    final until = l.expire != null
+        ? Text('until ${formatClock(l.expire!)}', style: Theme.of(context).textTheme.bodySmall)
+        : null;
+    final host = wolHostFor(l.mac, _wol);
+    if (host == null) return until;
+    final busy = _waking.contains(host.uuid);
+    return Row(mainAxisSize: MainAxisSize.min, children: [
+      ?until,
+      const SizedBox(width: 8),
+      IconButton(
+        tooltip: 'Wake (Wake on LAN)',
+        icon: busy
+            ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+            : const Icon(Icons.power_settings_new),
+        onPressed: busy ? null : () => _wake(host),
+      ),
+    ]);
   }
 
   Future<void> _reload() async {
+    _loadWol();
     setState(() => _future = widget.controller.leases());
     try {
       await _future;
@@ -100,6 +138,32 @@ class _DevicesPageState extends State<DevicesPage> {
                         style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: OpnColors.textSoft)),
                   ]),
                 ),
+              // v2.1.22: saved wake-up hosts that have no lease right now
+              // (a PC switched off for a day drops off the lease list).
+              if (_wol.where((h) => !leases.any((l) => wolHostFor(l.mac, [h]) != null)).toList()
+                  case final asleep when asleep.isNotEmpty) ...[
+                const SizedBox(height: 16),
+                Text('Wake on LAN', style: Theme.of(context).textTheme.titleSmall),
+                Card(
+                  child: Column(children: [
+                    for (final h in asleep)
+                      ListTile(
+                        dense: true,
+                        leading: const Icon(Icons.bedtime_outlined),
+                        title: Text(h.description.isEmpty ? h.mac : h.description),
+                        subtitle: Text('${h.mac}  -  not online'),
+                        trailing: IconButton(
+                          tooltip: 'Wake (Wake on LAN)',
+                          icon: _waking.contains(h.uuid)
+                              ? const SizedBox(
+                                  width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                              : const Icon(Icons.power_settings_new),
+                          onPressed: _waking.contains(h.uuid) ? null : () => _wake(h),
+                        ),
+                      ),
+                  ]),
+                ),
+              ],
               for (final net in order) ...[
                 const SizedBox(height: 16),
                 _NetworkHeader(
@@ -115,10 +179,7 @@ class _DevicesPageState extends State<DevicesPage> {
                         leading: Icon(l.isStatic ? Icons.push_pin_outlined : Icons.devices),
                         title: Text(l.hostname ?? '(no hostname)'),
                         subtitle: Text([l.address, l.mac, if (l.vendor != null) l.vendor!].join('  -  ')),
-                        trailing: l.expire != null
-                            ? Text('until ${formatClock(l.expire!)}',
-                                style: Theme.of(context).textTheme.bodySmall)
-                            : null,
+                        trailing: _trailing(context, l),
                       ),
                   ]),
                 ),

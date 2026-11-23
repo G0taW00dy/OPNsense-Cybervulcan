@@ -5,6 +5,7 @@ import 'dart:io' show Platform;
 import 'package:ffi/ffi.dart';
 
 import '../core/config.dart';
+import '../core/updater.dart' show appVersion;
 import '../net/router_link.dart' show EndpointResolver, resolveEndpoint;
 import 'vpn_modes.dart';
 
@@ -211,8 +212,10 @@ class WindowsSystemVpn implements SystemVpn {
     if (Platform.isWindows && !installedForAllUsers(Platform.resolvedExecutable)) {
       // The elevated helper runs this exe and its DLLs; from a per-user
       // folder any program could swap a DLL and gain admin rights.
-      throw SystemVpnException('The home link needs the app installed for all users (Program Files): run the '
-          'installer again and choose "Install for all users".');
+      // v2.1.22: a re-run keeps the earlier "just me" choice without asking.
+      throw SystemVpnException('The home link needs the app installed for all users (Program Files). '
+          'An upgrade keeps the earlier "just me" choice, so run the setup from a terminal with /ALLUSERS, '
+          'e.g.  Cybervulcan-Setup-$appVersion.exe /ALLUSERS  (the old copy is removed).');
     }
     final String endpoint;
     try {

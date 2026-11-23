@@ -114,6 +114,34 @@ class GatewayStatus {
   String toString() => 'GatewayStatus($name, $health, ${delayMs}ms, $lossPercent%)';
 }
 
+/// A host saved in the router's Wake on LAN page (plugin os-wol), v2.1.22.
+class WolHost {
+  const WolHost({required this.uuid, required this.mac, required this.interface, this.description = ''});
+
+  final String uuid;
+  final String mac;
+  final String interface;
+  final String description;
+
+  factory WolHost.fromJson(Map<String, dynamic> json) => WolHost(
+        uuid: '${json['uuid'] ?? ''}',
+        mac: '${json['mac'] ?? ''}'.trim().toLowerCase().replaceAll('-', ':'),
+        interface: '${json['interface'] ?? ''}',
+        description: '${json['descr'] ?? json['description'] ?? ''}'.trim(),
+      );
+
+  @override
+  String toString() => 'WolHost($description)';
+}
+
+/// The saved wake-up host for [mac], if any (MACs compared case-insensitively,
+/// "-" or ":").
+WolHost? wolHostFor(String mac, List<WolHost> hosts) {
+  final m = mac.trim().toLowerCase().replaceAll('-', ':');
+  if (m.isEmpty) return null;
+  return hosts.where((h) => h.mac == m).firstOrNull;
+}
+
 class DhcpLease {
   const DhcpLease({
     required this.address,

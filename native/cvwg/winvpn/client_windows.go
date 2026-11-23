@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"golang.org/x/sys/windows"
-	"golang.zx2c4.com/wireguard/ipc/namedpipe"
+	"github.com/G0taW00dy/opnsense-cybervulcan/native/cvwg/internal/namedpipe"
 )
 
 // Client is the tray app's side: it starts the elevated helper on demand
@@ -234,18 +234,16 @@ func (c *Client) ensureHelper() error {
 	}
 	pipe, _ := PipeName(nonce)
 
-	verb, _ := windows.UTF16PtrFromString("runas")
-	file, _ := windows.UTF16PtrFromString(exe)
-	params, _ := windows.UTF16PtrFromString(args)
 	// Returns once the user answered the prompt (error if they said no).
-	if err := windows.ShellExecute(0, verb, file, params, nil, windows.SW_HIDE); err != nil {
-		if errors.Is(err, windows.ERROR_CANCELLED) {
-			return errors.New("operation was canceled by the user")
-		}
-		return fmt.Errorf("could not start the admin helper: %w", err)
+	proc, err := launchElevated(exe, args)
+	if err != nil {
+		return err
+	}
+	if proc != 0 {
+		defer windows.CloseHandle(proc)
 	}
 
-	conn, err := dialHelperPipe(pipe)
+	conn, err := dialHelperPipeWatching(pipe, proc)
 	if err != nil {
 		return err
 	}
@@ -259,19 +257,37 @@ func (c *Client) ensureHelper() error {
 // helper starts up. The pipe must be owned by Administrators: a pipe
 // squatted by a normal process under this name is refused.
 func dialHelperPipe(name string) (net.Conn, error) {
+	return dialHelperPipeWatching(name, 0)
+}
+
+// dialHelperPipeWatching is dialHelperPipe that also watches the helper
+// process (proc, may be 0): if it exits first, the error says why.
+func dialHelperPipeWatching(name string, proc windows.Handle) (net.Conn, error) {
 	admins, err := windows.CreateWellKnownSid(windows.WinBuiltinAdministratorsSid)
 	if err != nil {
 		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), dialWait)
 	defer cancel()
+	var lastErr error
 	for {
-		conn, err := (&namedpipe.DialConfig{ExpectedOwner: admins}).DialContext(ctx, name)
+		conn, err := (&namedpipe.DialConfig{ExpectedOwner: admins, Access: PipeClientAccess}).DialContext(ctx, name)
 		if err == nil {
 			return conn, nil
 		}
+		lastErr = err
+		if code, done := exitedCode(proc); done {
+			return nil, helperExitError(code)
+		}
 		if ctx.Err() != nil {
-			return nil, errors.New("the admin helper did not answer")
+			msg := "the admin helper did not answer"
+			if lastErr != nil && !errors.Is(lastErr, context.DeadlineExceeded) {
+				msg += " (" + lastErr.Error() + ")"
+			}
+			if line := lastHelperLogLine(); line != "" {
+				msg += ". Last helper log line: " + line
+			}
+			return nil, errors.New(msg)
 		}
 		time.Sleep(200 * time.Millisecond)
 	}

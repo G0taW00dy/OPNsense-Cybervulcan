@@ -353,6 +353,15 @@ class CybervulcanController extends ChangeNotifier {
       // a change made elsewhere shows up.
       if (shaperPipes != null && ++_shaperPolls % 4 == 0) unawaited(refreshShaperInfo());
 
+      // v2.1.22: tunnel names follow their server's city on every poll
+      // cycle, not only when the VPN servers card loads (23 Nov: the phone's
+      // Status said Tokyo and the laptop's Settings said San Jose while both
+      // tunnels were in Singapore).
+      if (_labelPolls++ % 4 == 0) {
+        unawaited(checkReplacedKeys());
+        if (config.namesFollowCity) unawaited(syncTunnelLabels());
+      }
+
       // Nightly "find best server".
       final lastBest = DateTime.tryParse(prefs.getString(_bestRunKey) ?? '');
       if (nightlyBestDue(config, now.toLocal(), lastBest?.toLocal()) && !serverBusy) {
@@ -1218,6 +1227,58 @@ class CybervulcanController extends ChangeNotifier {
   /// Every pipe as last read, switched on or off (v2.1.13).
   List<ShaperPipe>? allShaperPipes;
   int _shaperPolls = 0;
+  int _labelPolls = 0;
+
+  static const _instanceKeysKey = 'wg_instance_keys_v1';
+
+  /// v2.1.22: when a tunnel's key on the router is replaced (new provider
+  /// config), its expiry date in Settings moves to a year from today and the
+  /// change is noted. Public keys only are stored.
+  Future<void> checkReplacedKeys() async {
+    final c = _client;
+    if (c == null) return;
+    try {
+      final now = await c.wgInstanceKeys();
+      final raw = prefs.getString(_instanceKeysKey);
+      final seen = <String, String>{};
+      if (raw != null) {
+        final j = jsonDecode(raw);
+        if (j is Map) j.forEach((k, v) => seen['$k'] = '$v');
+      }
+      final changed = wg.replacedInstanceKeys(seen, now);
+      await prefs.setString(_instanceKeysKey, jsonEncode(now));
+      if (changed.isEmpty) return;
+      final date = wg.keyExpiryFrom(clock().toLocal());
+      for (final name in changed) {
+        final main = name == config.mainWgInstance;
+        if (!main && name != config.backupWgInstance) continue;
+        config = main ? config.copyWith(mainKeyExpiry: date) : config.copyWith(backupKeyExpiry: date);
+        await journal.add('${main ? 'Main' : 'Backup'} tunnel key was replaced on the router',
+            ok: true, detail: 'key expiry set to $date - check it in Settings if your provider gave another date');
+      }
+      await prefs.saveConfig(config);
+      notifyListeners();
+    } on Object {
+      // Next cycle.
+    }
+  }
+
+  /// Renames the main / backup tunnels after the city of the server each one
+  /// uses now (from the live tunnel peers). Quiet on errors.
+  Future<void> syncTunnelLabels() async {
+    if (_client == null || serverBusy) return;
+    try {
+      final (m, b) = await tunnelPeers();
+      final known = cachedServers();
+      for (final (main, p) in [(true, m), (false, b)]) {
+        final s = p.match(known) ??
+            serverFromTunnelPeer(name: p.name, address: p.address, publicKey: p.publicKey, port: p.port);
+        if (s != null) await _followCity(main, s);
+      }
+    } on Object {
+      // Next cycle.
+    }
+  }
 
   /// The tunnel (VPN pipes) or direct line (CLEAR pipes) limits as last read.
   ({ShaperPipe down, ShaperPipe up})? shaperPath({required bool tunnel}) {
@@ -1602,7 +1663,57 @@ class CybervulcanController extends ChangeNotifier {
   Future<List<DhcpLease>> leases() async {
     final c = _client;
     if (c == null) throw OpnsenseException(ApiErrorKind.network, 'Router not configured');
-    return c.dnsmasqLeases();
+    try {
+      return await c.dnsmasqLeases();
+    } on OpnsenseException catch (e) {
+      // v2.1.22: the first call through a freshly started remote tunnel
+      // can time out (23 Nov, laptop away) - one quiet retry.
+      if (e.kind != ApiErrorKind.network) rethrow;
+      await Future<void>.delayed(const Duration(seconds: 1));
+      return c.dnsmasqLeases();
+    }
+  }
+
+  /// House networks the router has (empty on error) - v2.1.22.
+  Future<List<NamedNetwork>> routerNetworks() async {
+    final c = _client;
+    if (c == null) return const [];
+    try {
+      return networksFromInterfaceRows(await c.interfaceOverview());
+    } on OpnsenseException {
+      return const [];
+    }
+  }
+
+  /// Hosts saved in the router's Wake on LAN page (empty when the plugin is
+  /// missing or the API user may not read it).
+  Future<List<WolHost>> wolHosts() async {
+    final c = _client;
+    if (c == null) return const [];
+    try {
+      return await c.wolHosts();
+    } on OpnsenseException {
+      return const [];
+    }
+  }
+
+  /// Wakes a saved host (v2.1.22: "Wake" on the Devices page). Returns a
+  /// message for the person.
+  Future<String> wake(WolHost host) async {
+    final c = _client;
+    if (c == null) return 'Router not configured.';
+    final name = host.description.isEmpty ? 'the device' : host.description;
+    if (!await authorize('Wake $name')) return 'Not woken.';
+    try {
+      await c.wakeHost(host.uuid);
+      return 'Wake-up sent to $name - give it a minute to start.';
+    } on OpnsenseException catch (e) {
+      if (e.kind == ApiErrorKind.forbidden) {
+        return 'The API user needs the "Services: Wake on LAN" privilege.';
+      }
+      if (e.kind == ApiErrorKind.notFound) return 'The router has no Wake on LAN plugin (os-wol).';
+      return 'Wake-up failed: ${e.message}';
+    }
   }
 
   // ------------------------------------------------------------ settings

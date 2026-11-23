@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"golang.org/x/sys/windows"
-	"golang.zx2c4.com/wireguard/ipc/namedpipe"
+	"github.com/G0taW00dy/opnsense-cybervulcan/native/cvwg/internal/namedpipe"
 )
 
 // How long the helper waits for the tray app to connect (after the UAC
@@ -30,40 +30,56 @@ const (
 // client disconnects (the tray app closed or crashed), removing the adapter
 // first. Returns the process exit code.
 func RunHelper(args []string) int {
+	helperLogf("helper starting (%d args)", len(args))
 	nonce, userSID, err := ParseHelperArgs(args)
 	if err != nil {
-		return 2
+		helperLogf("exit %d: %v", ExitBadArgs, err)
+		return ExitBadArgs
 	}
 	if !windows.GetCurrentProcessToken().IsElevated() {
-		return 3
+		helperLogf("exit %d: not elevated", ExitNotElevated)
+		return ExitNotElevated
+	}
+	if tu, err := windows.GetCurrentProcessToken().GetTokenUser(); err == nil && tu.User.Sid.String() != userSID {
+		// Windows "Administrator protection" (and over-the-shoulder
+		// elevation) runs the helper as a different account. That is
+		// fine: the pipe is still only open to the app's user.
+		helperLogf("note: running as a different account than the app's user")
 	}
 	pipe, _ := PipeName(nonce)
 	pktPipe, _ := PacketPipeName(nonce)
 	sddl, _ := PipeSDDL(userSID)
 	sd, err := windows.SecurityDescriptorFromString(sddl)
 	if err != nil {
-		return 4
+		helperLogf("exit %d: security descriptor: %v", ExitSecurity, err)
+		return ExitSecurity
 	}
 	wantSID, err := windows.StringToSid(userSID)
 	if err != nil {
-		return 4
+		helperLogf("exit %d: user SID: %v", ExitSecurity, err)
+		return ExitSecurity
 	}
 	self, err := os.Executable()
 	if err != nil {
-		return 4
+		helperLogf("exit %d: own path: %v", ExitSecurity, err)
+		return ExitSecurity
 	}
 
 	cleanupStale()
 
 	ln, err := (&namedpipe.ListenConfig{SecurityDescriptor: sd}).Listen(pipe)
 	if err != nil {
-		return 5
+		helperLogf("exit %d: create pipe: %v", ExitPipe, err)
+		return ExitPipe
 	}
+	helperLogf("pipe open, waiting for the app")
 	conn, err := acceptVerified(ln, wantSID, self)
 	ln.Close() // one client only; no further pipe instances
 	if err != nil {
-		return 6
+		helperLogf("exit %d: %v", ExitNoClient, err)
+		return ExitNoClient
 	}
+	helperLogf("app connected")
 	defer conn.Close()
 
 	m := &manager{listenPackets: func() (func() (net.Conn, error), func(), error) {
@@ -99,6 +115,7 @@ func acceptVerified(ln net.Listener, wantSID *windows.SID, self string) (net.Con
 				return nil, r.err
 			}
 			if err := verifyClient(r.c, wantSID, self); err != nil {
+				helperLogf("refused a client: %v", err)
 				r.c.Close()
 				continue
 			}

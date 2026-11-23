@@ -181,10 +181,16 @@ func PipeSDDL(userSID string) (string, error) {
 	if !ValidUserSID(userSID) {
 		return "", errors.New("invalid user SID")
 	}
-	// 0x120083 = READ_CONTROL | SYNCHRONIZE | FILE_READ_DATA |
-	// FILE_WRITE_DATA | FILE_READ_ATTRIBUTES.
-	return "O:BAG:BAD:P(A;;0x120083;;;" + userSID + ")(A;;GA;;;SY)S:(ML;;NW;;;ME)", nil
+	return fmt.Sprintf("O:BAG:BAD:P(A;;0x%X;;;%s)(A;;GA;;;SY)S:(ML;;NW;;;ME)", PipeClientAccess, userSID), nil
 }
+
+// PipeClientAccess is what the user is granted on the helper's pipes AND
+// exactly what the tray app asks for when it opens them (v2.1.22: asking
+// for GENERIC_READ|GENERIC_WRITE, as the stock dialer does, also asks for
+// FILE_CREATE_PIPE_INSTANCE etc. and was refused - "the admin helper did not
+// answer"). 0x120083 = READ_CONTROL | SYNCHRONIZE | FILE_READ_DATA |
+// FILE_WRITE_DATA | FILE_READ_ATTRIBUTES.
+const PipeClientAccess uint32 = 0x120083
 
 // HelperArgs builds the helper's command line arguments (after the exe).
 func HelperArgs(nonce, userSID string) (string, error) {
@@ -211,6 +217,9 @@ func FriendlyError(err error) string {
 	s := err.Error()
 	low := strings.ToLower(s)
 	switch {
+	case strings.Contains(low, "admin helper"):
+		// Already explained (exit reason / pipe error / log line).
+		return s
 	case strings.Contains(low, "cancelled by the user") || strings.Contains(low, "operation was canceled by the user"):
 		return "The admin prompt was cancelled, so the home link was not turned on."
 	case strings.Contains(low, "wintun.dll"):

@@ -87,3 +87,36 @@ bool tableEntryMatches(String entry, String cidrOrIp) {
   final b = Ipv4Subnet.tryParse(cidrOrIp);
   return a != null && b != null && a == b;
 }
+
+/// v2.1.22: the house networks the router itself has (from
+/// `/api/interfaces/overview/interfaces_info` rows), so the app can offer
+/// the ones missing from Settings > Network layout (23 Nov: CAMS was
+/// missing). Skips the WAN, loopback, tunnels (wg*, tailscale*) and
+/// single-address interfaces.
+List<NamedNetwork> networksFromInterfaceRows(List<Object?> rows) {
+  final out = <NamedNetwork>[];
+  for (final r in rows) {
+    if (r is! Map) continue;
+    final id = '${r['identifier'] ?? ''}'.trim();
+    final device = '${r['device'] ?? ''}'.trim().toLowerCase();
+    final name = '${r['description'] ?? ''}'.trim();
+    if (id.isEmpty || id == 'wan' || id.startsWith('lo') || name.isEmpty) continue;
+    if (const ['wg', 'tailscale', 'lo', 'enc', 'pflog', 'pfsync', 'ovpn', 'tun'].any(device.startsWith)) continue;
+    final v4 = r['ipv4'];
+    if (v4 is! List) continue;
+    for (final a in v4) {
+      final addr = a is Map ? '${a['ipaddr'] ?? ''}' : '$a';
+      final s = Ipv4Subnet.tryParse(addr);
+      if (s == null || s.prefix >= 31 || !addr.contains('/')) continue;
+      final cidr = s.toString();
+      if (!out.any((n) => n.cidr == cidr)) out.add(NamedNetwork(name.replaceAll(' ', '_'), cidr));
+    }
+  }
+  return out;
+}
+
+/// Router networks whose subnet is not in [listed].
+List<NamedNetwork> missingNetworks(List<NamedNetwork> router, List<NamedNetwork> listed) => [
+      for (final n in router)
+        if (!listed.any((l) => Ipv4Subnet.tryParse(l.cidr) == Ipv4Subnet.tryParse(n.cidr))) n,
+    ];
