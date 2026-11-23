@@ -3,10 +3,13 @@ import 'package:opnsense_cybervulcan/src/core/config.dart';
 import 'package:opnsense_cybervulcan/src/core/quick_tests.dart';
 import 'package:opnsense_cybervulcan/src/core/remote_modes.dart';
 import 'package:opnsense_cybervulcan/src/core/updater.dart';
+import 'package:opnsense_cybervulcan/src/net/router_link.dart' show endpointCache, endpointWithPort, resolveEndpoint;
+import 'package:opnsense_cybervulcan/src/platform/vpn_modes.dart' show everythingHoldLimit, pauseEverythingNow;
 import 'package:opnsense_cybervulcan/src/ui/remote_modes_editor.dart' show modeUnavailable;
 
 void main() {
   group('Update channel (v2.2.2)', updateChannelTests);
+  group('Windows Everything via home safety (v2.2.3)', v223Tests);
   AppConfig everything({String dns = ''}) => const AppConfig().copyWith(
         remoteEnabled: true,
         remoteMode: 'everything',
@@ -81,5 +84,28 @@ void updateChannelTests() {
   test('test builds setting is saved', () {
     expect(AppConfig.fromJson(const AppConfig(testBuilds: true).toJson()).testBuilds, isTrue);
     expect(const AppConfig().testBuilds, isFalse);
+  });
+}
+
+void v223Tests() {
+  final t0 = DateTime(2026, 11, 23, 22);
+  AppConfig mode(String m) => const AppConfig().copyWith(remoteEnabled: true, remoteMode: m);
+  test('Windows Everything via home pauses after the hold limit', () {
+    expect(pauseEverythingNow(mode('everything'), windows: true, holdingSince: t0, now: t0.add(const Duration(seconds: 30))), isFalse);
+    expect(pauseEverythingNow(mode('everything'), windows: true, holdingSince: t0, now: t0.add(everythingHoldLimit)), isTrue);
+  });
+  test('never on Android or in Home devices mode', () {
+    final late = t0.add(const Duration(hours: 1));
+    expect(pauseEverythingNow(mode('everything'), windows: false, holdingSince: t0, now: late), isFalse);
+    expect(pauseEverythingNow(mode('home'), windows: true, holdingSince: t0, now: late), isFalse);
+  });
+  test('endpoint text', () {
+    expect(endpointWithPort('203.0.113.7', 51830), '203.0.113.7:51830');
+    expect(endpointWithPort('2001:db8::1', 51830), '[2001:db8::1]:51830');
+  });
+  test('last good endpoint is used when a lookup fails', () async {
+    endpointCache['home.invalid'] = '203.0.113.7';
+    expect(await resolveEndpoint('home.invalid', 51830), '203.0.113.7:51830');
+    endpointCache.remove('home.invalid');
   });
 }

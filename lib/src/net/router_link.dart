@@ -286,12 +286,28 @@ Future<String> resolveEndpoint(String host, int port) async {
   if (literal != null) {
     addr = literal;
   } else {
-    final all = await InternetAddress.lookup(h).timeout(const Duration(seconds: 5));
-    if (all.isEmpty) throw SocketException('cannot resolve $h');
-    addr = all.firstWhere((a) => a.type == InternetAddressType.IPv4, orElse: () => all.first);
+    try {
+      final all = await InternetAddress.lookup(h).timeout(const Duration(seconds: 5));
+      if (all.isEmpty) throw SocketException('cannot resolve $h');
+      addr = all.firstWhere((a) => a.type == InternetAddressType.IPv4, orElse: () => all.first);
+    } on Object {
+      // v2.2.3: with "Everything via home" on, every lookup goes through the
+      // tunnel - including this one when the tunnel restarts (23 Nov, Windows:
+      // the mode switch restarted the tunnel, the lookup of the home name
+      // needed that tunnel, and the PC lost DNS). Use the last good answer.
+      final known = endpointCache[h.toLowerCase()];
+      if (known != null) return endpointWithPort(known, port);
+      rethrow;
+    }
+    endpointCache[h.toLowerCase()] = addr.address;
   }
-  return addr.type == InternetAddressType.IPv6 ? '[${addr.address}]:$port' : '${addr.address}:$port';
+  return endpointWithPort(addr.address, port);
 }
+
+/// Last good address per endpoint name (v2.2.3, see [resolveEndpoint]).
+final endpointCache = <String, String>{};
+
+String endpointWithPort(String address, int port) => address.contains(':') ? '[$address]:$port' : '$address:$port';
 
 /// A way to reach the router from away, tried in order by [RouterLink].
 enum RemoteStep {

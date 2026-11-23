@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.2.3 (pre-release)
+- Windows "Everything via home": switching to it restarted the app's tunnel, which looked up the home name again - but with the DNS lock already on, that lookup needed the very tunnel that was restarting, and the PC lost DNS (found in testing 23 Nov). The app now keeps the last good address of the home name and uses it when a lookup fails.
+- Safety: if home can't be reached for 90 s while Windows "Everything via home" is on, the mode pauses (adapter and DNS lock removed, internet goes direct) and comes back by itself when home answers - the PC is never left without DNS.
+
 ## 2.2.2 (pre-release)
 - Update channel: Settings > App & updates > "Test builds" also installs pre-releases (the newest test build), with the same checksum check. Off (default) = stable releases only - for family devices.
 

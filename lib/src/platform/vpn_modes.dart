@@ -252,6 +252,14 @@ class AndroidSystemVpn implements SystemVpn {
   }
 }
 
+/// How long Windows keeps "Everything via home" (and its DNS lock) while the
+/// tunnel can't reach home (v2.2.3).
+const everythingHoldLimit = Duration(seconds: 90);
+
+/// Whether a held Windows "Everything via home" session should pause now.
+bool pauseEverythingNow(AppConfig cfg, {required bool windows, required DateTime holdingSince, required DateTime now}) =>
+    windows && cfg.mode == 'everything' && now.difference(holdingSince) >= everythingHoldLimit;
+
 /// Text when Android refused the VPN permission without asking (v2.1.22).
 const silentVpnRefusalText = 'Android refused without asking: another VPN app (probably your VPN provider\'s) '
     'is set as the "Always-on VPN". Open VPN settings, tap the gear next to that app, turn off "Always-on VPN", '
@@ -314,6 +322,9 @@ class HomeLink {
   int _homeSeen = 0;
   bool _adopted = false;
 
+  /// When a running VPN started being held on failed checks (v2.2.3).
+  DateTime? _holdSince;
+
   Future<void> _syncVpn(AppConfig cfg, LinkStatus? link) async {
     if (!vpn.isSupported) {
       state = HomeLinkState.off;
@@ -331,6 +342,7 @@ class HomeLink {
     _homeSeen = home ? _homeSeen + 1 : 0;
     final action = systemVpnAction(cfg, link, homeSeen: _homeSeen);
     if (action == VpnAction.stop) {
+      _holdSince = null;
       if (_runningSig != null || state != HomeLinkState.off) {
         await vpn.stop();
         _runningSig = null;
@@ -348,7 +360,23 @@ class HomeLink {
         if (state != HomeLinkState.error) state = HomeLinkState.off;
         return;
       }
+      // v2.2.3, Windows "Everything via home": the DNS lock sends every lookup
+      // into the tunnel, so a tunnel that stays away leaves the whole PC
+      // without names (23 Nov). After [everythingHoldLimit] the mode pauses
+      // (adapter and lock removed) and comes back by itself once the router
+      // answers again.
+      _holdSince ??= _clock();
+      if (pauseEverythingNow(cfg, windows: Platform.isWindows, holdingSince: _holdSince!, now: _clock())) {
+        await vpn.stop();
+        _runningSig = null;
+        _holdSince = null;
+        state = HomeLinkState.error;
+        error = 'Paused: home could not be reached for a while, so this PC\'s internet goes direct until it can be '
+            '(it resumes by itself).';
+        return;
+      }
     } else {
+      _holdSince = null;
       final problem = transportProblem(cfg, link!, windows: Platform.isWindows);
       if (problem != null) {
         if (_runningSig != null) {
