@@ -1,5 +1,8 @@
 # Changelog
 
+## 2.2.0
+First stable v2 release: everything in 2.1.x (server switcher and Find best, shaper by exit path with presets and city limits, remote access with WireGuard / Tailscale and the "Home devices only" mode, speed-test fallback, Wake on LAN, router-network hints). Same code as 2.1.24, tested 22-23 Nov on the router, the PC, the phone and the laptop (away on IoT Wi-Fi). "Everything via home" stays Android-only for now.
+
 ## 2.1.24 (pre-release)
 - Wake button fixed: the router's Wake on LAN API wants the interface and MAC (`wake: {interface, mac}` to /api/wol/wol/set) - posting to set/<id> answered `[]` and sent nothing, and the app showed "Expected a JSON object". Checked on the router: the right call answers `{"status":"OK"}`.
 - Tested on the laptop away (IoT Wi-Fi, 23 Nov) with 2.1.23: home link connected, RustDesk to the PC through it, Network layout offered CAMS, city labels Singapore/Singapore.
