@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.1.20 (pre-release)
+- Speed tests (Tests page and shaper Measure): when Cloudflare refuses with HTTP 429 - it did for 15+ minutes on a busy Proton Singapore exit - downloads switch to the fastest of several public test files (DigitalOcean Singapore/Sydney/Bangalore/San Francisco/Frankfurt, OVH) instead of failing with "download 0.0". Measure uses 8 streams again.
+- Shaper rows show the limit only; the dialog explains real speed is 80-95 % of a tunnel limit depending on the server (Tokyo 410 -> 336, Singapore 415 -> 389), not a fixed guess.
+- Server scores say "just now" instead of "0 min ago".
+
 ## 2.1.19 (pre-release)
 - Find best: fixed moving the winner to main when it was the last server tested - it was still on the backup tunnel, the router refused the same key twice ("Public keys should be unique") and the run rolled back (23 Nov, SG#210 at 78 ms vs Tokyo 147). The backup now moves off first; every step re-reads the tunnels.
 - Find best keeps the real server names when it restores or reports a tunnel (a rollback renamed the tunnel peers "Tokyo (37.19.205.155)").

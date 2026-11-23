@@ -11,6 +11,7 @@ import '../api/shaper_models.dart';
 import '../net/router_link.dart';
 import 'config.dart';
 import 'house_state.dart';
+import 'line_speed.dart';
 import 'quick_tests.dart';
 
 /// Pro security tests (v2.0 Tests page).
@@ -667,10 +668,7 @@ Future<SecurityTestResult> _bufferbloat(TestEnv env) async {
       Future.wait([for (var i = 0; i < bufferbloatStreams; i++) one().catchError((Object e) => errors.add('$e'))]);
   final down = await loaded((count, stop) => streams(() async {
         while (!stop()) {
-          final resp = await env.web
-              .send(http.Request('GET', Uri.parse('https://speed.cloudflare.com/__down?bytes=25000000')))
-              .timeout(const Duration(seconds: 10));
-          if (resp.statusCode != 200) throw Exception('download HTTP ${resp.statusCode}');
+          final resp = await openSpeedDownload(env.web);
           await for (final chunk in resp.stream) {
             count(chunk.length);
             if (stop()) break;

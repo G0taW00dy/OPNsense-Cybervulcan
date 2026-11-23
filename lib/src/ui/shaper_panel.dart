@@ -235,8 +235,7 @@ class _ShaperPanelState extends State<ShaperPanel> {
             Text(title, style: t.titleSmall),
             Text(
                 on
-                    ? 'Limit $d / $u Mbit/s - about ${expectedRealMbps(tunnel: tunnel, limit: d)} / '
-                        '${expectedRealMbps(tunnel: tunnel, limit: u)} real'
+                    ? 'Limit $d / $u Mbit/s'
                     : 'Off - no lag control on this path ($d / $u Mbit/s kept for when it\'s on)',
                 style: t.bodySmall?.copyWith(color: on ? null : OpnColors.amber)),
           ]),
@@ -393,8 +392,10 @@ class _ShaperEditDialogState extends State<_ShaperEditDialog> {
               Padding(
                 padding: const EdgeInsets.only(top: 6),
                 child: Text(
-                    'About ${expectedRealMbps(tunnel: widget.tunnel, limit: d)} / '
-                    '${expectedRealMbps(tunnel: widget.tunnel, limit: u)} Mbit/s real speed through these limits.',
+                    widget.tunnel
+                        ? 'Real speed is usually 80-95 % of the limit, depending on the server (23 Nov: Tokyo '
+                            '410 -> 336, Singapore 415 -> 389).'
+                        : 'Real speed is usually about 97 % of the limit.',
                     style: t.bodySmall),
               ),
             const SizedBox(height: 18),

@@ -347,7 +347,9 @@ class _ServersPageState extends State<ServersPage> {
     final r = c.serverScores[s.entryIp];
     if (r == null) return null;
     final age = DateTime.now().difference(DateTime.fromMillisecondsSinceEpoch(r.at * 1000));
-    final ago = age.inMinutes < 60
+    final ago = age.inMinutes < 1
+        ? 'just now'
+        : age.inMinutes < 60
         ? '${age.inMinutes} min ago'
         : age.inHours < 48
             ? '${age.inHours} h ago'

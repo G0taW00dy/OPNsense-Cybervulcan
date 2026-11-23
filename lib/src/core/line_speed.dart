@@ -11,8 +11,63 @@ import 'dart:math';
 
 import 'package:http/http.dart' as http;
 
+/// Cloudflare's speed test sometimes answers 429 (too many requests) for a
+/// busy shared VPN exit - 23 Nov on a Proton Singapore exit for 15+ min.
+/// Then downloads come from the nearest of these big public test files.
+const _fallbackDownloads = [
+  'https://speedtest-sgp1.digitalocean.com/100mb.test',
+  'https://speedtest-syd1.digitalocean.com/100mb.test',
+  'https://speedtest-blr1.digitalocean.com/100mb.test',
+  'https://speedtest-sfo3.digitalocean.com/100mb.test',
+  'https://speedtest-fra1.digitalocean.com/100mb.test',
+  'https://proof.ovh.net/files/100Mb.dat',
+];
+
+DateTime? _cloudflareBlockedUntil;
+String? _fallbackPick;
+
+/// Opens one download stream for a speed test: Cloudflare, or after a 429
+/// the fastest-answering public test file. Throws on other errors.
+Future<http.StreamedResponse> openSpeedDownload(http.Client web) async {
+  final blocked = _cloudflareBlockedUntil;
+  if (blocked == null || DateTime.now().isAfter(blocked)) {
+    final r = await web
+        .send(http.Request('GET', Uri.parse('https://speed.cloudflare.com/__down?bytes=25000000')))
+        .timeout(const Duration(seconds: 10));
+    if (r.statusCode == 200) return r;
+    unawaited(r.stream.drain<void>().catchError((Object _) {}));
+    if (r.statusCode != 429 && r.statusCode != 403) throw Exception('download HTTP ${r.statusCode}');
+    _cloudflareBlockedUntil = DateTime.now().add(const Duration(minutes: 30));
+  }
+  final pick = _fallbackPick ??= await _fastestFallback(web);
+  final r = await web.send(http.Request('GET', Uri.parse(pick))).timeout(const Duration(seconds: 10));
+  if (r.statusCode != 200) {
+    _fallbackPick = null;
+    throw Exception('download HTTP ${r.statusCode} (fallback)');
+  }
+  return r;
+}
+
+Future<String> _fastestFallback(http.Client web) async {
+  final c = Completer<String>();
+  var pending = _fallbackDownloads.length;
+  for (final u in _fallbackDownloads) {
+    final req = http.Request('GET', Uri.parse(u))..headers['Range'] = 'bytes=0-65535';
+    unawaited(web.send(req).timeout(const Duration(seconds: 6)).then((r) async {
+      await r.stream.drain<void>();
+      if ((r.statusCode == 200 || r.statusCode == 206) && !c.isCompleted) c.complete(u);
+    }).catchError((Object _) {}).whenComplete(() {
+      if (--pending == 0 && !c.isCompleted) c.complete(_fallbackDownloads.first);
+    }));
+  }
+  return c.future;
+}
+
+/// True when the last downloads came from a fallback (shown in results).
+bool get speedTestUsedFallback => _cloudflareBlockedUntil != null && DateTime.now().isBefore(_cloudflareBlockedUntil!);
+
 Future<({double down, double up})> measureSpeed(http.Client web,
-    {int streams = 16, Duration each = const Duration(seconds: 12)}) async {
+    {int streams = 8, Duration each = const Duration(seconds: 12)}) async {
   Future<double> run(Future<void> Function(void Function(int) count, bool Function() stop) one) async {
     var bytes = 0;
     final sw = Stopwatch()..start();
@@ -26,10 +81,7 @@ Future<({double down, double up})> measureSpeed(http.Client web,
 
   final down = await run((count, stop) async {
     while (!stop()) {
-      final resp = await web
-          .send(http.Request('GET', Uri.parse('https://speed.cloudflare.com/__down?bytes=25000000')))
-          .timeout(const Duration(seconds: 10));
-      if (resp.statusCode != 200) throw Exception('download HTTP ${resp.statusCode}');
+      final resp = await openSpeedDownload(web);
       await for (final chunk in resp.stream) {
         count(chunk.length);
         if (stop()) break;
