@@ -23,7 +23,7 @@ const _fallbackDownloads = [
   'https://syd-au-ping.vultr.com/vultr.com.100MB.bin',
   'https://lax-ca-us-ping.vultr.com/vultr.com.100MB.bin',
   'https://fra-de-ping.vultr.com/vultr.com.100MB.bin',
-]
+];
 
 DateTime? _cloudflareBlockedUntil;
 String? _fallbackPick;
