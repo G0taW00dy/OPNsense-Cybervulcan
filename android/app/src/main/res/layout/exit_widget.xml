@@ -3,7 +3,10 @@
     android:id="@+id/widget_root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@drawable/widget_background">
+    android:background="@drawable/widget_background"
+    android:clipToOutline="true">
+    <!-- v2.2.9: clipToOutline keeps the mountain art inside the rounded
+         corner (it poked past it on the white card). -->
 
     <ImageView
         android:id="@+id/widget_art"

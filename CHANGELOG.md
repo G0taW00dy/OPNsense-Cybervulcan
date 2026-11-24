@@ -1,7 +1,8 @@
 # Changelog
 
-## 2.2.9 (pre-release)
-- Android home-screen widget follows the phone's theme: a white card with dark text in light mode, the usual dark card in dark mode (Android 12 and newer switch straight away).
+## 2.2.10 (pre-release)
+Includes 2.2.9 (test build, not promoted):
+- Android home-screen widget follows the phone's theme: a white card with dark text in light mode, the usual dark card in dark mode (Android 12 and newer switch straight away). The mountain art stays inside the card's rounded corner.
 
 ## 2.2.8
 - Android widget: tapping it no longer fails with "Null check" (the widget's link was also being opened as an app page that doesn't exist).

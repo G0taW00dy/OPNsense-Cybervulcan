@@ -30,6 +30,11 @@ void main() {
       }
     });
 
+    test('the art is clipped to the rounded card', () {
+      expect(File('android/app/src/main/res/layout/exit_widget.xml').readAsStringSync(),
+          contains('android:clipToOutline="true"'));
+    });
+
     test('status colours come from the colour files', () {
       final k = File('android/app/src/main/kotlin/au/cybervulcan/opnsense/ExitWidgetProvider.kt').readAsStringSync();
       expect(k, contains('R.color.widget_ok'));
