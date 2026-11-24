@@ -240,3 +240,22 @@ enum ReminderKind { turnOff, turnOn }
       ),
   };
 }
+
+/// v2.2.8: after waking a home device from away, how to actually reach it
+/// (24 Nov: Wake on LAN worked from the phone in "App only", but RustDesk to
+/// the PC could not connect - only the app itself goes through the tunnel in
+/// that mode). Null when nothing needs saying.
+String? reachFromHereHint({required AppConfig cfg, required bool remote, String? ip}) {
+  if (!remote) return null;
+  final target = ip == null ? 'its address' : ip;
+  if (cfg.mode == 'app') {
+    return 'To open it from here (remote desktop, file shares), switch Remote access to '
+        '"Home devices" and add $target.';
+  }
+  if (cfg.mode == 'home' && ip != null) {
+    final covered = cfg.homeDeviceCidrs.any((c) => Ipv4Subnet.tryParse(c)?.contains(ip) ?? false);
+    if (!covered) return 'Add $ip to Home devices (Remote access) to reach it from here.';
+  }
+  return null;
+}
+

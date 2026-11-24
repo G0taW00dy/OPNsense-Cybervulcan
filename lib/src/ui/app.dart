@@ -41,8 +41,24 @@ class CybervulcanApp extends StatelessWidget {
         // replaced the whole page tree while a file picker was open).
         builder: (context, child) => LockGate(controller: controller, child: child ?? const SizedBox.shrink()),
         home: HomeShell(controller: controller, updates: updates),
+        // v2.2.8: a route name the app doesn't know (e.g. a widget link) is
+        // ignored instead of failing with "Null check".
+        onUnknownRoute: ignoreUnknownRoute,
       );
 }
+
+/// A route for unknown route names that shows nothing and removes itself.
+Route<void> ignoreUnknownRoute(RouteSettings settings) => PageRouteBuilder<void>(
+      settings: settings,
+      opaque: false,
+      pageBuilder: (context, _, _) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          final nav = Navigator.maybeOf(context);
+          if (nav != null && nav.canPop()) nav.pop();
+        });
+        return const SizedBox.shrink();
+      },
+    );
 
 class HomeShell extends StatefulWidget {
   const HomeShell({super.key, required this.controller, this.updates});

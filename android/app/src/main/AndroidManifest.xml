@@ -38,6 +38,14 @@
               android:name="io.flutter.embedding.android.NormalTheme"
               android:resource="@style/NormalTheme"
               />
+            <!-- v2.2.8: the widget and tile open this activity with a
+                 cybervulcan:// link that home_widget hands to the app itself.
+                 Flutter's own deep linking also pushed it as a page route the
+                 app doesn't have ("Null check" when tapping the widget). -->
+            <meta-data
+              android:name="flutter_deeplinking_enabled"
+              android:value="false"
+              />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>

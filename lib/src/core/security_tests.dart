@@ -13,6 +13,7 @@ import '../net/router_link.dart';
 import 'config.dart';
 import 'house_state.dart';
 import 'line_speed.dart';
+import 'network_map.dart' show NamedNetwork, networkNameFor;
 import 'quick_tests.dart';
 
 /// Pro security tests (v2.0 Tests page).
@@ -71,6 +72,20 @@ class SecurityTestResult {
 }
 
 /// What the tests can use. Everything is optional except config and web.
+/// v2.2.8: bufferbloat advice when the app is not talking to the router
+/// directly. On one of the house networks that can't reach the router (24 Nov:
+/// the laptop on IoT Wi-Fi) it is NOT away from home - the lag is on that
+/// Wi-Fi link or that network's own limit.
+String notDirectlyHomeNote(String? deviceIp, List<NamedNetwork> networks) {
+  final net = deviceIp == null ? null : networkNameFor(deviceIp, networks);
+  if (net != null) {
+    return 'This device is at home on the $net network: the lag is on that Wi-Fi link or that network\'s own '
+        'speed limit, not the house line.';
+  }
+  return 'This device is away from home: the lag is on the network it uses now (e.g. mobile data), not the house '
+      'line - the router\'s shaper can\'t help here.';
+}
+
 class TestEnv {
   TestEnv({
     required this.config,
@@ -786,8 +801,7 @@ Future<SecurityTestResult> _bufferbloat(TestEnv env) async {
   // v2.2.1: away from home the lag is on the network in use (e.g. mobile) -
   // the router's shaper can't help (23 Nov: Sam's phone on ExampleTel 4G).
   final fix = !env.atHome && env.expected == ExpectedPath.unknown
-      ? 'This device is away from home: the lag is on the network it uses now (e.g. mobile data), not the house '
-          'line - the router\'s shaper can\'t help here.'
+      ? notDirectlyHomeNote(env.deviceIp, env.config.networks)
       : shaperAdvice(pipes, env.expected, downMbps: downMbps, upMbps: upMbps, lagDown: addDown > addUp);
   final st = switch (grade) {
     'A+' || 'A' => TestStatus.pass,

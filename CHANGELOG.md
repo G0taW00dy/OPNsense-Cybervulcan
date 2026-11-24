@@ -1,6 +1,9 @@
 # Changelog
 
-## Next (in progress)
+## 2.2.8 (pre-release)
+- Android widget: tapping it no longer fails with "Null check" (the widget's link was also being opened as an app page that doesn't exist).
+- Waking a home device from away in "App only" mode now says how to actually connect to it (switch Remote access to "Home devices" and add its address) - Wake on LAN worked, but remote desktop couldn't reach the PC in that mode. In "Home devices" mode it says when the device's address is missing from the list.
+- Bufferbloat test on a house network that can't reach the router directly (e.g. IoT Wi-Fi) no longer says "this device is away from home"; it points at that Wi-Fi link or that network's own speed limit.
 - Router install line (Help) works in the router's root shell: it was rejected with "Illegal variable name" (csh), and the Windows build checked the wrong SHA-256 (it bundled the script with Windows line endings). Now csh-safe, hashed with Unix line endings, and scripts are always stored with LF.
 
 ## 2.2.7 (pre-release)

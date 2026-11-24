@@ -4,6 +4,7 @@ import '../api/models.dart';
 import '../api/opnsense_client.dart';
 import '../core/controller.dart';
 import '../core/network_map.dart';
+import '../core/remote_modes.dart' show reachFromHereHint;
 import 'format.dart';
 import 'theme.dart';
 
@@ -35,12 +36,18 @@ class _DevicesPageState extends State<DevicesPage> {
     });
   }
 
-  Future<void> _wake(WolHost h) async {
+  Future<void> _wake(WolHost h, {String? ip}) async {
     setState(() => _waking.add(h.uuid));
     final msg = await widget.controller.wake(h);
     if (!mounted) return;
     setState(() => _waking.remove(h.uuid));
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    // v2.2.8: from away in "App only", say how to actually connect to it.
+    final c = widget.controller;
+    final hint = reachFromHereHint(cfg: c.config, remote: c.snapshot.link?.remote ?? false, ip: ip);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(hint == null ? msg : '$msg\n$hint'),
+      duration: Duration(seconds: hint == null ? 4 : 10),
+    ));
   }
 
   Widget? _trailing(BuildContext context, DhcpLease l) {
@@ -58,7 +65,7 @@ class _DevicesPageState extends State<DevicesPage> {
         icon: busy
             ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
             : const Icon(Icons.power_settings_new),
-        onPressed: busy ? null : () => _wake(host),
+        onPressed: busy ? null : () => _wake(host, ip: l.address),
       ),
     ]);
   }
