@@ -1,5 +1,8 @@
 # Changelog
 
+## Next (in progress)
+- Router install line (Help) works in the router's root shell: it was rejected with "Illegal variable name" (csh), and the Windows build checked the wrong SHA-256 (it bundled the script with Windows line endings). Now csh-safe, hashed with Unix line endings, and scripts are always stored with LF.
+
 ## 2.2.7 (pre-release)
 Router hang after a long Find best - found on the router console (24 Nov): the scan itself was calm; the jam started as it ended, when the router's "list service status" calls began to hang and pile up until every web worker was stuck.
 - Find best: one gateway-monitor restart per server tried (re-applying routes already restarts the monitors; the app restarted them a second time).

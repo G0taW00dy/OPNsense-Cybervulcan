@@ -309,13 +309,29 @@ class _RouterInstallCommand extends StatelessWidget {
 }
 
 /// SHA-256 of router/install.sh as bundled with the app.
+/// v2.2.8: hashed with Unix line endings. A Windows build had bundled a
+/// CRLF copy, so the hash never matched the file on GitHub (24 Nov);
+/// .gitattributes now keeps *.sh as LF too.
 Future<String> routerInstallSha256() async =>
-    sha256.convert((await rootBundle.load('router/install.sh')).buffer.asUint8List()).toString();
+    sha256.convert(lfOnly((await rootBundle.load('router/install.sh')).buffer.asUint8List())).toString();
+
+/// [bytes] with every CR-LF turned into LF.
+List<int> lfOnly(List<int> bytes) {
+  final out = <int>[];
+  for (var i = 0; i < bytes.length; i++) {
+    if (bytes[i] == 13 && i + 1 < bytes.length && bytes[i + 1] == 10) continue;
+    out.add(bytes[i]);
+  }
+  return out;
+}
 
 /// The install line: fetch the tagged script, check its hash, run it.
+/// v2.2.8: no \$(...) - the router's root shell is csh, which rejected it
+/// ("Illegal variable name"). FreeBSD's `sha256 -c` compares for us and
+/// fails on a mismatch, which works in csh and sh alike.
 String routerInstallCommand(String repo, String version, String sha) =>
     'fetch -qo /tmp/cvinstall.sh https://raw.githubusercontent.com/$repo/v$version/router/install.sh && '
-    '[ "\$(sha256 -q /tmp/cvinstall.sh)" = "$sha" ] && sh /tmp/cvinstall.sh';
+    'sha256 -q -c $sha /tmp/cvinstall.sh && sh /tmp/cvinstall.sh';
 
 /// A shell command shown in monospace with a Copy button.
 class _CommandBox extends StatelessWidget {

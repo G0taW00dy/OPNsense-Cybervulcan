@@ -210,12 +210,23 @@ void main() {
     test('uses the release tag and checks the bundled SHA-256', () async {
       final sha = await routerInstallSha256();
       expect(sha, matches(RegExp(r'^[0-9a-f]{64}$')));
-      expect(sha, sha256.convert(File('router/install.sh').readAsBytesSync()).toString());
+      expect(sha, sha256.convert(lfOnly(File('router/install.sh').readAsBytesSync())).toString());
       final cmd = routerInstallCommand('owner/repo', '9.9.9', sha);
       expect(cmd, contains('/owner/repo/v9.9.9/router/install.sh'));
       expect(cmd, isNot(contains('/main/')));
-      expect(cmd, contains('sha256 -q /tmp/cvinstall.sh)" = "$sha"'));
-      expect(cmd, contains(r'"$(sha256'));
+      // v2.2.8: csh-safe (the router's root shell) - no \$( ).
+      expect(cmd, contains('sha256 -q -c $sha /tmp/cvinstall.sh && sh /tmp/cvinstall.sh'));
+      expect(cmd, isNot(contains(r'$(')));
+    });
+  });
+
+  group('Router install line hash (v2.2.8)', () {
+    test('CRLF and LF copies of the script give the same hash', () {
+      final lf = 'a\nb\n'.codeUnits;
+      final crlf = 'a\r\nb\r\n'.codeUnits;
+      expect(lfOnly(crlf), lf);
+      expect(lfOnly(lf), lf);
+      expect(lfOnly('x\ry'.codeUnits), 'x\ry'.codeUnits);
     });
   });
 
