@@ -238,7 +238,20 @@ class CybervulcanController extends ChangeNotifier {
 
   void _schedule() {
     _timer?.cancel();
-    _timer = Timer.periodic(currentPollInterval, (_) => unawaited(refresh()));
+    _timer = Timer.periodic(currentPollInterval, (_) => _tick());
+  }
+
+  /// v2.2.6: gap between configuration writes to the router's server list.
+  /// 24 Nov: "Find best" re-added 13 list entries within one second (13
+  /// config saves while the apps were polling) and the router's web GUI and
+  /// API stopped answering until it was rebooted. Tests set it to zero.
+  Duration routerWriteGap = const Duration(milliseconds: 1500);
+
+  /// Most list entries written in one go; the rest follow on the next save.
+  static const maxListWritesPerSync = 20;
+
+  Future<void> _gapBeforeWrite(int done) async {
+    if (done > 0 && routerWriteGap > Duration.zero) await Future<void>.delayed(routerWriteGap);
   }
 
   /// v2.2.5: how often the router is polled while the app is in the
@@ -261,6 +274,14 @@ class CybervulcanController extends ChangeNotifier {
   Future<void> refresh() {
     if (_disposed) return Future.value();
     return _inflight ??= _safePoll().then(_apply).whenComplete(() => _inflight = null);
+  }
+
+  /// Timer tick: skipped while a server switch / Find best is changing the
+  /// tunnels (v2.2.6) - it reads the gateways itself, and every extra API
+  /// call is more load on the router while it saves configuration.
+  void _tick() {
+    if (serverBusy) return;
+    unawaited(refresh());
   }
 
   /// Waits for any in-flight poll, then polls again (after a change).
@@ -595,7 +616,12 @@ class CybervulcanController extends ChangeNotifier {
   Future<void> _syncRouterList(OpnsenseClient c, List<WgPeer> peers, List<ProtonServer> wanted) async {
     final plan = planListSync(peers, wanted);
     final failed = <String>[];
+    // v2.2.6: one write at a time with a gap, and at most
+    // [maxListWritesPerSync] per save, so the router never gets a burst.
+    var writes = 0;
     for (final uuid in plan.delete) {
+      if (writes >= maxListWritesPerSync) break;
+      await _gapBeforeWrite(writes++);
       try {
         await c.deleteWgPeer(uuid);
       } on OpnsenseException catch (e) {
@@ -604,6 +630,8 @@ class CybervulcanController extends ChangeNotifier {
     }
     var added = 0;
     for (final s in plan.add) {
+      if (writes >= maxListWritesPerSync) break;
+      await _gapBeforeWrite(writes++);
       // One rejected entry must not stop the rest.
       try {
         await c.addWgListPeer(name: listPeerName(s), address: s.entryIp, port: s.port, publicKey: s.publicKey);
@@ -780,12 +808,15 @@ class CybervulcanController extends ChangeNotifier {
       serverBusy = false;
       _switcher = null;
       notifyListeners();
-      unawaited(_refreshAfterChange());
       // Candidates tried on the backup (and the servers the tunnels used
       // before) go back into the router list - ADD only: a background save of
       // this device's older copy must never delete what another device added
-      // (review 22 Nov).
-      if (config.serverListOnRouter) unawaited(_addToRouterList([...candidates, ...before]));
+      // (review 22 Nov). v2.2.6: after the status refresh, not alongside it,
+      // and spaced out (see [routerWriteGap]).
+      unawaited(() async {
+        await _refreshAfterChange();
+        if (config.serverListOnRouter) await _addToRouterList([...candidates, ...before]);
+      }());
     }
   }
 

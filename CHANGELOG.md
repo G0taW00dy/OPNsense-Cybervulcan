@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.2.6 (in progress)
+- Find best / server list: changes to the router's server list are written one at a time with a short gap (at most 20 per save) instead of in a burst. On 24 Nov a scan re-added 13 entries within one second and the router's web page and API stopped answering until it was restarted. The re-adding now also waits for the status refresh to finish.
+- Routine status checks pause while a server switch or Find best is running.
+
 ## 2.2.5 (pre-release)
 Security, privacy and battery release (independent code audit, 24 Nov).
 - Updates are signed: every release file has a minisign signature, and the app installs an update only if it verifies against the publisher key built into the app (checked again right before the installer runs). Unsigned releases are refused.
