@@ -1,7 +1,10 @@
 ; Inno Setup script for OPNsense Cybervulcan (Windows tray app).
 ; Built by .github/workflows/build.yml:
 ;   iscc /DAppVersion=1.0.0 /DSourceDir=..\build\windows\x64\runner\Release installer\cybervulcan.iss
-; Per-user install, no admin rights needed.
+; Per-user install by default (no admin rights). "Install for all users"
+; (Program Files) is needed for the home link; it is offered on a fresh install,
+; and an upgrade keeps the earlier choice - run the setup with /ALLUSERS to
+; switch. v2.1.22: an all-users install removes an old per-user copy.
 
 #ifndef AppVersion
   #define AppVersion "1.0.0"
@@ -47,6 +50,17 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "autostart"; Description: "Start Cybervulcan in the tray when I sign in"; GroupDescription: "Startup:"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
+; Home link (remote access modes "home" / "everything"): wintun.dll (official
+; signed Wintun prebuilt, checksum-pinned in CI) must sit next to cvwg.dll and
+; the exe; its licence ships as wintun-LICENSE.txt. Both come with the
+; wildcard below - fail the build if CI didn't put them there.
+#if !FileExists(SourceDir + "\wintun.dll")
+  #error wintun.dll is missing from SourceDir (see the "Fetch Wintun" CI step)
+#endif
+#if !FileExists(SourceDir + "\wintun-LICENSE.txt")
+  #error wintun-LICENSE.txt is missing from SourceDir
+#endif
+
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
@@ -70,3 +84,27 @@ Filename: "{app}\{#AppExe}"; Flags: nowait runasoriginaluser; Check: WizardSilen
 
 [UninstallRun]
 Filename: "{cmd}"; Parameters: "/C taskkill /IM {#AppExe} /F"; Flags: runhidden; RunOnceId: "KillCybervulcan"
+
+[Code]
+// v2.1.22 (23 Nov): switching to "all users" left the old per-user copy
+// installed beside it (its Start-menu shortcut could open the wrong one).
+// An all-users install now removes that copy first, quietly.
+const
+  PerUserUninstallKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{B6C2A7F1-5E3D-4C1A-9F2B-7D8E0A1C3B55}_is1';
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  Uninst: String;
+  Code: Integer;
+begin
+  Result := '';
+  if IsAdminInstallMode and RegQueryStringValue(HKCU, PerUserUninstallKey, 'UninstallString', Uninst) then
+  begin
+    Uninst := RemoveQuotes(Uninst);
+    // v2.2.5 (audit M2): the per-user uninstaller and its registry entry can
+    // be changed by any program running as the user, so it runs with the
+    // user's own rights - never with this installer's admin rights.
+    if FileExists(Uninst) then
+      ExecAsOriginalUser(Uninst, '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART', '', SW_HIDE, ewWaitUntilTerminated, Code);
+  end;
+end;

@@ -1,0 +1,215 @@
+import 'dart:async';
+import 'dart:io';
+
+import 'package:flutter/material.dart';
+
+import '../core/config.dart';
+import '../core/controller.dart';
+import '../core/remote_modes.dart';
+import '../platform/vpn_modes.dart';
+import 'settings_page.dart' show HelpButton, InfoLine, WarningLine;
+
+const _modesHelp = 'App only (default): only Cybervulcan talks to the router. Nothing else on this device changes '
+    'and your VPN app can stay on.\n\n'
+    'Home devices only: away from home, the addresses you list (for example the NAS: Synology Drive, Photos, '
+    'file sharing) are reachable as if you were at home. Everything else goes the normal way.\n\n'
+    'Everything via home: away from home, all traffic of this device goes to the house and leaves through the '
+    'house\'s VPN tunnels (and its kill switch), DNS included. IPv6 is blocked so it can\'t leak around the house.\n\n'
+    'Both VPN modes switch on by themselves when you are away and remote access is connected, and off again when '
+    'you are home. They use the device\'s one VPN slot.';
+
+const _shortModeLabels = {'app': 'App only', 'home': 'Home devices', 'everything': 'Everything'};
+
+const _dnsHelp = 'Where this device looks up names while "Everything via home" is on. Every lookup is sent '
+    'through the tunnel to this server, whatever server an app asks.\n\n'
+    'Empty: the router (its own resolver - with encrypted DNS it leaves through the house line).\n'
+    '10.2.0.1: Proton\'s DNS inside the house tunnels - the same as devices on the house VPN network. The router '
+    'must allow the remote tunnel to reach it through the VPN gateway (see the guide).';
+
+const _devicesHelp = 'IPv4 addresses or subnets at home that this device should reach while away, separated by '
+    'commas - for example 10.10.10.5 for the NAS, or 10.10.10.0/24 for the whole management network. The router '
+    'itself is always included.\n\n'
+    'The router has to let this device\'s tunnel address reach them (firewall rule on the WireGuard interface).\n\n'
+    'Avoid subnets that are also common on other Wi-Fi networks (192.168.0.0/24, 192.168.1.0/24): '
+    'while connected, those addresses would go home instead of to the local network.';
+
+String _slotWarning(String vpnName) => Platform.isAndroid
+    ? 'Uses the phone\'s VPN slot: Android runs one VPN app at a time, so ${vpnName.isEmpty ? 'your VPN app' : 'the $vpnName app'} '
+        'must be off while this is connected (it turns off by itself when this starts). To keep apps from '
+        'going around the VPN, use Android Settings > Network > VPN > Cybervulcan > "Always-on VPN" and '
+        '"Block connections without VPN".'
+    : Platform.isWindows
+        // v2.1 Windows home link (vpn_modes_windows.dart).
+        ? 'Each time this switches on, Windows asks for admin rights (UAC prompt) to add the "Cybervulcan" '
+            'network adapter; it is removed again when this switches off or the app closes. A separate VPN app '
+            'should be off while this is connected. The router\'s own pages stay reachable only through this app.'
+        : 'Uses this computer\'s VPN slot: a separate VPN app should be off while this is connected.';
+
+/// "What it carries" for remote access: App only / Home devices only /
+/// Everything via home, plus the home-device list. Platform neutral: the
+/// platform part is [SystemVpn] (controller.homeLink.vpn).
+class RemoteModesEditor extends StatefulWidget {
+  const RemoteModesEditor({super.key, required this.controller, required this.config, required this.onChanged});
+
+  final CybervulcanController controller;
+  final AppConfig config;
+  final ValueChanged<AppConfig> onChanged;
+
+  @override
+  State<RemoteModesEditor> createState() => _RemoteModesEditorState();
+}
+
+class _RemoteModesEditorState extends State<RemoteModesEditor> {
+  late final TextEditingController _devices = TextEditingController(text: widget.config.homeDevices);
+  late final TextEditingController _dns = TextEditingController(text: widget.config.everythingDns);
+  bool? _permission; // null = not asked in this screen
+  bool _silentRefusal = false; // v2.1.22: another app is the Always-on VPN
+
+  HomeLink get _link => widget.controller.homeLink;
+
+  @override
+  void dispose() {
+    _devices.dispose();
+    _dns.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pick(String mode) async {
+    widget.onChanged(widget.config.copyWith(remoteMode: mode));
+    if (mode != 'app' && _link.vpn.isSupported) {
+      // Ask for the VPN permission now, while the person is here.
+      final vpn = _link.vpn;
+      final ok = await vpn.prepare();
+      final silent = !ok && vpn is AndroidSystemVpn && await vpn.lastRefusalSilent();
+      if (mounted) {
+        setState(() {
+          _permission = ok;
+          _silentRefusal = silent;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cfg = widget.config;
+    final mode = cfg.mode;
+    final t = Theme.of(context).textTheme;
+    final status = _link.describe();
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      const SizedBox(height: 8),
+      Row(children: [
+        Text('What it carries', style: t.titleSmall),
+        const HelpButton(title: 'What remote access carries', text: _modesHelp, small: true),
+      ]),
+      const SizedBox(height: 4),
+      SegmentedButton<String>(
+        segments: [
+          for (final e in remoteModeLabels.entries)
+            ButtonSegment(
+                value: e.key,
+                // v2.2.1: short labels - "Everything via home" wrapped mid-word on a phone.
+                label: Text(_shortModeLabels[e.key] ?? e.value, textAlign: TextAlign.center),
+                tooltip: e.value,
+                enabled: modeUnavailable(cfg, e.key) == null || e.key == mode),
+        ],
+        selected: {mode},
+        onSelectionChanged: (v) => unawaited(_pick(v.first)),
+      ),
+      const SizedBox(height: 12),
+      if (mode == 'home')
+        Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: TextFormField(
+            controller: _devices,
+            decoration: const InputDecoration(
+              labelText: 'Home devices',
+              hintText: '10.10.10.5, 10.10.10.0/24',
+              suffixIcon: HelpButton(title: 'Home devices', text: _devicesHelp),
+            ),
+            autovalidateMode: AutovalidateMode.onUserInteraction,
+            validator: (v) => homeDevicesError(v ?? '', required: true),
+            onChanged: (v) => widget.onChanged(widget.config.copyWith(homeDevices: v.trim())),
+          ),
+        ),
+      if (mode != 'app') ...[
+        if (!_link.vpn.isSupported)
+          WarningLine(_link.vpn.unsupportedReason ?? 'Not available on this device.')
+        else ...[
+          WarningLine(_slotWarning(cfg.vpnName.trim())),
+          // v2.1.22: the warning goes once the VPN is connected (the
+          // permission was given later, e.g. from the Status banner).
+          if (_permission == false && _silentRefusal && _link.state != HomeLinkState.connected) ...[
+            const WarningLine(silentVpnRefusalText),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                icon: const Icon(Icons.settings_outlined),
+                label: const Text('Open VPN settings'),
+                onPressed: () {
+                  final v = _link.vpn;
+                  if (v is AndroidSystemVpn) unawaited(v.openVpnSettings());
+                },
+              ),
+            ),
+          ] else if (_permission == false && _link.state != HomeLinkState.connected)
+            const WarningLine('VPN permission was not given - tap the mode again to allow it.'),
+        ],
+        if (mode == 'everything') ...[
+          const InfoLine('The router must allow this device\'s tunnel address out to the internet through the '
+              'house VPN gateway (and its kill switch) - see the guide.'),
+          // v2.2.5 (audit M4): without these, traffic goes out directly
+          // whenever the tunnel is down or the app is stopped.
+          if (Platform.isAndroid)
+            const InfoLine('For a full kill switch, turn on "Always-on VPN" and "Block connections without VPN" '
+                'for Cybervulcan in Android\'s VPN settings. Otherwise traffic goes out directly whenever the '
+                'tunnel is down or the app is stopped.'),
+          if (Platform.isWindows)
+            const InfoLine('If the app or PC stops unexpectedly, traffic goes out directly until the app runs '
+                'again - there is no Windows-wide kill switch.'),
+          // v2.2.1: which DNS server the tunnel uses in this mode.
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: TextFormField(
+              controller: _dns,
+              decoration: const InputDecoration(
+                labelText: 'DNS server (optional)',
+                hintText: 'Empty = the router; 10.2.0.1 = Proton',
+                suffixIcon: HelpButton(title: 'DNS for Everything via home', text: _dnsHelp),
+              ),
+              autovalidateMode: AutovalidateMode.onUserInteraction,
+              validator: (v) => everythingDnsError(v ?? ''),
+              onChanged: (v) => widget.onChanged(widget.config.copyWith(everythingDns: v.trim())),
+            ),
+          ),
+        ],
+        for (final p in remoteModeProblems(cfg)) WarningLine(p),
+        if (modeUnavailable(cfg, mode) case final why?) WarningLine(why),
+        if (status != null)
+          Row(children: [
+            Expanded(child: InfoLine(status)),
+            if (_link.state == HomeLinkState.error)
+              TextButton(
+                onPressed: () async {
+                  await _link.retry(widget.controller.config, widget.controller.snapshot.link);
+                  if (mounted) setState(() {});
+                },
+                child: const Text('Try again'),
+              ),
+          ]),
+      ],
+    ]);
+  }
+}
+
+/// Why [mode] can't run with these settings on this platform (v2.1.2: the
+/// review fenced these off; the UI now says so up front), or null.
+String? modeUnavailable(AppConfig cfg, String mode, {bool? windows}) {
+  final win = windows ?? Platform.isWindows;
+  if (mode == 'app') return null;
+  if (win && cfg.transport == 'tailscale') return 'On Windows the home link works over WireGuard only for now.';
+  if (mode == 'everything' && cfg.transport == 'tailscale') {
+    return '"Everything via home" needs the WireGuard engine for now (Tailscale exit node not supported yet).';
+  }
+  return null;
+}

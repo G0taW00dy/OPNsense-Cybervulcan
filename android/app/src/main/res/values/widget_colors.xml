@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Home-screen widget, light mode (v2.2.9): white card, dark text; the
+     status colours are deeper so they stay readable on white. Dark mode:
+     values-night/widget_colors.xml. -->
+<resources>
+    <color name="widget_bg_start">#F7FFFFFF</color>
+    <color name="widget_bg_end">#F7EAF0FA</color>
+    <color name="widget_edge">#333A7BD5</color>
+    <color name="widget_title">#FF111827</color>
+    <color name="widget_detail">#FF4B5563</color>
+    <color name="widget_muted">#FF6B7280</color>
+    <color name="widget_icon">#B3111827</color>
+    <color name="widget_button_fill">#1A7C3AED</color>
+    <color name="widget_button_edge">#997C3AED</color>
+    <color name="widget_button_text">#FF4C1D95</color>
+    <color name="widget_art_peak">#FFDCE3F1</color>
+    <color name="widget_art_line">#CCE0862E</color>
+    <color name="widget_art_node">#FFE0862E</color>
+    <color name="widget_art_live_line">#E61E9E57</color>
+    <color name="widget_art_live_node">#FF1E9E57</color>
+    <color name="widget_ok">#FF1E9E57</color>
+    <color name="widget_warning">#FFC27A06</color>
+    <color name="widget_problem">#FFDC3E42</color>
+    <color name="widget_bypass">#FF7C3AED</color>
+    <color name="widget_unknown">#FF6B7280</color>
+</resources>

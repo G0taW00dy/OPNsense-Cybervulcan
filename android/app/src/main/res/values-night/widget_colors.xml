@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Home-screen widget, dark mode (v2.2.9: the look it always had). -->
+<resources>
+    <color name="widget_bg_start">#F20B0E17</color>
+    <color name="widget_bg_end">#F21A2140</color>
+    <color name="widget_edge">#405CE1E6</color>
+    <color name="widget_title">#FFE8ECF5</color>
+    <color name="widget_detail">#FFB3BBCD</color>
+    <color name="widget_muted">#FF9AA3B8</color>
+    <color name="widget_icon">#CCFFFFFF</color>
+    <color name="widget_button_fill">#22B794F4</color>
+    <color name="widget_button_edge">#99B794F4</color>
+    <color name="widget_button_text">#FFE8ECF5</color>
+    <color name="widget_art_peak">#FF1E2748</color>
+    <color name="widget_art_line">#CCFFD08A</color>
+    <color name="widget_art_node">#FFFFD08A</color>
+    <color name="widget_art_live_line">#E62ECC71</color>
+    <color name="widget_art_live_node">#FF2ECC71</color>
+    <color name="widget_ok">#FF2ECC71</color>
+    <color name="widget_warning">#FFF5A623</color>
+    <color name="widget_problem">#FFFF6B6F</color>
+    <color name="widget_bypass">#FFB794F4</color>
+    <color name="widget_unknown">#FF8A8F98</color>
+</resources>

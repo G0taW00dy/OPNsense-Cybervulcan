@@ -19,6 +19,16 @@ const appVersion = String.fromEnvironment('APP_VERSION', defaultValue: '1.0.1');
 const updateRepo =
     String.fromEnvironment('UPDATE_REPO', defaultValue: 'G0taW00dy/OPNsense-Cybervulcan');
 
+/// v2.2.5: the publisher's minisign public key. Every update is checked
+/// against it before it is installed (the release pipeline signs each file
+/// with the matching private key, kept only in the repository's secrets).
+/// Builds from a fork set their own with `--dart-define=UPDATE_PUBLIC_KEY=...`.
+const updatePublicKey = String.fromEnvironment('UPDATE_PUBLIC_KEY',
+    defaultValue: 'RWQYKjXHIYJR9eM++raYyQ7jSsxbxcslD0OKlgL2Y7VTxzuGZOOtThsG');
+
+/// Checks a downloaded file against a .minisig text; null when valid.
+typedef SignatureVerifier = String? Function(String path, String minisig);
+
 enum UpdateTarget { windows, android }
 
 /// Compares dotted versions numerically (`1.10.0` > `1.9.2`). A leading `v`,
@@ -41,10 +51,13 @@ int compareVersions(String a, String b) {
 }
 
 class ReleaseAsset {
-  const ReleaseAsset({required this.name, required this.url, this.sha256});
+  const ReleaseAsset({required this.name, required this.url, this.sha256, this.signatureUrl});
 
   final String name;
   final Uri url;
+
+  /// v2.2.5: the matching `<name>.minisig` asset, when the release has one.
+  final Uri? signatureUrl;
 
   /// Lower-case hex SHA-256 from GitHub's asset `digest`, when present.
   final String? sha256;
@@ -65,10 +78,10 @@ class ReleaseInfo {
   final ReleaseAsset? asset;
   final String notes;
 
-  /// Parses a GitHub `releases/latest` response. Returns null for drafts,
-  /// pre-releases or malformed data.
-  static ReleaseInfo? fromGitHub(Map<String, dynamic> j, UpdateTarget target) {
-    if (j['draft'] == true || j['prerelease'] == true) return null;
+  /// Parses a GitHub release. Returns null for drafts, pre-releases (unless
+  /// [allowPrerelease], v2.2.2 test builds) or malformed data.
+  static ReleaseInfo? fromGitHub(Map<String, dynamic> j, UpdateTarget target, {bool allowPrerelease = false}) {
+    if (j['draft'] == true || (j['prerelease'] == true && !allowPrerelease)) return null;
     final tag = j['tag_name'];
     final page = Uri.tryParse('${j['html_url'] ?? ''}');
     if (tag is! String || tag.isEmpty || page == null || !_isGitHub(page)) return null;
@@ -76,6 +89,14 @@ class ReleaseInfo {
     ReleaseAsset? asset;
     final assets = j['assets'];
     if (assets is List) {
+      final sigs = <String, Uri>{};
+      for (final a in assets.whereType<Map<String, dynamic>>()) {
+        final name = a['name'];
+        final url = Uri.tryParse('${a['browser_download_url'] ?? ''}');
+        if (name is String && name.toLowerCase().endsWith('.minisig') && url != null && _isGitHub(url)) {
+          sigs[name.substring(0, name.length - '.minisig'.length)] = url;
+        }
+      }
       for (final a in assets.whereType<Map<String, dynamic>>()) {
         final name = a['name'];
         final url = Uri.tryParse('${a['browser_download_url'] ?? ''}');
@@ -86,13 +107,25 @@ class ReleaseInfo {
         final sha = digest is String && digest.startsWith('sha256:')
             ? digest.substring(7).toLowerCase()
             : null;
-        asset = ReleaseAsset(name: name, url: url, sha256: sha);
+        asset = ReleaseAsset(name: name, url: url, sha256: sha, signatureUrl: sigs[name]);
         break;
       }
     }
     final version = tag.startsWith('v') || tag.startsWith('V') ? tag.substring(1) : tag;
     return ReleaseInfo(version: version, pageUrl: page, asset: asset, notes: '${j['body'] ?? ''}');
   }
+}
+
+/// v2.2.2: the newest release in a GitHub `releases` list that has this
+/// platform's file (pre-releases included when [allowPrerelease]).
+ReleaseInfo? newestRelease(List<Object?> releases, UpdateTarget target, {required bool allowPrerelease}) {
+  ReleaseInfo? best;
+  for (final r in releases.whereType<Map<String, dynamic>>()) {
+    final info = ReleaseInfo.fromGitHub(r, target, allowPrerelease: allowPrerelease);
+    if (info == null || info.asset == null) continue;
+    if (best == null || compareVersions(info.version, best.version) > 0) best = info;
+  }
+  return best;
 }
 
 bool _isGitHub(Uri u) => u.scheme == 'https' && (u.host == 'github.com' || u.host.endsWith('.github.com'));
@@ -114,16 +147,28 @@ class UpdateService extends ChangeNotifier {
     this.currentVersion = appVersion,
     this.checkEvery = const Duration(hours: 12),
     bool Function()? autoCheck,
+    bool Function()? testBuilds,
+    this.verifier,
+    this.publicKey = updatePublicKey,
   })  : _http = client ?? http.Client(),
-        _autoCheck = autoCheck ?? (() => true);
+        _autoCheck = autoCheck ?? (() => true),
+        _testBuilds = testBuilds ?? (() => false);
 
   final bool Function() _autoCheck;
+
+  /// v2.2.2: Settings > "Test builds" - pre-releases count too.
+  final bool Function() _testBuilds;
 
   final UpdateTarget target;
   final String repo;
   final String currentVersion;
   final Duration checkEvery;
   final http.Client _http;
+
+  /// v2.2.5: checks the publisher's signature (the native library on
+  /// Windows/Android). Without one, updates are refused (fail closed).
+  final SignatureVerifier? verifier;
+  final String publicKey;
 
   ReleaseInfo? available;
   bool checking = false;
@@ -159,8 +204,11 @@ class UpdateService extends ChangeNotifier {
     error = null;
     notifyListeners();
     try {
+      final test = _testBuilds();
       final res = await _http.get(
-        Uri.https('api.github.com', '/repos/$repo/releases/latest'),
+        test
+            ? Uri.https('api.github.com', '/repos/$repo/releases', {'per_page': '15'})
+            : Uri.https('api.github.com', '/repos/$repo/releases/latest'),
         headers: {
           'Accept': 'application/vnd.github+json',
           'User-Agent': 'Cybervulcan/$currentVersion',
@@ -174,7 +222,10 @@ class UpdateService extends ChangeNotifier {
       if (res.statusCode != 200) {
         throw UpdateException('GitHub answered ${res.statusCode}');
       }
-      final info = ReleaseInfo.fromGitHub(jsonDecode(res.body) as Map<String, dynamic>, target);
+      final body = jsonDecode(res.body);
+      final info = test
+          ? (body is List ? newestRelease(body, target, allowPrerelease: true) : null)
+          : ReleaseInfo.fromGitHub(body as Map<String, dynamic>, target);
       available = info != null && compareVersions(info.version, currentVersion) > 0 ? info : null;
       final a = available;
       if (a != null && a.version != _announced) {
@@ -232,10 +283,20 @@ class UpdateService extends ChangeNotifier {
   }
 
   /// Downloads the installer/APK (to a new temp folder, or into [into] after
-  /// emptying it), checks its SHA-256 against GitHub's digest and returns it.
+  /// emptying it), checks its SHA-256 against GitHub's digest and the
+  /// publisher's signature (v2.2.5), and returns it.
   Future<File> downloadInstaller(ReleaseInfo r, {Directory? into}) async {
     final asset = r.asset;
     if (asset == null) throw UpdateException('This release has no installer attached.');
+    final sigUrl = asset.signatureUrl;
+    final verify = verifier;
+    if (sigUrl == null) {
+      throw UpdateException('This release is not signed by the publisher - not installing. '
+          'Download it manually from the release page.');
+    }
+    if (verify == null) {
+      throw UpdateException('Signature checking is not available in this build - not installing.');
+    }
     // Fail closed: never run an installer whose checksum cannot be checked.
     final want = asset.sha256;
     if (want == null || !RegExp(r'^[0-9a-f]{64}$').hasMatch(want)) {
@@ -280,6 +341,17 @@ class UpdateService extends ChangeNotifier {
         await file.delete();
         throw UpdateException('Downloaded installer failed its checksum check - not installing.');
       }
+      final sigRes = await _http.get(sigUrl).timeout(const Duration(seconds: 30));
+      if (sigRes.statusCode != 200 || sigRes.bodyBytes.length > 4096) {
+        await file.delete();
+        throw UpdateException('Could not download the update signature - not installing.');
+      }
+      final problem = verify(file.path, utf8.decode(sigRes.bodyBytes, allowMalformed: true));
+      if (problem != null) {
+        await file.delete();
+        throw UpdateException('The update is not signed by the publisher ($problem) - not installing.');
+      }
+      _signature = utf8.decode(sigRes.bodyBytes, allowMalformed: true);
       return file;
     } finally {
       downloadProgress = null;
@@ -291,6 +363,12 @@ class UpdateService extends ChangeNotifier {
   /// app has exited and released its single-instance mutex), then calls
   /// [quitApp]. The installer relaunches the app when it finishes.
   Future<void> runInstallerAndQuit(File installer, Future<void> Function() quitApp) async {
+    // L4: check the file again right before it runs (nothing swapped it
+    // since the download).
+    final sig = _signature, verify = verifier;
+    if (sig == null || verify == null || verify(installer.path, sig) != null) {
+      throw UpdateException('The installer changed after it was checked - not installing.');
+    }
     // Refuse paths that cmd.exe would reinterpret inside a batch file
     // (% expansion, quotes) or mangle (non-ASCII: batch files are read in the
     // OEM code page).
@@ -311,6 +389,8 @@ class UpdateService extends ChangeNotifier {
         mode: ProcessStartMode.detached, workingDirectory: installer.parent.path);
     await quitApp();
   }
+
+  String? _signature;
 
   @override
   void dispose() {

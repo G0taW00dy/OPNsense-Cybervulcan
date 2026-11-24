@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Cybervulcan glass card: dark: ink to navy with a cyan edge; light (v2.2.9): white to pale blue - colours in values/ and values-night/widget_colors.xml. -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
-    <solid android:color="#E6161D2E" />
-    <corners android:radius="20dp" />
-    <stroke android:width="1dp" android:color="#405CE1E6" />
+    <gradient android:angle="315" android:startColor="@color/widget_bg_start" android:endColor="@color/widget_bg_end" android:type="linear" />
+    <corners android:radius="24dp" />
+    <stroke android:width="1dp" android:color="@color/widget_edge" />
 </shape>

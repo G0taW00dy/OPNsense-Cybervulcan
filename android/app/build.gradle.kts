@@ -30,7 +30,8 @@ android {
 
     defaultConfig {
         applicationId = "au.cybervulcan.opnsense"
-        minSdk = flutter.minSdkVersion
+        // local_auth 3.x (app lock) needs API 24+.
+        minSdk = maxOf(24, flutter.minSdkVersion)
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName

@@ -1,3 +1,4 @@
+import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -76,13 +77,18 @@ class HelpPage extends StatelessWidget {
             number: 4,
             title: 'API user and key',
             items: [
-              'System > Access > Users: add a user just for the app (pcmode). No GUI login needed.',
+              'System > Access > Users: add one user per person (e.g. alex-app, sam-app), so one '
+                  'person\'s key can be revoked alone. No GUI login needed.',
               'Required privileges: "Diagnostics: PF Table IP addresses" (bypass + PC mode) and '
                   '"System: Gateways" (live status and failover).',
               'Recommended: "Diagnostics: Show States" (moves open connections on every switch).',
-              'Optional: "Services: Dnsmasq DNS/DHCP: Settings" (Devices page) and '
-                  '"Firewall: Rules [new]" (kill switch armed check). Without them those parts '
-                  'show "unknown"; nothing else breaks.',
+              'Optional: "Services: Dnsmasq DNS/DHCP: Settings" (Devices page, new-device alerts).',
+              'Optional, v2.0: "Services: Unbound DNS" (Tests page checks the router\'s encrypted DNS) and '
+                  '"VPN: WireGuard" (server switcher + tunnel handshakes). VPN: WireGuard can also read the '
+                  'WireGuard keys - your own key only, with the app lock on.',
+              'Optional and admin-level: "Firewall: Rules [new]" (kill switch armed check). It also '
+                  'allows editing firewall rules, so only give it to your own key. Without it the kill '
+                  'switch shows "unknown"; nothing else breaks.',
               'Edit the user > API keys > "+". Your browser downloads apikey.txt with a key= and a '
                   'secret= line. Keep it private and delete it once the app is connected.',
             ],
@@ -91,14 +97,21 @@ class HelpPage extends StatelessWidget {
             number: 5,
             title: 'Connect the app',
             items: [
-              'Settings > Router base URL: https://<router address> (http:// only on a test VM).',
-              'Self-signed HTTPS certificate: press "Trust certificate..." and check the fingerprint '
-                  'against System > Trust > Certificates before accepting.',
+              'Router URL: the router\'s name, e.g. https://router.example.com, if it has a real '
+                  '(e.g. Let\'s Encrypt) certificate - it is then checked normally. An IP such as '
+                  'https://192.168.1.1 also works.',
+              'Certificate name (Settings > Router connection > Certificate & remote target): the name the '
+                  'certificate must carry, e.g. router.example.com. Wrong certificate = "not your router": the '
+                  'app stops before sending the API key.',
+              'Self-signed certificate instead: leave the name empty, press "Trust certificate..." and '
+                  'check the fingerprint against System > Trust > Certificates before accepting.',
               'Paste the API key and secret. They are stored in Windows Credential Manager / the '
                   'Android Keystore and only ever sent to the router.',
               'Set the gateway names, labels, alias names, VPN network and kill switch tag to match '
                   'your router, then Save.',
-              'Press "Test connection & privileges": every line should say OK.',
+              'Press "Test" at the bottom of Settings: every required line should say OK (SKIP lines are '
+                  'optional privileges).',
+              'Every field in Settings has a "?" that explains it.',
             ],
           ),
           const _Section(
@@ -108,44 +121,97 @@ class HelpPage extends StatelessWidget {
               'Tray icon colours: green = main tunnel up, amber = failover or a change in progress, '
                   'red = problem (router unreachable, kill switch tripped or not armed), '
                   'purple = whole-house bypass on, grey = not set up.',
-              'This PC (Windows): VPN or CLEAR for this PC only. CLEAR resets to VPN if the router '
-                  'restarts.',
+              'This PC / This phone: VPN or CLEAR for this device only (phone: at home on Wi-Fi, with the '
+                  'VPN app on the phone off). CLEAR resets to VPN if the router restarts.',
               'Whole-house bypass: takes everyone on the VPN network off the VPN, for a set time or '
                   'until you turn it off (reminder every 4 hours).',
               'The bypass ends on time while any copy of the app is running. To make the router end '
                   'it by itself (PC off, phone away), install the router timer (section 7).',
-              'Tests: checks where this device\'s traffic and DNS actually exit.',
+              'Tests: a security score from router checks (kill switch, tunnels, encrypted DNS, '
+                  'certificate) and outside checks (exit IP, DNS and IPv6 leaks, bufferbloat). Outside checks '
+                  'can be turned off in Settings > Security & privacy.',
+              'VPN servers card (Settings > VPN tunnels & servers > server switcher): change the city of '
+                  'either tunnel, or "Find best" - tested on the backup tunnel, so the house stays online.',
+              'App lock (Settings > Security & privacy): fingerprint / face / PIN / Windows Hello before '
+                  'going off the VPN, changing servers or saving settings.',
+              'Alerts: new devices on the network, scheduled bypass (e.g. TV evenings) and a router '
+                  'backup reminder.',
             ],
           ),
           _Section(
             number: 7,
-            title: 'Router timer (recommended)',
+            title: 'Router timer and watchdog (recommended)',
             items: const [
               'Ends an expired whole-house bypass on the router itself, even when no copy of the app '
                   'is running. "No time limit" bypasses are left alone. It only touches the bypass '
                   'table, never the saved router configuration.',
+              'The same install adds a watchdog that keeps the router\'s web page and API answering: if '
+                  'its "list service status" calls hang for over a minute (seen after a long Find best), '
+                  'it stops them and notes what they were waiting on in /var/log/cybervulcan-watchdog.log.',
               'Open a root shell on the router: console menu option 8 "Shell", or SSH '
                   '(System > Settings > Administration > Secure Shell; turn it off again afterwards).',
               'Paste the install line below. It should finish with "installed (self-check OK)".',
               'In the router web page: System > Settings > Cron > "+". Set Minutes, Hours, Day of the '
                   'month, Months and Days of the week all to *, Command "Cybervulcan - end expired '
-                  'whole-house VPN bypass", Parameters = your bypass alias (BYPASS_ALL). Save, then Apply.',
+                  'whole-house VPN bypass", Parameters = your bypass alias (BYPASS_ALL). Save. Add a second job '
+                  'the same way: Command "Cybervulcan - clear stuck service-status calls", Parameters 60. '
+                  'Save, then Apply.',
               'Check: System > Log Files > General, search "cybervulcan". A line appears each time it '
                   'ends a bypass. The router\'s clock must be right (System > Settings > General / NTP).',
               'New router or restored backup: run the install line again and re-add the cron job. '
-                  'To remove it, run the same line with "| sh -s uninstall" at the end.',
+                  'To remove it: sh /tmp/cvinstall.sh uninstall',
+              'The line downloads the script of this app version and only runs it if its SHA-256 '
+                  'matches the one built into the app.',
             ],
-            extra: const _CommandBox(
-              'fetch -qo - https://raw.githubusercontent.com/$updateRepo/main/router/install.sh | sh',
-            ),
+            extra: const _RouterInstallCommand(),
           ),
           const _Section(
             number: 8,
+            title: 'Remote access (away from home)',
+            items: [
+              'The app has its own WireGuard tunnel that only it uses. It does not take Android\'s VPN '
+                  'slot, so Proton VPN can stay on. At home it is not used.',
+              'Settings > Remote access: "Generate key", then give the public key (Copy or QR) to the '
+                  'router admin. The private key never leaves the device.',
+              'The admin adds the key as a peer on the road-warrior WireGuard instance and tells you '
+                  'your tunnel address (e.g. 10.10.99.2/32) and the router\'s public key. Or they send '
+                  'a WireGuard .conf: use "Import a WireGuard .conf".',
+              'Endpoint: your home\'s public name (e.g. home.example.com) and the router\'s WireGuard port.',
+              'Each check: router directly first (2 s); if it does not answer, through the tunnel. '
+                  'The tunnel stops when you are home again, when the app goes to the background '
+                  '(Android) or after 3 minutes unused.',
+              'Behind CGNAT (e.g. the 5G hotspot) WireGuard can\'t get in. Use Tailscale instead: '
+                  'router: install os-tailscale, log in, advertise the route <router LAN IP>/32 and approve it '
+                  'in the Tailscale admin. Devices: install Tailscale and sign in. App: Settings > Remote '
+                  'access > Tailscale. The router URL then works from anywhere.',
+              'Android runs one VPN app at a time: with Tailscale on, the Proton app on the phone is off. '
+                  'Set the home router as Tailscale exit node to keep the house VPN while away.',
+            ],
+          ),
+          const _Section(
+            number: 9,
+            title: 'Setting up another person',
+            items: [
+              'Admin: make them their own API user and key (no "Firewall: Rules [new]"), then '
+                  'Settings > Share settings > Export: copy, QR or file. It contains no secrets.',
+              'They install the app, choose "Load settings from admin" in the first-run setup, enter '
+                  'their own API key and secret, and (for remote access) generate their own WireGuard '
+                  'key and send you the public key.',
+              'Full admin steps: docs/ADMIN-SETUP.md on GitHub.',
+            ],
+          ),
+          const _Section(
+            number: 10,
             title: 'Troubleshooting',
             items: [
               '"API key/secret rejected": re-enter the key and secret, or make a new key.',
               '"Missing a privilege": add the privilege named in the message to the API user.',
-              '"Certificate not trusted": the router certificate changed; trust it again.',
+              '"Wrong certificate": something answered at the router address but its certificate is '
+                  'not valid for the certificate name (or not the pinned one). At home: check the name '
+                  'in Settings and the router\'s GUI certificate. Elsewhere: another network uses the '
+                  'same address - remote access handles that.',
+              '"Not home": the router did not answer directly and remote access is off or failed. '
+                  'Check the endpoint, port and keys, and that the admin added this device\'s key.',
               '"Gateways not found": the gateway names in Settings must match System > Gateways '
                   'exactly.',
               'Router unreachable: check the base URL and that this device can reach the router '
@@ -224,6 +290,48 @@ class _Section extends StatelessWidget {
     );
   }
 }
+
+/// v2.2.5 (audit L7): the router install line for this app's own version,
+/// checked against the SHA-256 of the script bundled with the app - never
+/// whatever is on the main branch at that moment.
+class _RouterInstallCommand extends StatelessWidget {
+  const _RouterInstallCommand();
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder<String>(
+        future: routerInstallSha256(),
+        builder: (context, snap) {
+          final sha = snap.data;
+          if (sha == null) return const SizedBox.shrink();
+          return _CommandBox(routerInstallCommand(updateRepo, appVersion, sha));
+        },
+      );
+}
+
+/// SHA-256 of router/install.sh as bundled with the app.
+/// v2.2.8: hashed with Unix line endings. A Windows build had bundled a
+/// CRLF copy, so the hash never matched the file on GitHub (24 Nov);
+/// .gitattributes now keeps *.sh as LF too.
+Future<String> routerInstallSha256() async =>
+    sha256.convert(lfOnly((await rootBundle.load('router/install.sh')).buffer.asUint8List())).toString();
+
+/// [bytes] with every CR-LF turned into LF.
+List<int> lfOnly(List<int> bytes) {
+  final out = <int>[];
+  for (var i = 0; i < bytes.length; i++) {
+    if (bytes[i] == 13 && i + 1 < bytes.length && bytes[i + 1] == 10) continue;
+    out.add(bytes[i]);
+  }
+  return out;
+}
+
+/// The install line: fetch the tagged script, check its hash, run it.
+/// v2.2.8: no \$(...) - the router's root shell is csh, which rejected it
+/// ("Illegal variable name"). FreeBSD's `sha256 -c` compares for us and
+/// fails on a mismatch, which works in csh and sh alike.
+String routerInstallCommand(String repo, String version, String sha) =>
+    'fetch -qo /tmp/cvinstall.sh https://raw.githubusercontent.com/$repo/v$version/router/install.sh && '
+    'sha256 -q -c $sha /tmp/cvinstall.sh && sh /tmp/cvinstall.sh';
 
 /// A shell command shown in monospace with a Copy button.
 class _CommandBox extends StatelessWidget {

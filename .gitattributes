@@ -1,0 +1,2 @@
+# Shell scripts run on the router (FreeBSD): always LF, also in Windows checkouts.
+*.sh text eol=lf

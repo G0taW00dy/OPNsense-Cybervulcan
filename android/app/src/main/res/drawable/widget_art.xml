@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The Status hero in miniature: a dark peak, an ember at the summit and the
+     circuit lines running down from it (green = the live tunnel). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="132dp" android:height="120dp" android:viewportWidth="132" android:viewportHeight="120">
+    <path android:fillColor="@color/widget_art_peak" android:pathData="M8,120 L70,30 L132,108 L132,120 Z" />
+    <path android:pathData="M70,8 m-24,0 a24,24 0 1,0 48,0 a24,24 0 1,0 -48,0">
+        <aapt:attr name="android:fillColor">
+            <gradient android:type="radial" android:centerX="70" android:centerY="8" android:gradientRadius="24"
+                android:startColor="#B3FF7A3D" android:endColor="#00FF7A3D" />
+        </aapt:attr>
+    </path>
+    <path android:fillColor="#00000000" android:strokeColor="@color/widget_art_line" android:strokeWidth="1.6"
+        android:strokeLineJoin="round" android:pathData="M64,14 L64,40 L52,40 L52,70 L38,70 L38,100" />
+    <path android:fillColor="#00000000" android:strokeColor="@color/widget_art_line" android:strokeWidth="1.6"
+        android:strokeLineJoin="round" android:pathData="M76,14 L76,30 L88,30 L88,56 L104,56 L104,84 L118,84 L118,112" />
+    <path android:fillColor="#00000000" android:strokeColor="@color/widget_art_live_line" android:strokeWidth="1.8"
+        android:strokeLineJoin="round" android:pathData="M70,14 L70,58 L78,58 L78,88" />
+    <path android:fillColor="@color/widget_art_node" android:pathData="M38,100 m-2.6,0 a2.6,2.6 0 1,0 5.2,0 a2.6,2.6 0 1,0 -5.2,0" />
+    <path android:fillColor="@color/widget_art_node" android:pathData="M52,70 m-2.2,0 a2.2,2.2 0 1,0 4.4,0 a2.2,2.2 0 1,0 -4.4,0" />
+    <path android:fillColor="@color/widget_art_node" android:pathData="M88,56 m-2.2,0 a2.2,2.2 0 1,0 4.4,0 a2.2,2.2 0 1,0 -4.4,0" />
+    <path android:fillColor="@color/widget_art_node" android:pathData="M118,112 m-2.6,0 a2.6,2.6 0 1,0 5.2,0 a2.6,2.6 0 1,0 -5.2,0" />
+    <path android:fillColor="@color/widget_art_live_node" android:pathData="M78,88 m-2.8,0 a2.8,2.8 0 1,0 5.6,0 a2.8,2.8 0 1,0 -5.6,0" />
+</vector>

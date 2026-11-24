@@ -1,13 +1,15 @@
 name: build
 
-# - Every push / PR to main: analyze + unit tests.
-# - Tag v* (e.g. v1.0.0) or manual dispatch: also build the Windows installer
-#   (.exe, Inno Setup) and the Android APK, upload them as artifacts, and on a
-#   tag publish a GitHub Release with both attached.
+# - Every push / PR to main: analyze + unit tests, Go tests of the native
+#   remote-access library, and build the Windows installer (.exe, Inno Setup)
+#   and the Android APK as workflow artifacts.
+# - Tag v* (e.g. v1.0.0): additionally publish a GitHub Release with both.
 
 on:
   push:
-    branches: [main]
+    # prerelease/** : publish the pubspec version as a GitHub *pre-release*
+    # (test channel; the in-app updater ignores it until promoted).
+    branches: [main, 'prerelease/**']
     tags: ['v*']
   pull_request:
     branches: [main]
@@ -21,26 +23,132 @@ env:
   FLUTTER_VERSION: '3.47.9'
 
 jobs:
-  test:
+  # v2.2.5: personal details must never reach this public repository. Every
+  # tracked file, every commit message and every commit email is checked;
+  # the private word list lives only in the PRIVACY_TERMS secret.
+  privacy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: subosito/flutter-action@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - name: Privacy check (files, commit messages, commit emails)
+        env:
+          CI: 'true'
+          PRIVACY_TERMS: ${{ secrets.PRIVACY_TERMS }}
+        run: |
+          python3 tool/privacy_check.py files
+          python3 tool/privacy_check.py commits HEAD
+
+  test:
+    needs: [privacy]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
         with:
           channel: stable
           flutter-version: ${{ env.FLUTTER_VERSION }}
           cache: true
-      - run: flutter pub get
+      # M7: exactly the committed pubspec.lock versions.
+      - run: flutter pub get --enforce-lockfile
       - run: flutter analyze --no-fatal-infos
       - run: flutter test
 
+  # Remote access: wireguard-go + gVisor netstack as a C shared library
+  # (libcvwg.so per Android ABI, cvwg.dll for Windows), loaded via dart:ffi.
+  # v2.1: plus the built-in Tailscale engine (tsnet). The Go version comes
+  # from go.mod (tailscale.com needs Go 1.27). CVWG_TAGS leave out Tailscale
+  # features the app never uses (smaller library, no log upload code).
+  native:
+    needs: [privacy]
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: native/cvwg
+    env:
+      CVWG_TAGS: >-
+        ts_omit_ace,ts_omit_appconnectors,ts_omit_aws,ts_omit_bird,ts_omit_c2n,ts_omit_capture,
+        ts_omit_captiveportal,ts_omit_clientupdate,ts_omit_completion,ts_omit_conn25,ts_omit_cli,
+        ts_omit_cliconndiag,ts_omit_cloud,ts_omit_colorable,ts_omit_dbus,ts_omit_debugeventbus,
+        ts_omit_debugportmapper,ts_omit_doctor,ts_omit_drive,ts_omit_flashappliance,ts_omit_hujsonconf,
+        ts_omit_identityfederation,ts_omit_iptables,ts_omit_kube,ts_omit_linuxdnsfight,ts_omit_linkspeed,
+        ts_omit_logtail,ts_omit_netlog,ts_omit_networkmanager,ts_omit_oauthkey,ts_omit_osrouter,
+        ts_omit_portlist,ts_omit_posture,ts_omit_qrcodes,ts_omit_relayserver,ts_omit_remoteconfig,
+        ts_omit_resolved,ts_omit_sdnotify,ts_omit_serviceclientprefs,ts_omit_favorites,ts_omit_ssh,
+        ts_omit_synology,ts_omit_syslog,ts_omit_systray,ts_omit_taildrop,ts_omit_tap,ts_omit_tpm,
+        ts_omit_tundevstats,ts_omit_wakeonlan,ts_omit_webbrowser,ts_omit_webclient,
+        ts_omit_advertiseexitnode,ts_omit_advertiseroutes,ts_omit_outboundproxy,ts_omit_dnsresolvecache
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: native/cvwg/go.mod
+          cache-dependency-path: native/cvwg/go.sum
+      - name: Verify modules (go.sum is committed; checked against sum.golang.org)
+        run: |
+          go mod download
+          go mod verify
+          go mod tidy -diff
+      - name: Go tests (end-to-end WireGuard tunnel; Tailscale login/forwarder against a local test control server)
+        run: |
+          go vet ./... && go test -count=1 ./...
+          # The trimmed feature set must still compile.
+          go vet -tags "$(echo $CVWG_TAGS | tr -d ' ')" . ./forward ./tunnel
+      - name: Update signatures - check the verifier against the real minisign tool
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq minisign
+          d="$RUNNER_TEMP/minisign-real"; mkdir -p "$d"
+          minisign -G -W -p "$d/test.pub" -s "$d/test.key"
+          head -c 100000 /dev/urandom > "$d/test.bin"
+          minisign -S -s "$d/test.key" -m "$d/test.bin"
+          MINISIGN_REAL_DIR="$d" go test -count=1 -run TestRealMinisign -v ./internal/minisign
+      - name: Known vulnerabilities in Go dependencies (govulncheck)
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...
+      - name: Android (arm64-v8a, armeabi-v7a)
+        shell: bash
+        run: |
+          NDK="${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}"
+          TC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          ls "$TC" | grep -E 'android[0-9]+-clang$' | head -3
+          pick() { for api in 21 22 23 24 26; do [ -x "$TC/$1$api-clang" ] && { echo "$TC/$1$api-clang"; return; }; done; exit 1; }
+          build() { # abi goarch triple [goarm]
+            mkdir -p "out/android/$1"
+            CGO_ENABLED=1 GOOS=android GOARCH=$2 GOARM=${4:-} CC="$(pick $3)" \
+              go build -trimpath -buildmode=c-shared -tags "$(echo $CVWG_TAGS | tr -d ' ')" \
+              -ldflags='-s -w -buildid= -extldflags=-Wl,-z,max-page-size=16384' \
+              -o "out/android/$1/libcvwg.so" .
+            rm -f "out/android/$1/libcvwg.h"
+          }
+          build arm64-v8a arm64 aarch64-linux-android
+          build armeabi-v7a arm armv7a-linux-androideabi 7
+          # v2.2.6: no x86_64 (emulators only) - faster builds, smaller APK.
+          ls -la out/android/*
+      - name: Windows (x64 DLL, cross-compiled with MinGW)
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq gcc-mingw-w64-x86-64
+          mkdir -p out/windows
+          CGO_ENABLED=1 GOOS=windows GOARCH=amd64 CC=x86_64-w64-mingw32-gcc \
+            go build -trimpath -buildmode=c-shared -tags "$(echo $CVWG_TAGS | tr -d ' ')" \
+            -ldflags='-s -w -buildid=' -o out/windows/cvwg.dll .
+          rm -f out/windows/cvwg.h
+          ls -la out/windows
+          # Windows-only code (home link helper) is not covered by the Linux vet above.
+          CGO_ENABLED=1 GOOS=windows GOARCH=amd64 CC=x86_64-w64-mingw32-gcc \
+            go vet -tags "$(echo $CVWG_TAGS | tr -d ' ')" ./...
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: cvwg-native
+          path: native/cvwg/out/
+          if-no-files-found: error
+
   version:
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    needs: [privacy]
     runs-on: ubuntu-latest
     outputs:
       name: ${{ steps.v.outputs.name }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - id: v
         shell: bash
         run: |
@@ -55,8 +163,12 @@ jobs:
           fi
           echo "name=$name" >> "$GITHUB_OUTPUT"
 
+  # v2.2.6 (faster builds): the apps build while the tests run; nothing is
+  # published unless the tests pass (release needs test). Pull requests only
+  # run the checks - the apps are built on main, prerelease/** and tags.
   android:
-    needs: [test, version]
+    needs: [version, native]
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     env:
       # Only a flag at job level; the secrets themselves are scoped to the one
@@ -64,12 +176,13 @@ jobs:
       HAS_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
       APP_VERSION: ${{ needs.version.outputs.name }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
         with:
           distribution: temurin
           java-version: '17'
-      - uses: subosito/flutter-action@v2
+          cache: gradle
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
         with:
           channel: stable
           flutter-version: ${{ env.FLUTTER_VERSION }}
@@ -123,47 +236,99 @@ jobs:
           } > android/key.properties
       - name: Note debug signing
         if: env.HAS_KEYSTORE != 'true'
-        run: echo "::notice::No ANDROID_KEYSTORE_BASE64 secret - APK is signed with the debug key."
-      - run: flutter pub get
+        shell: bash
+        run: |
+          # M5: a release must never ship a debug-signed APK.
+          if [[ "$GITHUB_REF" == refs/tags/v* || "$GITHUB_REF" == refs/heads/prerelease/* ]]; then
+            echo "::error::No ANDROID_KEYSTORE_BASE64 secret - refusing to publish a debug-signed APK."
+            exit 1
+          fi
+          echo "::notice::No ANDROID_KEYSTORE_BASE64 secret - APK is signed with the debug key."
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: cvwg-native
+          path: native-out
+      - name: Add the remote-access library (jniLibs)
+        run: |
+          mkdir -p android/app/src/main/jniLibs
+          cp -r native-out/android/* android/app/src/main/jniLibs/
+          find android/app/src/main/jniLibs -type f
+      # M7: exactly the committed pubspec.lock versions.
+      - run: flutter pub get --enforce-lockfile
       - run: >
           flutter build apk --release
+          --target-platform android-arm,android-arm64
           --build-name="$APP_VERSION"
           --dart-define=APP_VERSION="$APP_VERSION"
           --build-number=${{ github.run_number }}
-      - name: Rename APK
+      - name: Rename APK (and check the native library is inside)
         run: |
           mkdir -p dist
+          unzip -l build/app/outputs/flutter-apk/app-release.apk | grep libcvwg.so
           cp build/app/outputs/flutter-apk/app-release.apk "dist/Cybervulcan-$APP_VERSION.apk"
       - name: Remove signing material
         if: always()
         run: rm -f android/app/upload-keystore.jks android/key.properties
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: cybervulcan-android
           path: dist/*.apk
           if-no-files-found: error
 
   windows:
-    needs: [test, version]
+    needs: [version, native]
+    if: github.event_name != 'pull_request'
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: subosito/flutter-action@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
         with:
           channel: stable
           flutter-version: ${{ env.FLUTTER_VERSION }}
           cache: true
       - run: flutter config --enable-windows-desktop
-      - run: flutter pub get
+      # M7: exactly the committed pubspec.lock versions.
+      - run: flutter pub get --enforce-lockfile
       - run: >
           flutter build windows --release
           --build-name=${{ needs.version.outputs.name }}
           --dart-define=APP_VERSION=${{ needs.version.outputs.name }}
           --build-number=${{ github.run_number }}
-      - name: Bundle the VC++ runtime next to the exe (app-local deployment)
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: cvwg-native
+          path: native-out
+      # Home link (remote access modes "home" / "everything"): the official,
+      # signed Wintun prebuilt from wintun.net, redistributable unmodified
+      # under its licence (shipped as wintun-LICENSE.txt). Never committed;
+      # the download must match the pinned checksum.
+      - name: Fetch Wintun (pinned SHA-256)
+        shell: pwsh
+        env:
+          WINTUN_URL: https://www.wintun.net/builds/wintun-0.14.1.zip
+          WINTUN_SHA256: 07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51
+        run: |
+          $zip = Join-Path $env:RUNNER_TEMP "wintun.zip"
+          Invoke-WebRequest -Uri $env:WINTUN_URL -OutFile $zip -ErrorAction Stop
+          $got = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
+          if ($got -ne $env:WINTUN_SHA256) {
+            Write-Error "wintun zip checksum mismatch: got $got"; exit 1
+          }
+          $out = Join-Path $env:RUNNER_TEMP "wintun"
+          Expand-Archive $zip -DestinationPath $out -Force
+          $dll = Join-Path $out "wintun\bin\amd64\wintun.dll"
+          $sig = Get-AuthenticodeSignature $dll
+          if ($sig.Status -ne 'Valid') { Write-Error "wintun.dll signature: $($sig.Status)"; exit 1 }
+          Write-Host "wintun.dll signed by: $($sig.SignerCertificate.Subject)"
+          New-Item -ItemType Directory -Force wintun-out | Out-Null
+          Copy-Item $dll wintun-out\wintun.dll -ErrorAction Stop
+          Copy-Item (Join-Path $out "wintun\LICENSE.txt") wintun-out\wintun-LICENSE.txt -ErrorAction Stop
+      - name: Bundle the VC++ runtime, the remote-access DLL and Wintun next to the exe
         shell: pwsh
         run: |
           $dest = "build\windows\x64\runner\Release"
+          Copy-Item "native-out\windows\cvwg.dll" $dest -ErrorAction Stop
+          Copy-Item "wintun-out\wintun.dll", "wintun-out\wintun-LICENSE.txt" $dest -ErrorAction Stop
           foreach ($dll in 'msvcp140.dll','vcruntime140.dll','vcruntime140_1.dll') {
             Copy-Item "$env:WINDIR\System32\$dll" $dest -ErrorAction Stop
           }
@@ -183,27 +348,74 @@ jobs:
             installer\cybervulcan.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Get-ChildItem dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: cybervulcan-windows
           path: dist/*.exe
           if-no-files-found: error
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [android, windows, version]
+    if: startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/heads/prerelease/')
+    needs: [android, windows, version, test]
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      # v2.2.5: public half of the update signing key (also compiled into the
+      # app as updatePublicKey). The private half is the UPDATE_SIGNING_KEY secret.
+      UPDATE_PUBLIC_KEY: RWQYKjXHIYJR9eM++raYyQ7jSsxbxcslD0OKlgL2Y7VTxzuGZOOtThsG
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: dist
           merge-multiple: true
-      - uses: softprops/action-gh-release@v2
+      - name: Sign the release files (minisign) and check the signatures
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+          APP_VERSION: ${{ needs.version.outputs.name }}
+        run: |
+          if [ -z "$UPDATE_SIGNING_KEY" ]; then
+            echo "::error::UPDATE_SIGNING_KEY secret is missing - refusing to publish unsigned updates."
+            exit 1
+          fi
+          sudo apt-get update -qq && sudo apt-get install -y -qq minisign
+          umask 077
+          key="$RUNNER_TEMP/update.key"
+          trap 'rm -f "$key"' EXIT
+          # A secret pasted through a browser may lose the comment line or
+          # gain spaces: rebuild the key file from its base64 line (the
+          # longest run of base64 text). The signature is checked against the
+          # public key below, so a wrong key can't slip through.
+          b64="$(printf '%s' "$UPDATE_SIGNING_KEY" | tr -d '\r' | grep -oE '[A-Za-z0-9+/]{100,}={0,2}' | awk 'length > m { m = length; l = $0 } END { print l }')"
+          if [ -z "$b64" ]; then
+            echo "::error::UPDATE_SIGNING_KEY does not contain a minisign secret key (no base64 line found)."
+            exit 1
+          fi
+          printf 'untrusted comment: minisign secret key\n%s\n' "$b64" > "$key"
+          echo "Secret key line: ${#b64} characters"
+          for f in dist/*.exe dist/*.apk; do
+            minisign -S -s "$key" -m "$f" -t "Cybervulcan $APP_VERSION $(basename "$f")"
+            minisign -V -P "$UPDATE_PUBLIC_KEY" -m "$f"
+          done
+          ls -la dist
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           name: Cybervulcan ${{ needs.version.outputs.name }}
+          # A prerelease/** branch (or "[prerelease]" in a tagged commit's
+          # message) publishes a test build: the in-app updater ignores
+          # pre-releases until they are promoted to a full release.
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('v{0}', needs.version.outputs.name) }}
+          target_commitish: ${{ github.sha }}
+          prerelease: ${{ startsWith(github.ref, 'refs/heads/prerelease/') || contains(github.event.head_commit.message, '[prerelease]') }}
           files: |
             dist/*.exe
             dist/*.apk
+            dist/*.minisig
           generate_release_notes: true
+      # v2.2.5: the prerelease/** branch only triggered this build; the
+      # release and its tag keep everything, so remove the branch.
+      - name: Remove the prerelease branch
+        if: startsWith(github.ref, 'refs/heads/prerelease/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X DELETE "repos/${{ github.repository }}/git/refs/heads/${GITHUB_REF#refs/heads/}"

@@ -1,14 +1,20 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 
 import '../api/models.dart';
 import '../core/bypass.dart';
 import '../core/controller.dart';
+import '../core/network_map.dart';
 import '../core/house_state.dart';
 import '../core/updater.dart';
+import '../net/router_link.dart';
+import '../platform/vpn_modes.dart' show HomeLinkState;
+import '../platform/vpn_modes_windows.dart' show WindowsSystemVpn;
 import 'bypass_dialog.dart';
 import 'format.dart';
+import 'servers_page.dart';
 import 'theme.dart';
 import 'update_widgets.dart';
 import 'widgets/volcano_art.dart';
@@ -26,9 +32,35 @@ class StatusPage extends StatefulWidget {
 class _StatusPageState extends State<StatusPage> {
   Timer? _tick;
 
+  /// v2.2.5: a DNS lock left behind by a crash in "Everything" mode (Windows).
+  bool _dnsLeft = false;
+  bool _repairing = false;
+
+  void _checkDnsLock() {
+    final vpn = widget.controller.homeLink.vpn;
+    if (vpn is WindowsSystemVpn && widget.controller.homeLink.state == HomeLinkState.off) {
+      final left = vpn.dnsLockLeftBehind;
+      if (left != _dnsLeft && mounted) setState(() => _dnsLeft = left);
+    }
+  }
+
+  Future<void> _repairDns() async {
+    final vpn = widget.controller.homeLink.vpn;
+    if (vpn is! WindowsSystemVpn) return;
+    setState(() => _repairing = true);
+    final problem = await vpn.repairDns();
+    if (!mounted) return;
+    setState(() => _repairing = false);
+    _checkDnsLock();
+    if (problem != null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Repair failed: $problem')));
+    }
+  }
+
   @override
   void initState() {
     super.initState();
+    if (Platform.isWindows) WidgetsBinding.instance.addPostFrameCallback((_) => _checkDnsLock());
     // Drives the bypass countdown between polls.
     _tick = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted && (widget.controller.snapshot.bypassActive ?? false)) setState(() {});
@@ -55,6 +87,80 @@ class _StatusPageState extends State<StatusPage> {
             children: [
               _HeaderCard(snapshot: s, controller: c),
               if (widget.updates != null) UpdateBanner(updates: widget.updates!),
+              if (c.config.isPlainHttp) ...[
+                const SizedBox(height: 12),
+                _Banner(
+                  text: 'The router address is plain http://, so the app will not connect directly: the '
+                      'API key would travel unencrypted and nothing proves this is your router. '
+                      'Switch to https://${c.config.routerHost ?? ''}'
+                      '${c.config.certName.trim().isEmpty ? ' and set its certificate name in Settings' : ' (certificate name ${c.config.certName})'}.',
+                  color: OpnColors.amber,
+                  icon: Icons.lock_open,
+                  action: TextButton(
+                    onPressed: s.busy ? null : () => c.saveSettings(c.config.switchedToHttps()),
+                    child: const Text('Switch to HTTPS'),
+                  ),
+                ),
+              ],
+              if (s.link != null && !s.link!.connected && s.link!.state != LinkState.notConfigured) ...[
+                const SizedBox(height: 12),
+                _Banner(
+                  text: s.link!.describe(c.config),
+                  color: s.link!.state == LinkState.wrongCertificate ? OpnColors.red : OpnColors.grey,
+                  icon: s.link!.state == LinkState.wrongCertificate ? Icons.gpp_bad : Icons.wifi_off,
+                ),
+              ],
+              if (_dnsLeft) ...[
+                const SizedBox(height: 12),
+                _Banner(
+                  text: 'A DNS lock from "Everything via home" was left behind (the app or PC stopped '
+                      'unexpectedly), so websites may not open. Repair removes it (Windows asks for admin '
+                      'approval).',
+                  color: OpnColors.amber,
+                  icon: Icons.dns_outlined,
+                  action: TextButton(
+                    onPressed: _repairing ? null : _repairDns,
+                    child: Text(_repairing ? 'Repairing...' : 'Repair DNS'),
+                  ),
+                ),
+              ],
+              // v2.1: system VPN for the remote modes ("Home link: ... - connected").
+              if (c.homeLink.describe() case final homeLine?) ...[
+                const SizedBox(height: 12),
+                _Banner(
+                  text: homeLine,
+                  color: c.homeLink.state == HomeLinkState.error ? OpnColors.amber : OpnColors.green,
+                  icon: Icons.vpn_lock_outlined,
+                ),
+              ],
+              if (s.reachable && (s.bypassActive ?? false) && s.bypassNoRouterDeadline) ...[
+                const SizedBox(height: 12),
+                _Banner(
+                  text: 'The router has no deadline for this bypass, so the router can\'t end it by '
+                      'itself - only a running Cybervulcan app can. Add the deadline so it ends on time '
+                      'even with every app closed.',
+                  color: OpnColors.amber,
+                  icon: Icons.timer_off_outlined,
+                  action: TextButton(
+                    onPressed: s.busy ? null : c.addRouterDeadline,
+                    child: const Text('Add deadline'),
+                  ),
+                ),
+              ],
+              if (c.backupOverdue) ...[
+                const SizedBox(height: 12),
+                _Banner(
+                  text: 'Router backup reminder: last confirmed backup ${c.daysSinceBackup} days ago. Save an '
+                      'encrypted config backup (System > Configuration > Backups) somewhere safe off the router.',
+                  color: OpnColors.amber,
+                  icon: Icons.backup_outlined,
+                  action: TextButton(onPressed: c.acknowledgeBackup, child: const Text('I saved a backup')),
+                ),
+              ],
+              for (final w in c.keyExpiryWarnings) ...[
+                const SizedBox(height: 12),
+                _Banner(text: w, color: OpnColors.amber, icon: Icons.key_off_outlined),
+              ],
               if (c.lastActionError != null) ...[
                 const SizedBox(height: 12),
                 _Banner(text: c.lastActionError!, color: OpnColors.red, icon: Icons.error_outline),
@@ -99,6 +205,10 @@ class _StatusPageState extends State<StatusPage> {
                 }),
                 const SizedBox(height: 16),
                 _KillSwitchCard(snapshot: s),
+                if (c.config.serverSwitcherEnabled) ...[
+                  const SizedBox(height: 16),
+                  ServersCard(key: ValueKey('servers-${c.config.mainWgInstance}-${c.config.backupWgInstance}'), controller: c),
+                ],
               ],
               const SizedBox(height: 12),
               Center(
@@ -122,32 +232,10 @@ class _HeaderCard extends StatelessWidget {
   final CybervulcanController controller;
 
   /// Short uppercase status line above the big exit name.
-  static String _label(HouseSnapshot s) {
-    if (!s.configured) return 'Not set up';
-    if (!s.reachable) return 'Router unreachable';
-    if (s.bypassActive ?? false) return 'VPN bypass on';
-    if (s.killSwitch.tripped) return 'Kill switch tripped';
-    if (s.killSwitchArmed == false) return 'Kill switch not armed';
-    if (s.busy) return 'Changing...';
-    if (s.failoverActive) return 'Failover active';
-    return switch (s.health) {
-      Health.ok => 'Protected',
-      Health.warning => 'Slow tunnel',
-      _ => 'Problem',
-    };
-  }
+  static String _label(HouseSnapshot s) => heroLabel(s);
 
   /// The big line: where the house's traffic leaves right now.
-  static String _exitName(HouseSnapshot s, CybervulcanController c) {
-    if (!s.reachable) return 'No connection';
-    if (s.bypassActive ?? false) return 'Direct (NBN)';
-    return switch (s.exit) {
-      ProtonExit.main => c.config.mainLabel,
-      ProtonExit.backup => c.config.backupLabel,
-      ProtonExit.none => 'No exit',
-      ProtonExit.unknown => 'Unknown',
-    };
-  }
+  static String _exitName(HouseSnapshot s, CybervulcanController c) => heroTitle(s, c.config);
 
   @override
   Widget build(BuildContext context) {
@@ -201,6 +289,16 @@ class _HeaderCard extends StatelessWidget {
                 label: Text('Failover active'),
               ),
             ),
+          if (snapshot.reachable && (snapshot.link?.remote ?? false))
+            Padding(
+              padding: const EdgeInsets.only(top: 12),
+              child: Chip(
+                avatar: const Icon(Icons.vpn_key, size: 18, color: OpnColors.glassCyan),
+                label: Text((snapshot.link?.viaTailscale ?? false)
+                    ? 'Away - via Tailscale'
+                    : 'Away - remote access (WireGuard)'),
+              ),
+            ),
         ],
       ),
     );
@@ -237,11 +335,12 @@ class _HeaderCard extends StatelessWidget {
 }
 
 class _Banner extends StatelessWidget {
-  const _Banner({required this.text, required this.color, required this.icon});
+  const _Banner({required this.text, required this.color, required this.icon, this.action});
 
   final String text;
   final Color color;
   final IconData icon;
+  final Widget? action;
 
   @override
   Widget build(BuildContext context) => Container(
@@ -255,6 +354,7 @@ class _Banner extends StatelessWidget {
           Icon(icon, color: color),
           const SizedBox(width: 10),
           Expanded(child: Text(text)),
+          if (action != null) ...[const SizedBox(width: 8), action!],
         ]),
       );
 }
@@ -378,7 +478,7 @@ class _BypassCard extends StatelessWidget {
               const Text('Everyone on the VPN network is going direct right now.'),
             ] else
               const Text('Off. Turning it on sends EVERY device on the VPN network straight to '
-                  'the internet (DNS via the router\'s Quad9 DoT) for a limited time.'),
+                  'the internet (DNS via the router\'s own resolver) for a limited time.'),
           ],
         ),
       ),
@@ -395,6 +495,11 @@ class _PcModeCard extends StatelessWidget {
     final s = controller.snapshot;
     final t = Theme.of(context).textTheme;
     final clear = s.pcClear;
+    final cfg = controller.config;
+    // v2.1.2: a device on another network (e.g. MGMT) is not on the VPN at
+    // all - the VPN/CLEAR switch only applies to the VPN network.
+    final onVpnNet = s.pcIp != null && (Ipv4Subnet.tryParse(cfg.bypassNetwork)?.contains(s.pcIp!) ?? false);
+    final otherNet = s.pcIp == null || onVpnNet ? null : (networkNameFor(s.pcIp!, cfg.networks) ?? 'another network');
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -402,32 +507,40 @@ class _PcModeCard extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(children: [
-              const Icon(Icons.computer),
+              Icon(Platform.isAndroid ? Icons.smartphone : Icons.computer),
               const SizedBox(width: 8),
-              Expanded(child: Text('This PC', style: t.titleMedium)),
+              Expanded(child: Text(_deviceWord(), style: t.titleMedium)),
               SegmentedButton<bool>(
                 segments: const [
                   ButtonSegment(value: false, label: Text('VPN'), icon: Icon(Icons.vpn_lock)),
                   ButtonSegment(value: true, label: Text('CLEAR'), icon: Icon(Icons.sports_esports)),
                 ],
                 selected: {clear ?? false},
-                onSelectionChanged: clear == null || s.busy
+                onSelectionChanged: clear == null || s.busy || otherNet != null
                     ? null
                     : (v) => controller.setPcClear(v.first),
               ),
             ]),
             const SizedBox(height: 6),
-            Text(s.pcIp == null
-                ? 'Could not detect this PC\'s house IP - set it in Settings.'
+            Text(otherNet != null
+                ? 'IP ${s.pcIp} is on $otherNet, not the VPN network - this ${_deviceNoun()}\'s traffic follows '
+                    '$otherNet\'s own route, and VPN / CLEAR only applies on the VPN network.'
+                : s.pcIp == null
+                ? (Platform.isAndroid
+                    ? 'Not on house Wi-Fi (or the phone\'s house IP is unknown) - CLEAR only works at home.'
+                    : 'Could not detect this PC\'s house IP - set it in Settings.')
                 : clear == null
                     ? 'IP ${s.pcIp}: mode unknown (alias not readable).'
-                    : 'IP ${s.pcIp} is ${clear ? 'CLEAR - direct internet, only this PC' : 'on the VPN'}.'),
+                    : 'IP ${s.pcIp} is ${clear ? 'CLEAR - direct internet, only this ${_deviceNoun()}' : s.bypassActive == true ? 'going direct - whole-house bypass is on' : 'on the VPN'}.'),
           ],
         ),
       ),
     );
   }
 }
+
+String _deviceWord() => Platform.isAndroid ? 'This phone' : 'This PC';
+String _deviceNoun() => Platform.isAndroid ? 'phone' : 'PC';
 
 class _KillSwitchCard extends StatelessWidget {
   const _KillSwitchCard({required this.snapshot});
