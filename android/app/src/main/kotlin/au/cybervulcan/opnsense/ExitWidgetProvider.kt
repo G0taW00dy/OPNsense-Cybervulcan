@@ -4,8 +4,8 @@ import android.appwidget.AppWidgetManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.SharedPreferences
-import android.graphics.Color
 import android.net.Uri
+import android.os.Build
 import android.service.quicksettings.TileService
 import android.view.View
 import android.widget.RemoteViews
@@ -40,11 +40,21 @@ class ExitWidgetProvider : HomeWidgetProvider() {
 
         appWidgetIds.forEach { id ->
             val views = RemoteViews(context.packageName, R.layout.exit_widget).apply {
-                val color = healthColor(health)
                 setTextViewText(R.id.widget_exit, title)
                 setTextViewText(R.id.widget_status, status)
-                setTextColor(R.id.widget_status, color)
-                setInt(R.id.widget_dot, "setColorFilter", color)
+                // v2.2.9: light/dark follows the phone. On Android 12+ the
+                // colour is resolved by the home screen, so it switches with
+                // the phone's theme straight away; older versions use the
+                // theme in force at this update.
+                val colorRes = healthColorRes(health)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    setColor(R.id.widget_status, "setTextColor", colorRes)
+                    setColor(R.id.widget_dot, "setColorFilter", colorRes)
+                } else {
+                    val color = context.getColor(colorRes)
+                    setTextColor(R.id.widget_status, color)
+                    setInt(R.id.widget_dot, "setColorFilter", color)
+                }
                 setTextViewText(R.id.widget_detail, detail)
                 setViewVisibility(R.id.widget_detail, if (detail.isEmpty()) View.GONE else View.VISIBLE)
                 setTextViewText(
@@ -114,12 +124,13 @@ class ExitWidgetProvider : HomeWidgetProvider() {
         const val URI_BYPASS_OFF = "cybervulcan://bypass/off"
         const val URI_REFRESH = "cybervulcan://refresh"
 
-        fun healthColor(health: String): Int = when (health) {
-            "ok" -> Color.parseColor("#2ECC71")
-            "warning" -> Color.parseColor("#F5A623")
-            "problem" -> Color.parseColor("#FF6B6F")
-            "bypass" -> Color.parseColor("#B794F4")
-            else -> Color.parseColor("#8A8F98")
+        /** Status colour (values/ = light, values-night/ = dark widget_colors.xml). */
+        fun healthColorRes(health: String): Int = when (health) {
+            "ok" -> R.color.widget_ok
+            "warning" -> R.color.widget_warning
+            "problem" -> R.color.widget_problem
+            "bypass" -> R.color.widget_bypass
+            else -> R.color.widget_unknown
         }
     }
 }

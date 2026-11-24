@@ -1,6 +1,9 @@
 # Changelog
 
-## 2.2.8 (pre-release)
+## 2.2.9 (pre-release)
+- Android home-screen widget follows the phone's theme: a white card with dark text in light mode, the usual dark card in dark mode (Android 12 and newer switch straight away).
+
+## 2.2.8
 - Android widget: tapping it no longer fails with "Null check" (the widget's link was also being opened as an app page that doesn't exist).
 - Waking a home device from away in "App only" mode now says how to actually connect to it (switch Remote access to "Home devices" and add its address) - Wake on LAN worked, but remote desktop couldn't reach the PC in that mode. In "Home devices" mode it says when the device's address is missing from the list.
 - Bufferbloat test on a house network that can't reach the router directly (e.g. IoT Wi-Fi) no longer says "this device is away from home"; it points at that Wi-Fi link or that network's own speed limit.
