@@ -1,5 +1,8 @@
 # Changelog
 
+## Next (in progress)
+- Faster builds: the Windows and Android builds start while the tests run (nothing is published unless the tests pass), Gradle downloads are cached, and the APK is built for phones only (ARM; no x86_64 emulator code - smaller download). Pull requests run the checks only.
+
 ## 2.2.6 (in progress)
 - Find best / server list: changes to the router's server list are written one at a time with a short gap (at most 20 per save) instead of in a burst. On 24 Nov a scan re-added 13 entries within one second and the router's web page and API stopped answering until it was restarted. The re-adding now also waits for the status refresh to finish.
 - Routine status checks pause while a server switch or Find best is running.
