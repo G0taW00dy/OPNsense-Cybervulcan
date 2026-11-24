@@ -1,6 +1,11 @@
 # Changelog
 
-## Next (in progress)
+## 2.2.7 (pre-release)
+Router hang after a long Find best - found on the router console (24 Nov): the scan itself was calm; the jam started as it ended, when the router's "list service status" calls began to hang and pile up until every web worker was stuck.
+- Find best: one gateway-monitor restart per server tried (re-applying routes already restarts the monitors; the app restarted them a second time).
+- After Find best the app waits 90 s for the router to settle before re-adding the tested servers to the router's list, writes one entry every 5 s, and checks before each write that the router still answers quickly. If it doesn't, it stops and leaves the rest for the next sync.
+- Every device polls less often while the router answers slowly or with errors (doubling up to 5 minutes) and goes back to normal on the first quick answer, so a struggling router isn't hit by every app every 15 s.
+- Router install line (Help > Router timer and watchdog): adds a watchdog cron job that stops service-status calls hung for over a minute (read-only calls, safe to stop), so the web page recovers without a reboot, and logs what they were waiting on to /var/log/cybervulcan-watchdog.log.
 - Faster builds: the Windows and Android builds start while the tests run (nothing is published unless the tests pass), Gradle downloads are cached, and the APK is built for phones only (ARM; no x86_64 emulator code - smaller download). Pull requests run the checks only.
 
 ## 2.2.6 (in progress)

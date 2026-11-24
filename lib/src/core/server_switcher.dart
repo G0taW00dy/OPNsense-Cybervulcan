@@ -361,8 +361,13 @@ class ServerSwitcher {
     await client.wgReconfigure();
     // The monitor's host route goes through the tunnel; re-apply routes and
     // restart the monitor so the readings really come from the new server.
+    // v2.2.7: re-applying routes already restarts every gateway monitor on
+    // the router (seen on the console 24 Nov: both dpingers restarted on
+    // each candidate), so a second, separate restart is only made when the
+    // routes call was not allowed. Every extra configd action during a scan
+    // is more lock traffic on a router that jammed after a long scan.
     final routes = await client.refreshRoutes();
-    final monitor = await client.restartGatewayMonitor(gateway);
+    final monitor = routes || await client.restartGatewayMonitor(gateway);
     monitorWarning = routes && monitor
         ? null
         : 'Could not refresh the gateway monitor (the API user needs "System: Static Routes" and '

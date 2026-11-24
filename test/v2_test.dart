@@ -267,7 +267,8 @@ Endpoint = 198.51.100.7:51820
       expect(r.wgClients[1]['serveraddress'], '149.102.228.1');
       expect(r.wgClients[1]['%servers'], 'Proton_VPN_Failover'); // link kept (20 Nov bug)
       expect(r.routeReconfigures, 1);
-      expect(r.monitorRestarts, ['WG_BACKUP_GW']);
+      // v2.2.7: the routes reconfigure restarts the monitors itself.
+      expect(r.monitorRestarts, isEmpty);
       expect(sw.monitorWarning, isNull);
       final sent = r.requests.where((q) => q.url.path.contains('set_client')).map((q) => q.body).join();
       expect(sent, contains('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'));
@@ -303,6 +304,15 @@ Endpoint = 198.51.100.7:51820
       final sw = ServerSwitcher(client: r.client(), config: const AppConfig(), sleep: (_) async {});
       final (_, backup) = await sw.peers();
       await sw.apply(backup, ProtonServer(name: 'x', entryIp: '149.102.228.1', publicKey: key('n')), main: false);
+      expect(sw.monitorWarning, contains('Static Routes'));
+    });
+
+    test('without the routes privilege the monitor is restarted on its own (v2.2.7)', () async {
+      final r = FakeRouter()..forbidden.add('/api/routes/routes/');
+      final sw = ServerSwitcher(client: r.client(), config: const AppConfig(), sleep: (_) async {});
+      final (_, backup) = await sw.peers();
+      await sw.apply(backup, ProtonServer(name: 'x', entryIp: '149.102.228.1', publicKey: key('n')), main: false);
+      expect(r.monitorRestarts, ['WG_BACKUP_GW']);
       expect(sw.monitorWarning, contains('Static Routes'));
     });
 

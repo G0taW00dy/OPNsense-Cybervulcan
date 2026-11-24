@@ -27,6 +27,7 @@ import 'shaper_tuner.dart';
 import 'change_journal.dart';
 import 'diagnostics.dart';
 import 'updater.dart' show appVersion;
+import 'router_pacing.dart';
 import 'router_server_list.dart';
 import 'server_switcher.dart';
 import 'storage.dart';
@@ -245,14 +246,23 @@ class CybervulcanController extends ChangeNotifier {
   /// 24 Nov: "Find best" re-added 13 list entries within one second (13
   /// config saves while the apps were polling) and the router's web GUI and
   /// API stopped answering until it was rebooted. Tests set it to zero.
-  Duration routerWriteGap = const Duration(milliseconds: 1500);
+  /// v2.2.7: 5 s (was 1.5 s), with a check before each write that the
+  /// router still answers quickly - see lib/src/core/router_pacing.dart.
+  Duration routerWriteGap = RouterWritePacer.defaultGap;
+
+  /// v2.2.7: wait after Find best before re-adding the tested servers to the
+  /// router's list. The router restarts its routing and gateway monitors for
+  /// the last server change; the console showed the jam starting right as
+  /// the list writes began (24 Nov, 14:28).
+  Duration listSettleAfterScan = const Duration(seconds: 90);
 
   /// Most list entries written in one go; the rest follow on the next save.
   static const maxListWritesPerSync = 20;
 
-  Future<void> _gapBeforeWrite(int done) async {
-    if (done > 0 && routerWriteGap > Duration.zero) await Future<void>.delayed(routerWriteGap);
-  }
+  RouterWritePacer _pacer(OpnsenseClient c) => RouterWritePacer(probe: c.wgPeers, gap: routerWriteGap);
+
+  /// v2.2.7: consecutive slow or failed polls (see [backedOffPollInterval]).
+  int _slowPolls = 0;
 
   /// v2.2.5: how often the router is polled while the app is in the
   /// background (Android). The VPN service keeps the process alive all day,
@@ -261,9 +271,22 @@ class CybervulcanController extends ChangeNotifier {
 
   /// The poll interval in force now: the Settings value on screen, at least
   /// [backgroundPollInterval] in the background.
-  Duration get currentPollInterval => _foreground || config.pollInterval >= backgroundPollInterval
-      ? config.pollInterval
-      : backgroundPollInterval;
+  /// v2.2.7: stretched while the router answers slowly or with errors
+  /// ([backedOffPollInterval]), so a jammed router is not hit every 15 s.
+  Duration get currentPollInterval => backedOffPollInterval(
+      _foreground || config.pollInterval >= backgroundPollInterval ? config.pollInterval : backgroundPollInterval,
+      _slowPolls);
+
+  /// Set by [_poll] when the router was reachable but its API failed or
+  /// timed out (the signs of the 24 Nov jam) - not when it is simply away.
+  bool _routerStruggled = false;
+
+  void _notePollSpeed(Duration took) {
+    final before = currentPollInterval;
+    final slow = _routerStruggled || took > slowPollThreshold;
+    _slowPolls = slow ? (_slowPolls >= 10 ? 10 : _slowPolls + 1) : 0;
+    if (_timer != null && currentPollInterval != before) _schedule();
+  }
 
   BypassManager? _bypass() {
     final c = _client;
@@ -273,7 +296,13 @@ class CybervulcanController extends ChangeNotifier {
   /// Polls once. Concurrent callers share the in-flight poll.
   Future<void> refresh() {
     if (_disposed) return Future.value();
-    return _inflight ??= _safePoll().then(_apply).whenComplete(() => _inflight = null);
+    return _inflight ??= () async {
+      final t0 = DateTime.now();
+      final next = await _safePoll();
+      _notePollSpeed(DateTime.now().difference(t0));
+      _apply(next);
+    }()
+        .whenComplete(() => _inflight = null);
   }
 
   /// Timer tick: skipped while a server switch / Find best is changing the
@@ -618,20 +647,31 @@ class CybervulcanController extends ChangeNotifier {
     final failed = <String>[];
     // v2.2.6: one write at a time with a gap, and at most
     // [maxListWritesPerSync] per save, so the router never gets a burst.
+    // v2.2.7: and only while the router answers a read quickly.
+    final pacer = _pacer(c);
     var writes = 0;
+    var removed = 0;
+    var busy = false;
     for (final uuid in plan.delete) {
       if (writes >= maxListWritesPerSync) break;
-      await _gapBeforeWrite(writes++);
+      if (!await pacer.beforeWrite(writes++)) {
+        busy = true;
+        break;
+      }
       try {
         await c.deleteWgPeer(uuid);
+        removed++;
       } on OpnsenseException catch (e) {
         failed.add('remove: ${e.message}');
       }
     }
     var added = 0;
     for (final s in plan.add) {
-      if (writes >= maxListWritesPerSync) break;
-      await _gapBeforeWrite(writes++);
+      if (busy || writes >= maxListWritesPerSync) break;
+      if (!await pacer.beforeWrite(writes++)) {
+        busy = true;
+        break;
+      }
       // One rejected entry must not stop the rest.
       try {
         await c.addWgListPeer(name: listPeerName(s), address: s.entryIp, port: s.port, publicKey: s.publicKey);
@@ -643,10 +683,17 @@ class CybervulcanController extends ChangeNotifier {
         failed.add('${s.name}: ${e.message}');
       }
     }
+    final left = plan.delete.length + plan.add.length - writes + (busy ? 1 : 0);
     if (plan.delete.isNotEmpty || plan.add.isNotEmpty) {
-      await journal.add('Server list on the router: $added added, ${plan.delete.length} removed',
-          ok: failed.isEmpty,
-          detail: failed.isEmpty ? 'Switched-off entries only - the tunnels were not changed.' : failed.join('; '));
+      await journal.add('Server list on the router: $added added, $removed removed',
+          ok: failed.isEmpty && !busy,
+          detail: [
+            if (failed.isEmpty) 'Switched-off entries only - the tunnels were not changed.' else failed.join('; '),
+            if (busy) 'Stopped early: the router was answering slowly; $left change(s) left for the next sync.',
+          ].join(' '));
+    }
+    if (busy) {
+      throw RouterBusyException('the router was answering slowly, so $left change(s) were left for the next sync');
     }
     if (failed.isNotEmpty) {
       throw OpnsenseException(ApiErrorKind.server, 'some servers were not saved (${failed.join('; ')})');
@@ -813,9 +860,18 @@ class CybervulcanController extends ChangeNotifier {
       // this device's older copy must never delete what another device added
       // (review 22 Nov). v2.2.6: after the status refresh, not alongside it,
       // and spaced out (see [routerWriteGap]).
+      // v2.2.7: and only after the router has settled from the last tunnel
+      // change ([listSettleAfterScan]), paced and health-checked.
       unawaited(() async {
         await _refreshAfterChange();
-        if (config.serverListOnRouter) await _addToRouterList([...candidates, ...before]);
+        if (!config.serverListOnRouter) return;
+        if (listSettleAfterScan > Duration.zero) await Future<void>.delayed(listSettleAfterScan);
+        // Another switch started meanwhile: let it finish first.
+        while (serverBusy && !_disposed) {
+          await Future<void>.delayed(const Duration(seconds: 15));
+        }
+        if (_disposed) return;
+        await _addToRouterList([...candidates, ...before]);
       }());
     }
   }
@@ -996,11 +1052,15 @@ class CybervulcanController extends ChangeNotifier {
     // whole house off the VPN past its deadline).
     List<GatewayStatus> gws = const [];
     OpnsenseException? gwError;
+    _routerStruggled = false;
     try {
       gws = await client.gatewayStatus();
       allGateways = gws;
     } on OpnsenseException catch (e) {
       gwError = e;
+      // The link check above just reached the router, so a timeout or a 5xx
+      // here means its API is struggling (v2.2.7 poll back-off).
+      _routerStruggled = e.kind == ApiErrorKind.network || e.kind == ApiErrorKind.server;
     }
 
     // Bypass + expiry enforcement.

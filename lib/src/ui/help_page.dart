@@ -140,17 +140,22 @@ class HelpPage extends StatelessWidget {
           ),
           _Section(
             number: 7,
-            title: 'Router timer (recommended)',
+            title: 'Router timer and watchdog (recommended)',
             items: const [
               'Ends an expired whole-house bypass on the router itself, even when no copy of the app '
                   'is running. "No time limit" bypasses are left alone. It only touches the bypass '
                   'table, never the saved router configuration.',
+              'The same install adds a watchdog that keeps the router\'s web page and API answering: if '
+                  'its "list service status" calls hang for over a minute (seen after a long Find best), '
+                  'it stops them and notes what they were waiting on in /var/log/cybervulcan-watchdog.log.',
               'Open a root shell on the router: console menu option 8 "Shell", or SSH '
                   '(System > Settings > Administration > Secure Shell; turn it off again afterwards).',
               'Paste the install line below. It should finish with "installed (self-check OK)".',
               'In the router web page: System > Settings > Cron > "+". Set Minutes, Hours, Day of the '
                   'month, Months and Days of the week all to *, Command "Cybervulcan - end expired '
-                  'whole-house VPN bypass", Parameters = your bypass alias (BYPASS_ALL). Save, then Apply.',
+                  'whole-house VPN bypass", Parameters = your bypass alias (BYPASS_ALL). Save. Add a second job '
+                  'the same way: Command "Cybervulcan - clear stuck service-status calls", Parameters 60. '
+                  'Save, then Apply.',
               'Check: System > Log Files > General, search "cybervulcan". A line appears each time it '
                   'ends a bypass. The router\'s clock must be right (System > Settings > General / NTP).',
               'New router or restored backup: run the install line again and re-add the cron job. '
